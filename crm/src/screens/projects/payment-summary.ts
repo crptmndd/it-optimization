@@ -54,8 +54,6 @@ export function paymentSummary(
   }
 
   if (monthly) {
-    // Закрытому проекту счёт за этот месяц уже не выставят.
-    if (closed && monthly.status === "missing") return null;
     const { label, tone } = MONTHLY[monthly.status];
     return { label: `${monthLabel(monthly.period)}: ${label}`, tone };
   }

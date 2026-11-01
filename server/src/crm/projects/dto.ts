@@ -109,7 +109,7 @@ export interface ProjectPayment {
     total: number;
     next: { position: number; amountMinor: number | null; currency: Currency } | null;
   } | null;
-  /** Счёт за текущий месяц: missing — записи нет. */
+  /** Счёт за текущий месяц: missing — записи нет, а по `unbilled()` она должна быть. */
   monthly: { period: string; status: "paid" | "unpaid" | "missing" } | null;
 }
 
@@ -245,9 +245,14 @@ function periodsBetween(from: string, to: string): string[] {
  * Раньше проверялся только текущий месяц — и забытый февраль не всплывал уже
  * никогда: в апреле система смотрела на апрель. Проект, не выставленный три
  * месяца, выглядел ровно как выставленный вчера. Считаем от начала работ.
+ *
+ * Считаются только проекты в статусе «В работе»: автодокументы делаются для них же,
+ * поэтому список совпадает с тем, что система обязана выставлять. Иначе проект из
+ * «Запланирован», статуса по умолчанию, поднимал бы утреннюю сводку каждый день.
  */
 export function unbilled(
   project: {
+    status: string;
     billingMonthly: boolean;
     workType: string | null;
     archivedAt: Date | null;
@@ -257,7 +262,11 @@ export function unbilled(
   invoices: { kind: string; period: string }[],
   timeZone: string,
 ): { period: string | null; count: number } {
-  if (project.archivedAt || billingMode(project) !== "monthly") {
+  if (
+    project.archivedAt ||
+    project.status !== "active" ||
+    billingMode(project) !== "monthly"
+  ) {
     return { period: null, count: 0 };
   }
 
@@ -299,15 +308,23 @@ function projectPayment(item: ProjectWithRelations, timeZone: string): ProjectPa
     };
   }
 
-  // У архивного проекта месяц не считается: иначе на его карточке висело бы «нет
-  // счёта», хотя `unbilled()` такого проекта уже не видит.
   if (mode === "monthly" && !item.archivedAt) {
     const period = currentPeriod(timeZone);
     const invoice = item.invoices?.find(
       (it) => it.kind === "invoice" && it.period === period,
     );
-    const status = !invoice ? "missing" : invoice.paidAt ? "paid" : "unpaid";
-    return { mode, stages: null, monthly: { period, status } };
+    if (invoice) {
+      const status = invoice.paidAt ? "paid" : "unpaid";
+      return { mode, stages: null, monthly: { period, status } };
+    }
+
+    // «Нет счёта» только там, где счёт обязан был появиться: то же правило, что в
+    // `unbilled()`. Иначе у проекта, который ещё не в работе или стартует позже, рядом
+    // с пустым «Не выставлено» горела бы красная подпись.
+    const started = !item.startedAt || currentPeriod(timeZone, item.startedAt) <= period;
+    if (item.status === "active" && started) {
+      return { mode, stages: null, monthly: { period, status: "missing" } };
+    }
   }
 
   return { mode, stages: null, monthly: null };

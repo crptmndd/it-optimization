@@ -199,10 +199,12 @@ export async function collectToday(filter: TodayFilter = {}): Promise<TodaySnaps
     }),
     // Пробелы считаются в коде, а не запросом: «нет счёта за любой месяц с
     // начала работ» через SQL выражается плохо, а помесячных проектов у
-    // команды десятки, не тысячи. Условие то же, что billingMode === "monthly".
+    // команды десятки, не тысячи. Условие то же, что в `unbilled()`: проект в
+    // работе, billingMode === "monthly".
     prisma.project.findMany({
       where: {
         ...liveProject,
+        status: "active",
         OR: [{ billingMonthly: true }, { workType: "support" }],
       },
       orderBy: { title: "asc" },
