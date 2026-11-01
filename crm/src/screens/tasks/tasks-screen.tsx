@@ -382,11 +382,19 @@ export function TasksScreen() {
           <p className="text-muted-foreground text-sm">Загружаем…</p>
         ) : tasks.length === 0 ? (
           <EmptyState
-            title={tab === "overdue" ? "Ничего не горит" : "Пока пусто"}
+            title={
+              debouncedSearch || developer
+                ? "Ничего не нашлось"
+                : tab === "overdue"
+                  ? "Ничего не горит"
+                  : "Пока пусто"
+            }
             note={
-              tab === "overdue"
-                ? "Задач с истёкшим сроком нет."
-                : "Заведите первую задачу — кнопка справа сверху."
+              debouncedSearch || developer
+                ? "Попробуйте другой запрос или человека."
+                : tab === "overdue"
+                  ? "Задач с истёкшим сроком нет."
+                  : "Заведите первую задачу — кнопка справа сверху."
             }
           />
         ) : view === "calendar" ? (

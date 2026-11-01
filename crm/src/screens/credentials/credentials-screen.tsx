@@ -298,11 +298,13 @@ export function CredentialsScreen() {
           <p className="text-muted-foreground text-sm">Загружаем…</p>
         ) : visible.length === 0 ? (
           <EmptyState
-            title={projectFilter ? "Ничего не нашлось" : "Пока пусто"}
+            title={projectFilter || debouncedSearch ? "Ничего не нашлось" : "Пока пусто"}
             note={
-              projectFilter
-                ? "В этом проекте доступов нет."
-                : "Заведите первую запись — хостинг, домены, почта, аналитика."
+              debouncedSearch
+                ? "Попробуйте другой запрос."
+                : projectFilter
+                  ? "В этом проекте доступов нет."
+                  : "Заведите первую запись — хостинг, домены, почта, аналитика."
             }
           />
         ) : (

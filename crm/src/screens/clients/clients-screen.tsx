@@ -81,8 +81,12 @@ export function ClientsScreen() {
           <p className="text-muted-foreground text-sm">Загружаем…</p>
         ) : clients.length === 0 ? (
           <EmptyState
-            title="Пока пусто"
-            note="Клиент появляется тогда, когда с ним начинается работа, а не при первом письме."
+            title={debouncedSearch ? "Ничего не нашлось" : "Пока пусто"}
+            note={
+              debouncedSearch
+                ? "Попробуйте другой запрос."
+                : "Клиент появляется тогда, когда с ним начинается работа, а не при первом письме."
+            }
           />
         ) : (
           <ul className="space-y-3 sm:space-y-2">
