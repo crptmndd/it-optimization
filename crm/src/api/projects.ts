@@ -43,7 +43,6 @@ export interface Project {
   workType: string | null;
   contractNumber: string | null;
   contractDate: string | null;
-  actDate: string | null;
 
   billingMonthly: boolean;
   /** Минорные единицы: копейки или центы. */
@@ -77,7 +76,6 @@ export interface ProjectInput {
   workType?: string | null;
   contractNumber?: string | null;
   contractDate?: string | null;
-  actDate?: string | null;
   billingMonthly?: boolean;
   monthlyAmountMinor?: number | null;
   currency?: Currency;

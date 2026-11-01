@@ -32,7 +32,6 @@ const projectFields = {
   workType: optionalText(60),
   contractNumber: optionalText(60),
   contractDate: optionalDate,
-  actDate: optionalDate,
 
   billingMonthly: z.boolean(),
   /// Рубли целыми. Отрицательная сумма — почти наверняка опечатка.
@@ -110,7 +109,6 @@ export interface ProjectDto {
   workType: string | null;
   contractNumber: string | null;
   contractDate: string | null;
-  actDate: string | null;
 
   billingMonthly: boolean;
   monthlyAmountMinor: number | null;
@@ -214,7 +212,6 @@ export function toProjectDto(item: ProjectWithRelations, timeZone: string): Proj
     workType: item.workType,
     contractNumber: item.contractNumber,
     contractDate: item.contractDate?.toISOString() ?? null,
-    actDate: item.actDate?.toISOString() ?? null,
     billingMonthly: item.billingMonthly,
     monthlyAmountMinor: item.monthlyAmountMinor,
     currency: item.currency,

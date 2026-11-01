@@ -26,7 +26,6 @@ export interface ProjectFormValues {
   workType: string;
   contractNumber: string;
   contractDate: string;
-  actDate: string;
   billingMonthly: boolean;
   currency: Currency;
   /** Строкой, а не числом: пустое поле ввода — это "", а не 0. */
@@ -46,7 +45,6 @@ export function emptyProjectValues(): ProjectFormValues {
     workType: "",
     contractNumber: "",
     contractDate: "",
-    actDate: "",
     billingMonthly: false,
     currency: "rub",
     monthlyAmount: "",
@@ -66,7 +64,6 @@ export function projectToValues(project: Project): ProjectFormValues {
     workType: project.workType ?? "",
     contractNumber: project.contractNumber ?? "",
     contractDate: toDateInputValue(project.contractDate),
-    actDate: toDateInputValue(project.actDate),
     billingMonthly: project.billingMonthly,
     currency: project.currency,
     monthlyAmount: amountToInput(project.monthlyAmountMinor),
@@ -86,7 +83,6 @@ export function valuesToProjectInput(values: ProjectFormValues): ProjectInput {
     workType: values.workType || null,
     contractNumber: values.contractNumber.trim() || null,
     contractDate: fromDateInputValue(values.contractDate),
-    actDate: fromDateInputValue(values.actDate),
     billingMonthly: values.billingMonthly,
     currency: values.currency,
     // Пустое поле — это «не задано», а не ноль.
@@ -191,7 +187,7 @@ export function ProjectFields({
           </Field>
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Договор №">
             <Input
               value={values.contractNumber}
@@ -206,14 +202,6 @@ export function ProjectFields({
               type="date"
               value={values.contractDate}
               onChange={(event) => set("contractDate", event.target.value)}
-            />
-          </Field>
-
-          <Field label="Дата акта">
-            <Input
-              type="date"
-              value={values.actDate}
-              onChange={(event) => set("actDate", event.target.value)}
             />
           </Field>
         </div>
