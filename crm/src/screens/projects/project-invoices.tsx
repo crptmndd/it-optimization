@@ -1,5 +1,5 @@
 import { Plus, X } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type KeyboardEvent } from "react";
 import { ApiError } from "@/api/client";
 import {
   createInvoice,
@@ -110,6 +110,13 @@ export function ProjectInvoices({
     }
   }
 
+  /** Enter в этих полях значит «завести запись», а не «сохранить проект». */
+  function addOnEnter(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    void add();
+  }
+
   async function togglePaid(invoice: Invoice) {
     try {
       await updateInvoice(projectId, invoice.id, {
@@ -183,11 +190,13 @@ export function ProjectInvoices({
             type="month"
             value={period}
             onChange={(event) => setPeriod(event.target.value)}
+            onKeyDown={addOnEnter}
             className="w-40"
           />
           <Input
             value={amount}
             onChange={(event) => setAmount(sanitizeAmount(event.target.value))}
+            onKeyDown={addOnEnter}
             inputMode="numeric"
             placeholder="Сумма"
             className="w-32"

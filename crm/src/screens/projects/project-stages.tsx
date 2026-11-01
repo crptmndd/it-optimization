@@ -234,6 +234,12 @@ export function ProjectStages({
                     );
                   }}
                   onBlur={() => commitDate(stage, index)}
+                  onKeyDown={(event) => {
+                    // Enter здесь значит «эта дата», а не «сохранить проект».
+                    if (event.key !== "Enter") return;
+                    event.preventDefault();
+                    commitDate(stage, index);
+                  }}
                   disabled={busy || !editable}
                 />
               </Field>
