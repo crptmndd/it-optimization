@@ -24,8 +24,6 @@ const PROJECT_BRIEF = { project: { select: { id: true, title: true } } } as cons
  * Отсюда следует то, что легко нарушить по невнимательности: расшифровка,
  * проверка и поиск по паролю на сервере невозможны и появиться не должны.
  * Любая такая «мелочь» потребует ключа здесь и вернёт исходную проблему.
- *
- * `secretHint` остался для сервисов, пароль от которых лежит не здесь.
  */
 
 const idParams = z.object({ id: z.string().uuid() });
@@ -36,7 +34,6 @@ const credentialFields = {
   url: optionalText(300),
   owner: optionalText(120),
   projectId: optionalUuid,
-  secretHint: optionalText(200),
   // Приходит уже зашифрованным. Сервер проверяет только форму и размер:
   // содержимое для него — непрозрачный набор байт, и так и задумано.
   secret: z.union([z.null(), z.string().max(4096)]),
@@ -46,7 +43,9 @@ const credentialFields = {
   amountMinor: z.union([z.null(), z.number().int().min(0).max(10_000_000_000)]),
   monthlyFee: z.boolean(),
   currency: z.enum(["rub", "usd"]),
-  notes: optionalText(2000),
+  // 2000 своих символов плюс бывшее «Где пароль» (200) с подписью: миграция
+  // дописала его в заметки, и такая запись должна сохраняться из формы.
+  notes: optionalText(2400),
 };
 
 const createBody = z.object(credentialFields).partial().required({ service: true });
@@ -93,7 +92,6 @@ export async function credentialRoutes(app: FastifyInstance): Promise<void> {
         url: input.url ?? null,
         owner: input.owner ?? null,
         projectId: input.projectId ?? null,
-        secretHint: input.secretHint ?? null,
         secret: input.secret ?? null,
         renewsAt: input.renewsAt ?? null,
         amountMinor: input.amountMinor ?? null,
@@ -133,7 +131,6 @@ export async function credentialRoutes(app: FastifyInstance): Promise<void> {
         ...(input.url !== undefined && { url: input.url }),
         ...(input.owner !== undefined && { owner: input.owner }),
         ...(input.projectId !== undefined && { projectId: input.projectId }),
-        ...(input.secretHint !== undefined && { secretHint: input.secretHint }),
         ...(input.secret !== undefined && { secret: input.secret }),
         ...(input.renewsAt !== undefined && { renewsAt: input.renewsAt }),
         ...(input.amountMinor !== undefined && { amountMinor: input.amountMinor }),

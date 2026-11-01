@@ -330,7 +330,7 @@ function CredentialLine({
         <Link to={`/credentials?focus=${item.id}`} className="min-w-0 flex-1">
           <span className="block truncate text-sm font-medium">{item.service}</span>
           <span className="text-muted-foreground mt-0.5 block truncate text-xs">
-            {[item.login, item.owner ?? "ни на кого не оформлен", item.secretHint]
+            {[item.login, item.owner ?? "ни на кого не оформлен"]
               .filter(Boolean)
               .join(" · ")}
           </span>

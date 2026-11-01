@@ -23,7 +23,6 @@ export interface CredentialDto {
   url: string | null;
   owner: string | null;
   project: { id: string; title: string } | null;
-  secretHint: string | null;
   /** Шифротекст пароля. Сервер его не понимает — расшифровка в браузере. */
   secret: string | null;
   renewsAt: string | null;
@@ -41,7 +40,6 @@ export function toCredentialDto(item: CredentialWithProject): CredentialDto {
     url: item.url,
     owner: item.owner,
     project: item.project,
-    secretHint: item.secretHint,
     secret: item.secret,
     renewsAt: item.renewsAt?.toISOString() ?? null,
     amountMinor: item.amountMinor,

@@ -7,7 +7,7 @@ import type { Currency } from "@/lib/money";
  * `secret` приходит и уходит только зашифрованным: ключ выводится из
  * мастер-фразы в браузере (см. `lib/vault.ts`) и на сервер не передаётся.
  * Поэтому утечка ночного дампа отдаёт нечитаемый текст, а не все сервисы
- * разом. `secretHint` остался для паролей, которые лежат не здесь.
+ * разом.
  */
 export interface Credential {
   id: string;
@@ -17,7 +17,6 @@ export interface Credential {
   owner: string | null;
   /** Проект, к которому относится доступ. `null` — общий для всей команды. */
   project: { id: string; title: string } | null;
-  secretHint: string | null;
   /**
    * Пароль, зашифрованный в браузере. Сервер хранит его непрозрачно и
    * расшифровать не может — ключа у него нет и не будет.
@@ -43,7 +42,6 @@ export interface CredentialInput {
   url?: string | null;
   owner?: string | null;
   projectId?: string | null;
-  secretHint?: string | null;
   secret?: string | null;
   renewsAt?: string | null;
   amountMinor?: number | null;

@@ -64,8 +64,6 @@ import { VaultControl } from "./vault-panel";
  * Отсюда правило, которое легко нарушить: открытый пароль существует только в
  * состоянии формы и в буфере обмена. Его нельзя ни отправить на сервер, ни
  * положить в localStorage, ни записать в журнал.
- *
- * `secretHint` остался для сервисов, пароль от которых лежит не здесь.
  */
 interface FormValues {
   service: string;
@@ -73,7 +71,6 @@ interface FormValues {
   url: string;
   owner: string;
   projectId: string;
-  secretHint: string;
   renewsDate: string;
   amount: string;
   currency: Currency;
@@ -90,7 +87,6 @@ function empty(): FormValues {
     url: "",
     owner: "",
     projectId: "",
-    secretHint: "",
     renewsDate: "",
     amount: "",
     currency: "rub",
@@ -107,7 +103,6 @@ function toValues(item: Credential, secret: string): FormValues {
     url: item.url ?? "",
     owner: item.owner ?? "",
     projectId: item.project?.id ?? "",
-    secretHint: item.secretHint ?? "",
     renewsDate: toDateInputValue(item.renewsAt),
     amount: amountToInput(item.amountMinor),
     currency: item.currency ?? "rub",
@@ -124,7 +119,6 @@ function toInput(values: FormValues): CredentialInput {
     url: values.url.trim() || null,
     owner: values.owner.trim() || null,
     projectId: values.projectId || null,
-    secretHint: values.secretHint.trim() || null,
     renewsAt: fromDateInputValue(values.renewsDate),
     amountMinor: parseAmount(values.amount),
     currency: values.currency,
@@ -542,9 +536,8 @@ function Row({
         <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
           <span className="block truncate text-sm font-medium">{item.service}</span>
           <span className="text-muted-foreground mt-0.5 block truncate text-xs">
-            {[item.login, item.owner && `на ${item.owner}`, item.secretHint]
-              .filter(Boolean)
-              .join(" · ") || "подробности не заполнены"}
+            {[item.login, item.owner && `на ${item.owner}`].filter(Boolean).join(" · ") ||
+              "подробности не заполнены"}
           </span>
           <NoteHint text={item.notes} />
         </button>
@@ -833,18 +826,6 @@ function CredentialModal({
                 </button>
               )}
             </div>
-          </Field>
-
-          <Field
-            label="Где пароль"
-            hint="Если он лежит не здесь — например, в общем хранилище"
-          >
-            <Input
-              value={values.secretHint}
-              onChange={(event) => set("secretHint", event.target.value)}
-              maxLength={200}
-              placeholder="Bitwarden, папка «Хостинг»"
-            />
           </Field>
 
           <Field label="Продлить до" hint="Попадёт наверх списка, когда срок подойдёт">

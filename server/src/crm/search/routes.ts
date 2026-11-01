@@ -72,10 +72,7 @@ export async function searchRoutes(app: FastifyInstance): Promise<void> {
         include: { project: { select: { title: true } } },
       }),
       prisma.credential.findMany({
-        where: {
-          ...alive,
-          OR: [{ service: like }, { login: like }, { notes: like }, { secretHint: like }],
-        },
+        where: { ...alive, OR: [{ service: like }, { login: like }, { notes: like }] },
         take,
         orderBy: { service: "asc" },
         include: { project: { select: { title: true } } },
