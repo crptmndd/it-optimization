@@ -29,7 +29,7 @@ Let's Encrypt не выдаст сертификат.
 
 ```bash
 ssh root@IP_СЕРВЕРА
-git clone https://github.com/FKamilAm/it-optimization.git /opt/it-optimization
+git clone https://github.com/crptmndd/it-optimization.git /opt/it-optimization
 bash /opt/it-optimization/server/scripts/setup-server.sh
 ```
 

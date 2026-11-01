@@ -15,7 +15,7 @@
 const API = "https://api.github.com";
 
 export const ADMIN_REPO = {
-  owner: process.env.NEXT_PUBLIC_ADMIN_REPO_OWNER || "FKamilAm",
+  owner: process.env.NEXT_PUBLIC_ADMIN_REPO_OWNER || "crptmndd",
   repo: process.env.NEXT_PUBLIC_ADMIN_REPO_NAME || "it-optimization",
   branch: process.env.NEXT_PUBLIC_ADMIN_REPO_BRANCH || "main",
 };

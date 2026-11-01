@@ -99,7 +99,7 @@ cat <<'NEXT'
 
 Дальше:
 
-  1. git clone https://github.com/FKamilAm/it-optimization.git /opt/it-optimization
+  1. git clone https://github.com/crptmndd/it-optimization.git /opt/it-optimization
   2. cd /opt/it-optimization/server
   3. cp .env.production.example .env  &&  nano .env
      — пароль базы:  openssl rand -base64 24

@@ -68,7 +68,7 @@ const schema = z.object({
   TIMEZONE: z.string().default("Europe/Moscow"),
 
   GITHUB_TOKEN: z.string().optional(),
-  GITHUB_OWNER: z.string().default("FKamilAm"),
+  GITHUB_OWNER: z.string().default("crptmndd"),
   GITHUB_REPO: z.string().default("it-optimization"),
   GITHUB_BRANCH: z.string().default("main"),
 });
