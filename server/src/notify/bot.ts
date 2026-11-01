@@ -32,14 +32,14 @@ interface TelegramUpdate {
 }
 
 const HELP = [
-  "Я напоминаю о задачах, сроках и деньгах.",
+  "Я напоминаю о задачах, сроках и деньгах в общем чате команды.",
   "",
   "<b>/today</b> — что горит прямо сейчас",
   "<b>/chatid</b> — идентификатор этого чата",
-  "<b>/stop</b> — отключить напоминания",
+  "<b>/stop</b> — отвязать этот чат от учётки",
   "",
-  "Каждое утро присылаю просроченное и запланированное на сегодня.",
-  "Если присылать нечего — молчу.",
+  "Каждое утро пишу в общий чат просроченное и запланированное на сегодня.",
+  "Если писать не о чем — молчу.",
 ].join("\n");
 
 /** Привязка открывает `/today` мимо сессий, поэтому оставляет след в журнале. */
@@ -97,7 +97,7 @@ async function linkByCode(chatId: string, code: string, log: Log): Promise<void>
   log.info({ email: user.email }, "телеграм привязан");
   await trySendMessage(
     chatId,
-    `Готово, ${escapeHtml(user.name ?? user.email)}. Напоминания включены.\n\n${HELP}`,
+    `Готово, ${escapeHtml(user.name ?? user.email)}. Чат привязан: команда /today покажет здесь сводку, а напоминания приходят в общий чат.\n\n${HELP}`,
     log,
   );
 }
@@ -111,7 +111,7 @@ async function handleCommand(chatId: string, text: string, log: Log): Promise<vo
     if (argument) return linkByCode(chatId, argument, log);
     await trySendMessage(
       chatId,
-      `Чтобы получать напоминания, откройте CRM → «Подключить телеграм» и пришлите мне выданный код.\n\n${HELP}`,
+      `Чтобы смотреть сводку здесь, откройте CRM → «Подключить телеграм» и пришлите мне выданный код.\n\n${HELP}`,
       log,
     );
     return;
@@ -136,7 +136,7 @@ async function handleCommand(chatId: string, text: string, log: Log): Promise<vo
       await prisma.user.update({ where: { id: user.id }, data: { telegramChatId: null } });
       await auditLink(user.id, "telegram_unlink", { reason: "stop" }, log);
     }
-    await trySendMessage(chatId, "Напоминания отключены. Вернуть — командой /start с кодом из CRM.", log);
+    await trySendMessage(chatId, "Чат отвязан. Вернуть — командой /start с кодом из CRM.", log);
     return;
   }
 
