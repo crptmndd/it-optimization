@@ -701,7 +701,12 @@ function ProjectModal({
   return (
     <Modal title={title} badge={badge} onClose={onClose}>
       <form onSubmit={handleSubmit}>
-        <ProjectFields values={values} onChange={setValues} clients={clients} />
+        <ProjectFields
+          values={values}
+          onChange={setValues}
+          clients={clients}
+          saved={project}
+        />
 
         {project && (
           <>

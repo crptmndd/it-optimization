@@ -192,6 +192,9 @@ export function billingMode(project: {
  * признак, и проект, начатый в январе 2025-го, разом получил бы два десятка
  * месяцев в «Не выставлено».
  *
+ * Поэтому у сопровождения без смены вида работы присланное значение не принимается:
+ * включить признак можно только самой сменой, а снять нельзя вовсе.
+ *
  * Переход на договор снимает признак: договор платится этапами, и без этого
  * возврат с сопровождения дал бы и этапы, и помесячные счета. Старый договор с
  * галочкой при обычном сохранении её сохраняет: режим меняет только человек.
@@ -204,7 +207,7 @@ export function nextBillingMonthly(
     input.workType !== undefined ? input.workType : (existing?.workType ?? null);
   const changed = workType !== (existing?.workType ?? null);
   const flag = input.billingMonthly ?? existing?.billingMonthly ?? false;
-  if (workType === "support") return changed || existing?.billingMonthly || flag;
+  if (workType === "support") return changed || (existing?.billingMonthly ?? false);
   if (workType === "contract" && changed) return false;
   return flag;
 }

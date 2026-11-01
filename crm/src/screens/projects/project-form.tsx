@@ -90,23 +90,35 @@ export function ProjectFields({
   values,
   onChange,
   clients,
+  saved,
 }: {
   values: ProjectFormValues;
   onChange: (values: ProjectFormValues) => void;
   clients: Client[];
+  /** Что лежит в базе. У нового проекта этого нет. */
+  saved?: Pick<Project, "workType" | "billingMonthly">;
 }) {
   function set<K extends keyof ProjectFormValues>(key: K, value: ProjectFormValues[K]) {
     onChange({ ...values, [key]: value });
   }
 
-  /** Режим оплаты следует за видом работы, то же правило держит сервер. */
+  /**
+   * Режим оплаты следует за видом работы, но только при настоящей смене. Повторный
+   * выбор того же пункта ничего не значит, а возврат к сохранённому виду работы
+   * возвращает сохранённый признак: иначе старое сопровождение с одного касания поля
+   * получило бы все месяцы с начала работ в «Не выставлено», а старый договор молча
+   * потерял бы помесячные документы.
+   */
   function setWorkType(workType: string) {
+    if (workType === values.workType) return;
     const billingMonthly =
-      workType === "support"
-        ? true
-        : workType === "contract"
-          ? false
-          : values.billingMonthly;
+      saved && workType === (saved.workType ?? "")
+        ? saved.billingMonthly
+        : workType === "support"
+          ? true
+          : workType === "contract"
+            ? false
+            : values.billingMonthly;
     onChange({ ...values, workType, billingMonthly });
   }
 
