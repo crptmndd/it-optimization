@@ -225,7 +225,7 @@ export function TodayScreen() {
                 title="Не выставлено"
                 items={snapshot.projects.unbilled}
                 tone="danger"
-                note="Помесячные проекты, по которым есть пропущенный месяц"
+                note="Проекты в работе с помесячной оплатой, у которых пропущен месяц"
                 render={(project) => <UnbilledLine key={project.id} project={project} />}
               />
               <Block

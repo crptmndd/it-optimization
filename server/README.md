@@ -185,6 +185,9 @@ curl http://localhost:4000/health          # {"ok":true}
 
 - `POST /tasks` и новые исполнители в `PATCH /tasks/:id` шлют сообщение в общий чат в
   фоне. Ошибка телеграма на ответ не влияет.
+- `POST /telegram/link-code` принимает `{ password }`, лимит 10/5 мин, только из CRM:
+  привязанный чат читает `/today` мимо сессий. Привязка и отвязка видны в `audit_log`
+  (`telegram_link`, `telegram_unlink`), смена пароля и включение 2FA снимают её.
 - `PATCH /projects/:id/stages/:position` проверяет порядок оплаты под блокировкой
   строки проекта: этап N+1 нельзя отметить раньше N, снять N при оплаченном N+1 нельзя,
   ответ 409. `PUT /projects/:id/stages` принимает `{ totalMinor }` или `{ amounts }`.
