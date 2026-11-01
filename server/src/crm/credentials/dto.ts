@@ -1,11 +1,12 @@
-import type { Credential, Currency, Project } from "@prisma/client";
+import type { Credential, Currency, Prisma, Project } from "@prisma/client";
 
 /**
  * Форма учётки для клиента. Вынесена из routes.ts, потому что её читает ещё и
  * экран «Сегодня»: сроки продления попадают в общую сводку, и две копии
  * преобразования разошлись бы при первом же новом поле.
  *
- * Паролей в этой форме нет — их нет и в таблице, см. `routes.ts`.
+ * Паролей в этой форме нет ни в каком виде, даже шифротекста: их отдаёт только
+ * `POST /credentials/:id/reveal`, с кодом 2FA и записью в журнал.
  */
 /**
  * Проект отдаётся вместе с названием, а не одним идентификатором: экран
@@ -16,6 +17,18 @@ export type CredentialWithProject = Credential & {
   project: Pick<Project, "id" | "title"> | null;
 };
 
+/**
+ * Старый пароль, судьба которого ещё не решена: мастер-фразой зашифрован, сюда не
+ * перенесён и не заменён новым. Одно условие на кнопку, выборку и перенос. Удалённые
+ * записи не входят: живым они не нужны, а отдавать их незачем.
+ */
+export const LEGACY_PENDING = {
+  deletedAt: null,
+  passwordEnc: null,
+  secretMigratedAt: null,
+  secret: { not: null },
+} satisfies Prisma.CredentialWhereInput;
+
 export interface CredentialDto {
   id: string;
   service: string;
@@ -23,13 +36,23 @@ export interface CredentialDto {
   url: string | null;
   owner: string | null;
   project: { id: string; title: string } | null;
-  /** Шифротекст пароля. Сервер его не понимает — расшифровка в браузере. */
-  secret: string | null;
+  /** Пароль сохранён и открывается через reveal. */
+  hasPassword: boolean;
+  /** Есть старый пароль, который надо перенести: см. `LEGACY_PENDING`. */
+  legacyPending: boolean;
   renewsAt: string | null;
   amountMinor: number | null;
   currency: Currency;
   monthlyFee: boolean;
   notes: string | null;
+}
+
+export function isLegacyPending(
+  item: Pick<Credential, "secret" | "secretMigratedAt" | "passwordEnc">,
+): boolean {
+  return (
+    item.secret !== null && item.secretMigratedAt === null && item.passwordEnc === null
+  );
 }
 
 export function toCredentialDto(item: CredentialWithProject): CredentialDto {
@@ -40,7 +63,8 @@ export function toCredentialDto(item: CredentialWithProject): CredentialDto {
     url: item.url,
     owner: item.owner,
     project: item.project,
-    secret: item.secret,
+    hasPassword: item.passwordEnc !== null,
+    legacyPending: isLegacyPending(item),
     renewsAt: item.renewsAt?.toISOString() ?? null,
     amountMinor: item.amountMinor,
     currency: item.currency,
