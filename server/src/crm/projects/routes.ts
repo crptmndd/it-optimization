@@ -9,8 +9,11 @@ import { invalidInput } from "../http.js";
 import { briefNotes, listNotes, noteRoutesFor } from "../notes.js";
 import { invoiceRoutes } from "./invoices.js";
 import {
+  billingMode,
   CLOSED_PROJECT_STATUSES,
   createProjectBody,
+  currentPeriod,
+  nextBillingMonthly,
   reorderProjectsBody,
   listProjectsQuery,
   OPEN_PROJECT_STATUSES,
@@ -18,6 +21,7 @@ import {
   toProjectDto,
   updateProjectBody,
 } from "./dto.js";
+import { ensureStages, stageRoutes, STAGE_POSITIONS } from "./stages.js";
 
 const idParams = z.object({ id: z.string().uuid() });
 
@@ -116,6 +120,7 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
     if (problem) return reply.code(400).send({ error: problem });
 
     const status = input.status ?? "planned";
+    const currency = input.currency ?? "rub";
     const project = await prisma.project.create({
       data: {
         title: input.title,
@@ -128,12 +133,17 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
         workType: input.workType ?? null,
         contractNumber: input.contractNumber ?? null,
         contractDate: input.contractDate ?? null,
-        billingMonthly: input.billingMonthly ?? false,
+        billingMonthly: nextBillingMonthly(input),
         monthlyAmountMinor: input.monthlyAmountMinor ?? null,
-        currency: input.currency ?? "rub",
+        currency,
         startedAt: input.startedAt ?? null,
         deadline: input.deadline ?? null,
         closedAt: closedAtFor(status, null) ?? null,
+        ...(input.workType === "contract" && {
+          stages: {
+            create: STAGE_POSITIONS.map((position) => ({ position, currency })),
+          },
+        }),
       },
       include: PROJECT_RELATIONS,
     });
@@ -186,7 +196,6 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
     if (input.workType !== undefined) data.workType = input.workType;
     if (input.contractNumber !== undefined) data.contractNumber = input.contractNumber;
     if (input.contractDate !== undefined) data.contractDate = input.contractDate;
-    if (input.billingMonthly !== undefined) data.billingMonthly = input.billingMonthly;
     if (input.monthlyAmountMinor !== undefined)
       data.monthlyAmountMinor = input.monthlyAmountMinor;
     if (input.currency !== undefined) data.currency = input.currency;
@@ -196,10 +205,43 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
     const closedAt = closedAtFor(input.status, existing.closedAt);
     if (closedAt !== undefined) data.closedAt = closedAt;
 
-    const project = await prisma.project.update({
-      where: { id: existing.id },
-      data,
-      include: PROJECT_RELATIONS,
+    // Итог этой записи: режим оплаты зависит от него, а не от прежних значений.
+    const workType = input.workType !== undefined ? input.workType : existing.workType;
+    const billingMonthly = nextBillingMonthly(input, existing);
+    const currency = input.currency ?? existing.currency;
+    data.billingMonthly = billingMonthly;
+
+    const project = await prisma.$transaction(async (tx) => {
+      // Уход с договора этапы не удаляет: в них могут быть оплаты, а возврат на
+      // договор вернёт те же строки. В одной транзакции, чтобы ответ уже их содержал.
+      if (workType === "contract") await ensureStages(tx, existing.id, currency);
+
+      // Сумма появилась позже автодокументов: иначе первый месяц пришлось бы
+      // править руками в двух записях. Проверка режима нужна потому, что старая
+      // форма шлёт сумму при каждом сохранении, и у разового проекта с оставшейся
+      // суммой она молча попала бы в ручную запись.
+      const amountMinor = input.monthlyAmountMinor;
+      if (
+        amountMinor !== undefined &&
+        amountMinor !== null &&
+        billingMode({ workType, billingMonthly }) === "monthly"
+      ) {
+        await tx.invoice.updateMany({
+          where: {
+            projectId: existing.id,
+            period: currentPeriod(env.TIMEZONE),
+            amountMinor: null,
+            paidAt: null,
+          },
+          data: { amountMinor, currency },
+        });
+      }
+
+      return tx.project.update({
+        where: { id: existing.id },
+        data,
+        include: PROJECT_RELATIONS,
+      });
     });
 
     await audit(request, {
@@ -239,6 +281,7 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
   });
 
   await invoiceRoutes(app);
+  await stageRoutes(app);
 
   app.delete("/projects/:id", { preHandler: requireTeam }, async (request, reply) => {
     const params = idParams.safeParse(request.params);
