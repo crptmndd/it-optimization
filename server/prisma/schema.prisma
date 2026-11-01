@@ -214,8 +214,24 @@ model User {
   telegramLinkCode      String?   @unique @map("telegram_link_code")
   telegramLinkExpiresAt DateTime? @map("telegram_link_expires_at")
 
-  sessions Session[]
-  actions  AuditLog[]
+  /// Секрет TOTP, зашифрованный VAULT_KEY (см. crypto/sealed.ts). Заполнен, но
+  /// totpEnabledAt пуст — подключение начато и код ещё не подтверждён.
+  totpSecretEnc      String?   @map("totp_secret_enc")
+  /// Признак включённой 2FA. Отдельно от секрета: вход не должен требовать код
+  /// от человека, который только открыл экран настройки.
+  totpEnabledAt      DateTime? @map("totp_enabled_at")
+  /// Номер 30-секундного шага последнего принятого кода. Запрещает повтор кода
+  /// внутри окна ±1: без него подсмотренный код живёт полторы минуты.
+  totpLastStep       Int?      @map("totp_last_step")
+  /// Счётчик неверных кодов подряд. Лимит по адресу не спасает от перебора с
+  /// разных адресов, поэтому держим ещё и лимит на человека.
+  totpFailedAttempts Int       @default(0) @map("totp_failed_attempts")
+  totpLockedUntil    DateTime? @map("totp_locked_until")
+
+  sessions      Session[]
+  actions       AuditLog[]
+  recoveryCodes RecoveryCode[]
+  loginTickets  LoginTicket[]
 
   ownedLeads   Lead[] @relation("LeadOwner")
   createdTasks Task[] @relation("TaskAuthor")
@@ -241,8 +257,51 @@ model Session {
   createdAt DateTime  @default(now()) @map("created_at")
   revokedAt DateTime? @map("revoked_at")
 
+  /// До какого момента эта сессия открывает пароли без повторного кода.
+  twoFactorConfirmedUntil DateTime? @map("two_factor_confirmed_until")
+
   @@index([userId])
   @@map("sessions")
+}
+
+/// Билет между паролем и кодом. В базе, как и сессии: хранится только хэш, а
+/// перезапуск API не выбрасывает человека посреди входа.
+model LoginTicket {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  ip        String?
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("login_tickets")
+}
+
+/// Одноразовые коды восстановления. SHA-256 хватает: в коде 16 случайных символов,
+/// перебирать по дампу нечего.
+model RecoveryCode {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash  String    @map("code_hash")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@unique([userId, codeHash])
+  @@map("recovery_codes")
+}
+
+/// Telegram-ники исполнителей. Ключ — имя из DEVELOPERS: исполнители значатся
+/// именами, а не учётками. Строки нет — ника нет, это нормальное состояние.
+model TeamMember {
+  name             String   @id
+  telegramUsername String?  @map("telegram_username")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@map("team_members")
 }
 
 /// Кто, что и когда изменил.
@@ -378,9 +437,10 @@ model Project {
   leadId   String? @map("lead_id") @db.Uuid
   lead     Lead?   @relation(fields: [leadId], references: [id], onDelete: SetNull)
 
-  /// Кто ведёт. Имена, а не ссылки на учётные записи: разработчики работают под
-  /// общим входом, отдельных аккаунтов у них нет. Список — проект нередко тянут
-  /// вдвоём, и в утренней сводке должно быть видно обоих.
+  /// Кто ведёт. Имена, а не ссылки на учётные записи: исполнитель — человек из
+  /// команды, и своя учётка у него есть не всегда, а отключение учётки не должно
+  /// стирать его из истории проектов. Список — проект нередко тянут вдвоём, и в
+  /// утренней сводке должно быть видно обоих.
   ///
   /// Допустимые значения проверяются по DEVELOPERS в src/crm/developers.ts:
   /// свободная строка означала бы «Вадим», «вадим» и «Вадик» как трёх разных
@@ -396,8 +456,9 @@ model Project {
 
   contractNumber String?   @map("contract_number")
   contractDate   DateTime? @map("contract_date")
-  /// Дата акта выполненных работ по проекту в целом. Помесячные акты живут
-  /// отдельными записями в invoices.
+  /// Дата акта по проекту в целом. Не вводится и API больше не отдаётся: акты
+  /// живут записями в invoices. Колонка оставлена, чтобы откат API ничего не
+  /// терял и старые значения можно было прочитать из базы.
   actDate        DateTime? @map("act_date")
 
   /// Счета выставляются каждый месяц. Признак нужен, чтобы бот напоминал про
@@ -417,13 +478,17 @@ model Project {
 
   invoices    Invoice[]
   credentials Credential[]
+  stages      ProjectStage[]
 
   /// Порядок внутри колонки на доске.
   position Int @default(0)
 
-  startedAt DateTime? @map("started_at")
-  deadline  DateTime?
-  closedAt  DateTime? @map("closed_at")
+  startedAt  DateTime? @map("started_at")
+  deadline   DateTime?
+  closedAt   DateTime? @map("closed_at")
+  /// Архив — отдельный признак, а не статус: проект в архиве сохраняет итог
+  /// («сдан», «отменён»), а статус говорит о работе, не о том, видно ли его.
+  archivedAt DateTime? @map("archived_at")
 
   /// Кейс на сайте, в который превратился проект. Связь ставится в момент
   /// публикации; удаление кейса обнуляет её, но не трогает сам проект.
@@ -437,7 +502,35 @@ model Project {
   deletedAt DateTime? @map("deleted_at")
 
   @@index([status, deadline])
+  @@index([archivedAt])
   @@map("projects")
+}
+
+/// Этап договорного проекта. Отдельная таблица, а не строки invoices: два этапа
+/// могут прийтись на один месяц и упёрлись бы в уникальность счёта за период, а
+/// порядок оплаты нельзя было бы обойти через маршруты счетов. Подробнее — в
+/// CLAUDE.md. Порядок оплаты проверяет сервер: projects/stages.ts.
+///
+/// Общая сумма договора не хранится: это сумма этапов, а второе хранимое число
+/// однажды разошлось бы с первым. Валюта у каждого этапа своя: у проекта она
+/// может смениться, а уже оплаченная сумма менять смысл не должна.
+model ProjectStage {
+  id          String    @id @default(uuid()) @db.Uuid
+  projectId   String    @map("project_id") @db.Uuid
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  /// 1, 2 или 3. Границы держит CHECK в миграции: Prisma их не описывает.
+  position    Int       @db.SmallInt
+  /// В минорных единицах. Пусто — сумму ещё не назвали.
+  amountMinor Int?      @map("amount_minor")
+  currency    Currency  @default(rub)
+  issuedAt    DateTime? @map("issued_at")
+  paidAt      DateTime? @map("paid_at")
+  note        String?
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  @@unique([projectId, position])
+  @@map("project_stages")
 }
 
 /**
@@ -540,48 +633,52 @@ model Task {
   @@map("tasks")
 }
 
-/// Учётки сервисов, которыми пользуется команда.
+/// Учётки сервисов, которыми пользуется команда: что у нас есть, на кого
+/// записано, на какой почте, когда продлевать и под каким паролем заходят.
 ///
-/// **Паролей здесь нет и быть не должно.** Это справочник «что у нас вообще
-/// есть и на кого записано»: сервис, логин, адрес, на какой почте, когда
-/// продлевать. Пароли живут в менеджере паролей — база регулярно уезжает в
-/// дампы, и одна утечка дампа отдала бы разом все сервисы.
-///
-/// Поле `secretHint` — не пароль, а подсказка, где его искать: «Bitwarden,
-/// папка Хостинг».
+/// Открытых паролей в базе нет: она регулярно уезжает в дампы, и одна утечка
+/// отдала бы разом все сервисы. Пароль лежит в `passwordEnc`, зашифрованный
+/// ключом VAULT_KEY из окружения сервера, а смотреть его можно только через
+/// POST /credentials/:id/reveal, с кодом 2FA и записью в журнал.
 model Credential {
-  id          String    @id @default(uuid()) @db.Uuid
+  id               String    @id @default(uuid()) @db.Uuid
   /// Название сервиса: reg.ru, Яндекс 360, GitHub.
-  service     String
+  service          String
   /// Логин или адрес почты, под которым заходят.
-  login       String?
-  url         String?
+  login            String?
+  url              String?
   /// На кого оформлено — имя из DEVELOPERS или название компании.
-  owner       String?
+  owner            String?
   /// К какому проекту относится доступ. Пусто — общий: почта, GitHub, хостинг.
   ///
   /// SetNull, а не Cascade: закрытый проект не должен уносить с собой пароль от
   /// хостинга, на котором его сайт продолжает работать.
-  projectId   String?   @map("project_id") @db.Uuid
-  project     Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
-  /// Где лежит пароль, если он не здесь: «Bitwarden, папка Хостинг».
-  secretHint  String?   @map("secret_hint")
-  /// Сам пароль — **зашифрованный в браузере**, base64 от `iv || ciphertext`.
-  ///
-  /// Сервер это только хранит и отдаёт: ключ выводится из мастер-фразы на
-  /// устройстве и сюда никогда не попадает. Поэтому утечка дампа отдаёт
-  /// нечитаемый мусор, а не все сервисы разом, — ровно из-за этого пароли
-  /// раньше здесь не хранились вовсе.
-  secret      String?   @db.Text
+  projectId        String?   @map("project_id") @db.Uuid
+  project          Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  /// Бывшее поле «Где пароль». Из формы и API убрано, текст миграция дописала в
+  /// `notes`. Колонка оставлена: откат API должен находить её на месте.
+  secretHint       String?   @map("secret_hint")
+  /// Старый пароль, зашифрованный в браузере мастер-фразой: base64 от
+  /// `iv || ciphertext`. Заморожен: новые пароли идут в `passwordEnc`, а этот
+  /// читается только при разовом переносе и не очищается, потому что он запас на
+  /// случай отката API. Что с ним уже решено, говорит `secretMigratedAt`.
+  secret           String?   @db.Text
+  /// Пароль, зашифрованный на сервере AES-256-GCM ключом VAULT_KEY. Наружу не
+  /// отдаётся никогда, кроме POST /credentials/:id/reveal.
+  passwordEnc      String?   @map("password_enc") @db.Text
+  /// Когда судьба старого `secret` решена: перенесён или заменён новым паролем.
+  /// Без отметки стёртый пароль вернулся бы при следующем переносе, потому что
+  /// `secret` намеренно не очищается.
+  secretMigratedAt DateTime? @map("secret_migrated_at")
   /// Когда продлевать: домены, сертификаты, платные подписки.
-  renewsAt    DateTime? @map("renews_at")
+  renewsAt         DateTime? @map("renews_at")
   /// Сколько стоит, в минорных единицах — как у проекта.
-  amountMinor Int?      @map("amount_minor")
-  currency    Currency  @default(rub)
+  amountMinor      Int?      @map("amount_minor")
+  currency         Currency  @default(rub)
   /// Списывается каждый месяц. Без признака сумма непонятна: 500 ₽ у хостинга
   /// и 500 ₽ у домена — это про разные деньги в год.
-  monthlyFee  Boolean   @default(false) @map("monthly_fee")
-  notes       String?
+  monthlyFee       Boolean   @default(false) @map("monthly_fee")
+  notes            String?
 
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
