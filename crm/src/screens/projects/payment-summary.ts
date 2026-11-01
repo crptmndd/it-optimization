@@ -43,11 +43,14 @@ export function paymentSummary(
     if (stages.total === 0 || (closed && empty)) return null;
 
     const next = stages.next;
+    // Отменённый договор никому не должен: «Счета» его не показывают, и подпись не
+    // должна обещать следующий платёж.
+    const owed = project.status === "cancelled" ? null : next;
     return {
       label:
         `этапы ${stages.paid}/${stages.total}` +
-        (next?.amountMinor != null
-          ? ` · следующий ${money(next.amountMinor, next.currency)}`
+        (owed?.amountMinor != null
+          ? ` · следующий ${money(owed.amountMinor, owed.currency)}`
           : ""),
       tone: next ? "neutral" : "success",
     };
