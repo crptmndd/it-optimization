@@ -1,9 +1,18 @@
-import { useState } from "react";
+import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
 import { ApiError } from "@/api/client";
 import { updateProject, type Project } from "@/api/projects";
 import { CurrencySelect } from "@/components/currency-select";
 import { Button, ErrorNote, Field, Input } from "@/components/ui";
 import { amountToInput, parseAmount, sanitizeAmount, type Currency } from "@/lib/money";
+
+/**
+ * Блок оплаты в карточке: у него свои поля и своя кнопка. Общий «Сохранить» зовёт
+ * `flush`, чтобы набранная сумма не пропала при закрытии окна. Отказ бросается
+ * наружу: окно остаётся открытым и показывает его рядом с кнопкой.
+ */
+export interface PaymentBlock {
+  flush: () => Promise<void>;
+}
 
 /**
  * Сумма в месяц у помесячного проекта.
@@ -14,9 +23,14 @@ import { amountToInput, parseAmount, sanitizeAmount, type Currency } from "@/lib
 export function ProjectBilling({
   project,
   onSaved,
+  reveal,
+  ref,
 }: {
   project: Project;
   onSaved: () => void;
+  /** Карточку открыли ради суммы: блок прокручивается на глаза. */
+  reveal?: boolean;
+  ref?: Ref<PaymentBlock>;
 }) {
   // Строкой, а не числом: пустое поле ввода — это "", а не 0.
   const [amount, setAmount] = useState(amountToInput(project.monthlyAmountMinor));
@@ -27,7 +41,7 @@ export function ProjectBilling({
   const dirty =
     parseAmount(amount) !== project.monthlyAmountMinor || currency !== project.currency;
 
-  async function save() {
+  async function write() {
     setError(null);
     setSaving(true);
     try {
@@ -37,15 +51,30 @@ export function ProjectBilling({
         currency,
       });
       onSaved();
-    } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Не удалось сохранить");
     } finally {
       setSaving(false);
     }
   }
 
+  function save() {
+    write().catch((cause: unknown) => {
+      setError(cause instanceof ApiError ? cause.message : "Не удалось сохранить");
+    });
+  }
+
+  useImperativeHandle(ref, () => ({
+    flush: async () => {
+      if (dirty) await write();
+    },
+  }));
+
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (reveal) root.current?.scrollIntoView({ block: "start" });
+  }, [reveal]);
+
   return (
-    <div className="border-border border-t pt-4">
+    <div ref={root} className="border-border scroll-mt-4 border-t pt-4">
       <div className="flex flex-wrap items-end gap-2">
         <div className="min-w-32 flex-1">
           <Field label="Сумма в месяц">
@@ -56,7 +85,7 @@ export function ProjectBilling({
                 // Enter здесь значит «эта сумма», а не «сохранить проект».
                 if (event.key !== "Enter") return;
                 event.preventDefault();
-                void save();
+                save();
               }}
               inputMode="numeric"
               placeholder="45000"
@@ -65,7 +94,7 @@ export function ProjectBilling({
         </div>
         <CurrencySelect value={currency} onChange={setCurrency} />
         {/* type="button": форма проекта снаружи, и submit сохранил бы её. */}
-        <Button type="button" onClick={() => void save()} disabled={saving || !dirty}>
+        <Button type="button" onClick={save} disabled={saving || !dirty}>
           {saving ? "Сохраняем…" : "Сохранить сумму"}
         </Button>
       </div>

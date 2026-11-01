@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
 import { ApiError } from "@/api/client";
 import {
   getStages,
@@ -11,6 +11,7 @@ import {
 } from "@/api/projects";
 import { CurrencySelect } from "@/components/currency-select";
 import { Badge, Button, ErrorNote, Field, Input } from "@/components/ui";
+import type { PaymentBlock } from "./project-billing";
 import { formatDate, fromDateInputValue, toDateInputValue } from "@/lib/dates";
 import {
   amountToInput,
@@ -36,9 +37,14 @@ function failure(cause: unknown): string {
 export function ProjectStages({
   project,
   onChanged,
+  reveal,
+  ref,
 }: {
   project: Project;
   onChanged: () => void;
+  /** Карточку открыли ради суммы: блок прокручивается на глаза. */
+  reveal?: boolean;
+  ref?: Ref<PaymentBlock>;
 }) {
   const [stages, setStages] = useState<Stage[] | null>(null);
   const [total, setTotal] = useState("");
@@ -111,6 +117,14 @@ export function ProjectStages({
     if (input) await writeAmounts(input);
   }
 
+  useImperativeHandle(ref, () => ({ flush: writeEntered }));
+
+  const ready = stages !== null;
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (reveal && ready) root.current?.scrollIntoView({ block: "start" });
+  }, [reveal, ready]);
+
   if (stages === null) {
     return error ? (
       <div className="mt-4">
@@ -131,6 +145,7 @@ export function ProjectStages({
   const totals = sumByCurrency(stages);
   const paidTotals = sumByCurrency(stages.filter((stage) => stage.paidAt));
 
+  /** Ошибка кнопки остаётся в блоке, у общего «Сохранить» её показывает окно. */
   function run(action: () => Promise<void>) {
     action().catch((cause: unknown) => setError(failure(cause)));
   }
@@ -196,7 +211,7 @@ export function ProjectStages({
   }
 
   return (
-    <div className="border-border mt-4 border-t pt-4">
+    <div ref={root} className="border-border mt-4 scroll-mt-4 border-t pt-4">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <span className="text-sm font-medium">Этапы договора</span>
         {formatTotals(totals) && (

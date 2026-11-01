@@ -63,7 +63,7 @@ import {
   valuesToProjectInput,
   type ProjectFormValues,
 } from "./project-form";
-import { ProjectBilling } from "./project-billing";
+import { ProjectBilling, type PaymentBlock } from "./project-billing";
 import { ProjectInvoices } from "./project-invoices";
 import { ProjectStages } from "./project-stages";
 import { PAYMENT_TEXT_CLASS, paymentSummary } from "./payment-summary";
@@ -265,6 +265,8 @@ export function ProjectsScreen() {
   /** Колонка, из которой нажали «+» — проект заводится сразу в ней. */
   const [prefillStatus, setPrefillStatus] = useState<ProjectStatus | null>(null);
   const [editing, setEditing] = useState<Project | null>(null);
+  /** Карточка, открытая ради суммы: туда сразу прокручивается блок оплаты. */
+  const [revealFor, setRevealFor] = useState<string | null>(null);
   /** Фильтры переключают быстро: ответ за прошлый срез не должен лечь поверх нового. */
   const request = useRef(0);
 
@@ -499,7 +501,10 @@ export function ProjectsScreen() {
             setCreating(false);
             setPrefillStatus(null);
             // Сумма задаётся в карточке, поэтому туда и ведём.
-            if (project.payment.mode !== "none") setEditing(project);
+            if (project.payment.mode !== "none") {
+              setEditing(project);
+              setRevealFor(project.id);
+            }
             load();
           }}
         />
@@ -511,8 +516,12 @@ export function ProjectsScreen() {
           badge={editing.archivedAt ? <Badge>архив</Badge> : undefined}
           clients={clients}
           project={editing}
+          reveal={revealFor === editing.id}
           initial={projectToValues(editing)}
-          onClose={() => setEditing(null)}
+          onClose={() => {
+            setEditing(null);
+            setRevealFor(null);
+          }}
           onChanged={() => refreshOpened(editing.id)}
           onSubmit={async (values) => {
             const project = await updateProject(editing.id, valuesToProjectInput(values));
@@ -522,6 +531,7 @@ export function ProjectsScreen() {
               project.payment.mode !== "none" &&
               project.payment.mode !== editing.payment.mode;
             setEditing(opened ? project : null);
+            setRevealFor(opened ? project.id : null);
             load();
           }}
           onArchive={async () => {
@@ -630,6 +640,7 @@ function ProjectModal({
   initial,
   clients,
   project,
+  reveal,
   onClose,
   onChanged,
   onSubmit,
@@ -640,6 +651,8 @@ function ProjectModal({
   badge?: ReactNode;
   initial: ProjectFormValues;
   clients: Client[];
+  /** Прокрутить к блоку оплаты: карточку открыли ради суммы. */
+  reveal?: boolean;
   /**
    * Есть только у сохранённого проекта — счета вешать не на что, пока его нет.
    * Блоки оплаты строятся по нему, а не по значениям формы: выбранный, но не
@@ -657,12 +670,18 @@ function ProjectModal({
   const [values, setValues] = useState<ProjectFormValues>(initial);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const billingBlock = useRef<PaymentBlock>(null);
+  const stagesBlock = useRef<PaymentBlock>(null);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setError(null);
     setSaving(true);
     try {
+      // Блоки оплаты первыми: сумму пишет свой маршрут, а смена вида работы в этом же
+      // сохранении закрыла бы его. Набранное иначе молча пропало бы с окном.
+      await billingBlock.current?.flush();
+      await stagesBlock.current?.flush();
       await onSubmit(values);
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Не удалось сохранить");
@@ -712,10 +731,20 @@ function ProjectModal({
           <>
             {project.payment.mode === "monthly" && (
               <div className="mt-4">
-                <ProjectBilling project={project} onSaved={() => onChanged?.()} />
+                <ProjectBilling
+                  ref={billingBlock}
+                  project={project}
+                  reveal={reveal}
+                  onSaved={() => onChanged?.()}
+                />
               </div>
             )}
-            <ProjectStages project={project} onChanged={() => onChanged?.()} />
+            <ProjectStages
+              ref={stagesBlock}
+              project={project}
+              reveal={reveal && project.payment.mode === "stages"}
+              onChanged={() => onChanged?.()}
+            />
             <div className="mt-4">
               {/* key: сохранённая сумма могла дойти до записей текущего месяца, а
                   валюта и режим читаются только при монтировании. */}
