@@ -6,14 +6,15 @@ import { requireTeam } from "../../auth/guard.js";
 import { prisma } from "../../db.js";
 import { sumByCurrency } from "../currency.js";
 import { invalidInput } from "../http.js";
-import { invoiceBody } from "./dto.js";
+import { listBills } from "./bills.js";
+import { billingMode, invoiceBody } from "./dto.js";
 
 /**
  * Счета и акты по проекту.
  *
- * CRM не выставляет документы — она помнит, за какой месяц что выставлено и
- * оплачено. Болит не рисование счёта, а «за апрель забыли», и закрывает это
- * список периодов плюс напоминание в утренней сводке.
+ * CRM не рисует документы — она помнит, за какой месяц что выставлено и оплачено.
+ * Болит не рисование счёта, а «за апрель забыли». У помесячных проектов записи
+ * заводит планировщик (`monthly-documents.ts`), остальные заводятся здесь руками.
  */
 
 const projectParams = z.object({ id: z.string().uuid() });
@@ -47,9 +48,29 @@ async function projectExists(id: string): Promise<boolean> {
   return (await prisma.project.count({ where: { id, deletedAt: null } })) > 0;
 }
 
+/**
+ * Счёт, заведённый на этап по привычке, встал бы в «К оплате» рядом с самим
+ * этапом: итог задвоился бы, а порядок оплаты обошёлся бы через эти маршруты.
+ * Акты разрешены: они про документы, а не про деньги.
+ */
+async function paidByStages(projectId: string): Promise<boolean> {
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: { workType: true, billingMonthly: true },
+  });
+  return project !== null && billingMode(project) === "stages";
+}
+
+const STAGES_ONLY = "Договор оплачивается этапами";
+
 const listQuery = z.object({
-  /** unpaid — выставленные и неоплаченные; all — все подряд. */
-  scope: z.enum(["unpaid", "all"]).default("unpaid"),
+  /**
+   * due — к оплате, paid — оплачено, all — все, вместе с этапами договоров.
+   * unpaid — старый срез без этапов и в старой форме: его вызывает CRM до своего
+   * выката, и без него старый экран упадёт на `periodLabel(null)`. Удалить
+   * следующим релизом.
+   */
+  scope: z.enum(["due", "paid", "all", "unpaid"]).default("due"),
 });
 
 export async function invoiceRoutes(app: FastifyInstance): Promise<void> {
@@ -63,12 +84,18 @@ export async function invoiceRoutes(app: FastifyInstance): Promise<void> {
     const query = listQuery.safeParse(request.query);
     if (!query.success) return invalidInput(reply, query.error);
 
+    if (query.data.scope !== "unpaid") {
+      const bills = await listBills(query.data.scope);
+      return reply.send({
+        invoices: bills.slice(0, 500),
+        // По всему срезу, а не по обрезанному: иначе итог занизил бы долг. Не
+        // число, а по числу на валюту: курса у CRM нет.
+        totals: sumByCurrency(bills),
+      });
+    }
+
     const invoices = await prisma.invoice.findMany({
-      where: {
-        kind: "invoice",
-        project: { deletedAt: null },
-        ...(query.data.scope === "unpaid" ? { paidAt: null } : {}),
-      },
+      where: { kind: "invoice", project: { deletedAt: null }, paidAt: null },
       orderBy: [{ period: "asc" }],
       include: {
         project: { select: { id: true, title: true, client: { select: { name: true } } } },
@@ -120,6 +147,10 @@ export async function invoiceRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const input = parsed.data;
+    if (input.kind === "invoice" && (await paidByStages(params.data.id))) {
+      return reply.code(409).send({ error: STAGES_ONLY });
+    }
+
     // Уникальность (проект, вид, период) держит база. Ловим её здесь, чтобы
     // вместо «внутренней ошибки» человек увидел, что именно не так.
     const duplicate = await prisma.invoice.count({
@@ -163,6 +194,12 @@ export async function invoiceRoutes(app: FastifyInstance): Promise<void> {
       if (!existing) return reply.code(404).send({ error: "Запись не найдена" });
 
       const input = parsed.data;
+      // Тот же запрет с другого входа: акт, ставший счётом, обошёл бы его.
+      const becomesInvoice = input.kind === "invoice" && existing.kind !== "invoice";
+      if (becomesInvoice && (await paidByStages(params.data.id))) {
+        return reply.code(409).send({ error: STAGES_ONLY });
+      }
+
       const invoice = await prisma.invoice.update({
         where: { id: existing.id },
         data: {
