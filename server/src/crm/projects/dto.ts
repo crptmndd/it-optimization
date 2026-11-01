@@ -273,14 +273,17 @@ export function unbilled(
   const issued = new Set(
     invoices.filter((invoice) => invoice.kind === "invoice").map((it) => it.period),
   );
+  const to = currentPeriod(timeZone);
+  const started = currentPeriod(timeZone, project.startedAt ?? project.createdAt);
   // Старое сопровождение без галочки считается от своей первой записи, а не от
   // начала работ: месяцы до автодокументов в CRM не велись, зажигать их незачем.
+  // Записей нет — значит, проект стал подходящим уже после запуска за этот месяц, и
+  // пропуском считается текущий: иначе месяц терялся бы молча.
+  const first = [...issued].sort()[0];
   const from = project.billingMonthly
-    ? currentPeriod(timeZone, project.startedAt ?? project.createdAt)
-    : [...issued].sort()[0];
-  if (!from) return { period: null, count: 0 };
+    ? started
+    : (first ?? (started > to ? started : to));
 
-  const to = currentPeriod(timeZone);
   const missing = periodsBetween(from, to).filter((period) => !issued.has(period));
   return { period: missing[0] ?? null, count: missing.length };
 }
