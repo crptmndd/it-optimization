@@ -4,7 +4,13 @@ import { z } from "zod";
 import { audit } from "../../audit.js";
 import { requireTeam } from "../../auth/guard.js";
 import { prisma } from "../../db.js";
-import { optionalDate, optionalText, optionalUuid, requiredTitle } from "../fields.js";
+import {
+  MAX_AMOUNT_MINOR,
+  optionalDate,
+  optionalText,
+  optionalUuid,
+  requiredTitle,
+} from "../fields.js";
 import { invalidInput } from "../http.js";
 import { toCredentialDto as toDto } from "./dto.js";
 
@@ -40,7 +46,7 @@ const credentialFields = {
   renewsAt: optionalDate,
   // Рубли целыми, как у проекта: копеек в абонплате не бывает.
   // Минорные единицы: сто миллионов копеек — это миллион рублей.
-  amountMinor: z.union([z.null(), z.number().int().min(0).max(10_000_000_000)]),
+  amountMinor: z.union([z.null(), z.number().int().min(0).max(MAX_AMOUNT_MINOR)]),
   monthlyFee: z.boolean(),
   currency: z.enum(["rub", "usd"]),
   // 2000 своих символов плюс бывшее «Где пароль» (200) с подписью: миграция

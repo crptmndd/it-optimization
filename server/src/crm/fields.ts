@@ -19,6 +19,12 @@ export const optionalText = (max: number) =>
     .transform((value) => (value === "" ? null : value))
     .nullable();
 
+/**
+ * Верхний предел суммы в минорных единицах. Колонки сумм — INTEGER, больше в них
+ * не помещается: сумма сверх предела дала бы 500 вместо понятного 400.
+ */
+export const MAX_AMOUNT_MINOR = 2_147_483_647;
+
 /** `null` проверяется первым: z.coerce.date() превратил бы его в 1970 год. */
 export const optionalDate = z.union([z.null(), z.coerce.date()]);
 

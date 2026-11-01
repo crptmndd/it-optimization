@@ -1,7 +1,13 @@
 import type { Client, Currency, Lead, Project } from "@prisma/client";
 import { z } from "zod";
 import { DEVELOPERS } from "../developers.js";
-import { optionalDate, optionalText, optionalUuid, requiredTitle } from "../fields.js";
+import {
+  MAX_AMOUNT_MINOR,
+  optionalDate,
+  optionalText,
+  optionalUuid,
+  requiredTitle,
+} from "../fields.js";
 
 export const PROJECT_STATUSES = [
   "planned",
@@ -34,8 +40,8 @@ const projectFields = {
   contractDate: optionalDate,
 
   billingMonthly: z.boolean(),
-  /// Рубли целыми. Отрицательная сумма — почти наверняка опечатка.
-  monthlyAmountMinor: z.union([z.null(), z.number().int().min(0).max(10_000_000_000)]),
+  /// Минорные единицы. Отрицательная сумма — почти наверняка опечатка.
+  monthlyAmountMinor: z.union([z.null(), z.number().int().min(0).max(MAX_AMOUNT_MINOR)]),
   currency: z.enum(["rub", "usd"]),
 };
 
@@ -70,7 +76,7 @@ export const invoiceBody = z.object({
   /// ГГГГ-ММ. Регулярка, а не дата: это календарный месяц, а не момент.
   period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "Период вида 2026-08"),
   amountMinor: z
-    .union([z.null(), z.number().int().min(0).max(10_000_000_000)])
+    .union([z.null(), z.number().int().min(0).max(MAX_AMOUNT_MINOR)])
     .optional(),
   currency: z.enum(["rub", "usd"]).optional(),
   issuedAt: optionalDate.optional(),
@@ -91,6 +97,18 @@ export const listProjectsQuery = z.object({
     .transform((value) => value === "true"),
   search: z.string().trim().max(200).optional(),
 });
+
+/** Как платит проект и что с оплатой сейчас — для карточки, доски и списка. */
+export interface ProjectPayment {
+  mode: "stages" | "monthly" | "none";
+  stages: {
+    paid: number;
+    total: number;
+    next: { position: number; amountMinor: number | null; currency: Currency } | null;
+  } | null;
+  /** Счёт за текущий месяц: missing — записи нет. */
+  monthly: { period: string; status: "paid" | "unpaid" | "missing" } | null;
+}
 
 export interface ProjectDto {
   id: string;
@@ -121,6 +139,8 @@ export interface ProjectDto {
    */
   unbilledPeriod: string | null;
   unbilledCount: number;
+  archivedAt: string | null;
+  payment: ProjectPayment;
   /** Есть ли уже кейс на сайте — из этого растёт кнопка публикации. */
   caseId: string | null;
   openTaskCount: number;
@@ -133,8 +153,58 @@ type ProjectWithRelations = Project & {
   client: Pick<Client, "id" | "name"> | null;
   lead: Pick<Lead, "id" | "contact" | "name"> | null;
   tasks?: { status: string }[];
-  invoices?: { kind: string; period: string }[];
+  invoices?: { kind: string; period: string; paidAt?: Date | null }[];
+  stages?: {
+    position: number;
+    amountMinor: number | null;
+    currency: Currency;
+    paidAt: Date | null;
+  }[];
 };
+
+/**
+ * Единственное правило «как платит проект». На нём стоят карточка, видимость
+ * этапов в «Счетах», автодокументы, `unbilled()` и проверки оплаты этапов.
+ *
+ * Галочка сильнее вида работы намеренно. Старая форма позволяла поставить её на
+ * договоре, и у таких проектов в базе уже идут помесячные счета, а этапы из
+ * миграции пусты. Будь первым договор, автодокументы по ним молча прекратились
+ * бы; работай оба способа сразу, один проект показывал бы и счёт за месяц, и
+ * «Этап 1 из 3» — то есть один долг дважды.
+ */
+export function billingMode(project: {
+  workType: string | null;
+  billingMonthly: boolean;
+}): ProjectPayment["mode"] {
+  if (project.billingMonthly || project.workType === "support") return "monthly";
+  return project.workType === "contract" ? "stages" : "none";
+}
+
+/**
+ * Значение признака «счёт каждый месяц» после записи.
+ *
+ * Признак меняется только в момент смены вида работы. Форма присылает и вид
+ * работы, и галочку при каждом сохранении, поэтому условие «запрос трогает поле»
+ * здесь не работает: обычная правка названия у старого сопровождения включила бы
+ * признак, и проект, начатый в январе 2025-го, разом получил бы два десятка
+ * месяцев в «Не выставлено».
+ *
+ * Переход на договор снимает признак: договор платится этапами, и без этого
+ * возврат с сопровождения дал бы и этапы, и помесячные счета. Старый договор с
+ * галочкой при обычном сохранении её сохраняет: режим меняет только человек.
+ */
+export function nextBillingMonthly(
+  input: { workType?: string | null; billingMonthly?: boolean },
+  existing?: { workType: string | null; billingMonthly: boolean },
+): boolean {
+  const workType =
+    input.workType !== undefined ? input.workType : (existing?.workType ?? null);
+  const changed = workType !== (existing?.workType ?? null);
+  const flag = input.billingMonthly ?? existing?.billingMonthly ?? false;
+  if (workType === "support") return changed || existing?.billingMonthly || flag;
+  if (workType === "contract" && changed) return false;
+  return flag;
+}
 
 /** Месяц как ГГГГ-ММ в часовом поясе команды. */
 export function currentPeriod(timeZone: string, now = new Date()): string {
@@ -174,20 +244,70 @@ function periodsBetween(from: string, to: string): string[] {
  * месяца, выглядел ровно как выставленный вчера. Считаем от начала работ.
  */
 export function unbilled(
-  project: { billingMonthly: boolean; startedAt: Date | null; createdAt: Date },
+  project: {
+    billingMonthly: boolean;
+    workType: string | null;
+    archivedAt: Date | null;
+    startedAt: Date | null;
+    createdAt: Date;
+  },
   invoices: { kind: string; period: string }[],
   timeZone: string,
 ): { period: string | null; count: number } {
-  if (!project.billingMonthly) return { period: null, count: 0 };
+  if (project.archivedAt || billingMode(project) !== "monthly") {
+    return { period: null, count: 0 };
+  }
 
-  const from = currentPeriod(timeZone, project.startedAt ?? project.createdAt);
-  const to = currentPeriod(timeZone);
   const issued = new Set(
     invoices.filter((invoice) => invoice.kind === "invoice").map((it) => it.period),
   );
+  // Старое сопровождение без галочки считается от своей первой записи, а не от
+  // начала работ: месяцы до автодокументов в CRM не велись, зажигать их незачем.
+  const from = project.billingMonthly
+    ? currentPeriod(timeZone, project.startedAt ?? project.createdAt)
+    : [...issued].sort()[0];
+  if (!from) return { period: null, count: 0 };
 
+  const to = currentPeriod(timeZone);
   const missing = periodsBetween(from, to).filter((period) => !issued.has(period));
   return { period: missing[0] ?? null, count: missing.length };
+}
+
+function projectPayment(item: ProjectWithRelations, timeZone: string): ProjectPayment {
+  const mode = billingMode(item);
+
+  if (mode === "stages") {
+    const stages = item.stages ?? [];
+    const next = stages.find((stage) => !stage.paidAt);
+    return {
+      mode,
+      stages: {
+        paid: stages.filter((stage) => stage.paidAt).length,
+        total: stages.length,
+        next: next
+          ? {
+              position: next.position,
+              amountMinor: next.amountMinor,
+              currency: next.currency,
+            }
+          : null,
+      },
+      monthly: null,
+    };
+  }
+
+  // У архивного проекта месяц не считается: иначе на его карточке висело бы «нет
+  // счёта», хотя `unbilled()` такого проекта уже не видит.
+  if (mode === "monthly" && !item.archivedAt) {
+    const period = currentPeriod(timeZone);
+    const invoice = item.invoices?.find(
+      (it) => it.kind === "invoice" && it.period === period,
+    );
+    const status = !invoice ? "missing" : invoice.paidAt ? "paid" : "unpaid";
+    return { mode, stages: null, monthly: { period, status } };
+  }
+
+  return { mode, stages: null, monthly: null };
 }
 
 export function toProjectDto(item: ProjectWithRelations, timeZone: string): ProjectDto {
@@ -217,6 +337,8 @@ export function toProjectDto(item: ProjectWithRelations, timeZone: string): Proj
     currency: item.currency,
     unbilledPeriod: missing.period,
     unbilledCount: missing.count,
+    archivedAt: item.archivedAt?.toISOString() ?? null,
+    payment: projectPayment(item, timeZone),
     caseId: item.caseId,
     openTaskCount: tasks.filter(
       (task) => task.status !== "done" && task.status !== "cancelled",
@@ -231,7 +353,11 @@ export const PROJECT_RELATIONS = {
   client: { select: { id: true, name: true } },
   lead: { select: { id: true, contact: true, name: true } },
   tasks: { where: { deletedAt: null }, select: { status: true } },
-  // Только вид и период: суммы для списка не нужны, а строк на проект за год
-  // набегает две дюжины.
-  invoices: { select: { kind: true, period: true } },
+  // Без сумм: для списка они не нужны, а строк на проект за год набегает две
+  // дюжины. Отметка оплаты нужна состоянию оплаты за текущий месяц.
+  invoices: { select: { kind: true, period: true, paidAt: true } },
+  stages: {
+    orderBy: { position: "asc" },
+    select: { position: true, amountMinor: true, currency: true, paidAt: true },
+  },
 } as const;

@@ -4,7 +4,7 @@ import { prisma } from "../db.js";
 import { env } from "../env.js";
 import { startOfToday, startOfTomorrow } from "../notify/zone.js";
 import { OPEN_LEAD_STATUSES } from "./leads/dto.js";
-import { OPEN_PROJECT_STATUSES, unbilled } from "./projects/dto.js";
+import { OPEN_PROJECT_STATUSES, PROJECT_RELATIONS, unbilled } from "./projects/dto.js";
 import { OPEN_TASK_STATUSES } from "./tasks/dto.js";
 
 /**
@@ -103,13 +103,6 @@ const TASK_INCLUDE = {
   project: { select: { id: true, title: true } },
 } as const;
 
-const PROJECT_INCLUDE = {
-  client: { select: { id: true, name: true } },
-  lead: { select: { id: true, contact: true, name: true } },
-  tasks: { where: { deletedAt: null }, select: { status: true } },
-  invoices: { select: { kind: true, period: true } },
-} as const;
-
 export async function collectToday(): Promise<TodaySnapshot> {
   const from = startOfToday(env.TIMEZONE);
   const until = startOfTomorrow(env.TIMEZONE);
@@ -173,7 +166,7 @@ export async function collectToday(): Promise<TodaySnapshot> {
     prisma.project.findMany({
       where: { deletedAt: null, status: openProjects, deadline: { lt: until } },
       orderBy: { deadline: "asc" },
-      include: PROJECT_INCLUDE,
+      include: PROJECT_RELATIONS,
     }),
     prisma.credential.findMany({
       include: { project: { select: { id: true, title: true } } },
@@ -182,11 +175,15 @@ export async function collectToday(): Promise<TodaySnapshot> {
     }),
     // Пробелы считаются в коде, а не запросом: «нет счёта за любой месяц с
     // начала работ» через SQL выражается плохо, а помесячных проектов у
-    // команды десятки, не тысячи.
+    // команды десятки, не тысячи. Условие то же, что billingMode === "monthly".
     prisma.project.findMany({
-      where: { deletedAt: null, status: openProjects, billingMonthly: true },
+      where: {
+        deletedAt: null,
+        status: openProjects,
+        OR: [{ billingMonthly: true }, { workType: "support" }],
+      },
       orderBy: { title: "asc" },
-      include: PROJECT_INCLUDE,
+      include: PROJECT_RELATIONS,
     }),
   ]);
 
