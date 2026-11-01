@@ -285,7 +285,10 @@ export async function reorderProjects(
 export interface ProjectFilters {
   status?: ProjectStatus;
   scope?: "open" | "closed" | "all";
+  /** Идентификатор клиента либо `none` — проекты без клиента. */
   clientId?: string;
+  /** Без значения архива в выдаче нет: это поведение сервера по умолчанию. */
+  archived?: "exclude" | "only" | "include";
   developer?: string;
   overdue?: boolean;
   search?: string;
@@ -296,6 +299,7 @@ function toQuery(filters: ProjectFilters): string {
   if (filters.status) params.set("status", filters.status);
   if (filters.scope) params.set("scope", filters.scope);
   if (filters.clientId) params.set("clientId", filters.clientId);
+  if (filters.archived) params.set("archived", filters.archived);
   if (filters.developer) params.set("developer", filters.developer);
   if (filters.overdue) params.set("overdue", "true");
   if (filters.search) params.set("search", filters.search);
@@ -323,6 +327,17 @@ export async function createProject(input: ProjectInput): Promise<Project> {
 
 export async function updateProject(id: string, input: ProjectInput): Promise<Project> {
   const { project } = await api.patch<{ project: Project }>(`/projects/${id}`, input);
+  return project;
+}
+
+/** Архив обратим и статус не меняет: это про то, виден ли проект, а не про работу. */
+export async function archiveProject(id: string): Promise<Project> {
+  const { project } = await api.post<{ project: Project }>(`/projects/${id}/archive`);
+  return project;
+}
+
+export async function unarchiveProject(id: string): Promise<Project> {
+  const { project } = await api.post<{ project: Project }>(`/projects/${id}/unarchive`);
   return project;
 }
 

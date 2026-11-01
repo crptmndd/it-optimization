@@ -91,6 +91,15 @@ export function periodLabel(period: string): string {
     .replace(" г.", "");
 }
 
+/** «2026-08» → «август»: год в короткой подписи к текущему месяцу только мешает. */
+export function monthLabel(period: string): string {
+  const [year, month] = period.split("-").map(Number);
+  if (!year || !month) return period;
+  return new Intl.DateTimeFormat("ru-RU", { month: "long" }).format(
+    new Date(year, month - 1, 1),
+  );
+}
+
 /**
  * Следующий срок продления после оплаты — для кнопки «Оплатил» в доступах.
  *

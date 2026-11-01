@@ -99,11 +99,14 @@ const LEAVE_MS = 160;
 
 export function Modal({
   title,
+  badge,
   onClose,
   children,
   wide,
 }: {
   title: string;
+  /** Метка рядом с заголовком. Отдельно: `title` идёт ещё и в aria-label окна. */
+  badge?: ReactNode;
   onClose: () => void;
   children: ReactNode;
   /** Шире обычного — для окон с несколькими списками рядом. */
@@ -157,7 +160,10 @@ export function Modal({
         )}
       >
         <div className="mb-4 flex items-start justify-between gap-4">
-          <h2 className="text-lg font-bold tracking-tight">{title}</h2>
+          <h2 className="flex flex-wrap items-center gap-2 text-lg font-bold tracking-tight">
+            {title}
+            {badge}
+          </h2>
           <button
             type="button"
             onClick={leave}

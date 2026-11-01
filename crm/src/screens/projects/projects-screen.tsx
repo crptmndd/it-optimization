@@ -5,16 +5,25 @@ import {
   FileText,
   Filter,
   Plus,
+  Receipt,
   Server,
   Wallet,
 } from "lucide-react";
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { ApiError } from "@/api/client";
 import { FilterToolbar } from "@/components/filter-toolbar";
 import { useFocusFromLink } from "@/lib/focus-card";
 import { useOpenFromSearch } from "@/lib/open-from-search";
 import { listClients, type Client } from "@/api/clients";
 import {
+  archiveProject,
   CLOSED_PROJECT_STATUSES,
   createProject,
   deleteProject,
@@ -24,6 +33,7 @@ import {
   PROJECT_STATUSES,
   PROJECT_STATUS_LABELS,
   reorderProjects,
+  unarchiveProject,
   updateProject,
   workTypeLabel,
   type Project,
@@ -56,15 +66,21 @@ import {
 import { ProjectBilling } from "./project-billing";
 import { ProjectInvoices } from "./project-invoices";
 import { ProjectStages } from "./project-stages";
+import { PAYMENT_TEXT_CLASS, paymentSummary } from "./payment-summary";
 
 const TABS = [
   { key: "all", label: "Все", filters: { scope: "all" } },
   { key: "open", label: "В работе", filters: { scope: "open" } },
   { key: "overdue", label: "Просрочено", filters: { overdue: true } },
   { key: "closed", label: "Закрытые", filters: { scope: "closed" } },
+  { key: "archive", label: "Архив", filters: { archived: "only" } },
 ] as const satisfies readonly { key: string; label: string; filters: ProjectFilters }[];
 
 type TabKey = (typeof TABS)[number]["key"];
+
+/** Срез по клиенту: значения, кроме идентификаторов клиентов. */
+const ALL_CLIENTS = "all";
+const NO_CLIENT = "none";
 
 const STATUS_TONE: Record<string, "neutral" | "accent" | "warning" | "success"> = {
   planned: "neutral",
@@ -116,10 +132,13 @@ function Meta({
   icon: Icon,
   children,
   muted,
+  wrap,
 }: {
   icon: typeof Building2;
   children: ReactNode;
   muted?: boolean;
+  /** Переносить, а не обрезать: когда важен именно конец строки. */
+  wrap?: boolean;
 }) {
   return (
     <span
@@ -129,7 +148,7 @@ function Meta({
       )}
     >
       <Icon size={12} strokeWidth={2} className="shrink-0" />
-      <span className="truncate">{children}</span>
+      <span className={wrap ? undefined : "truncate"}>{children}</span>
     </span>
   );
 }
@@ -140,6 +159,7 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void
     project.deadline && !closed ? describeDeadline(project.deadline) : null;
   const tone = projectTone(project);
   const doneTasks = project.taskCount - project.openTaskCount;
+  const payment = paymentSummary(project);
 
   return (
     <button
@@ -191,6 +211,12 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void
             {money(project.monthlyAmountMinor, project.currency)} в месяц
           </Meta>
         )}
+        {payment && (
+          // Колонка доски узкая, а сумма следующего этапа стоит в конце подписи.
+          <Meta icon={Receipt} wrap>
+            <span className={PAYMENT_TEXT_CLASS[payment.tone]}>{payment.label}</span>
+          </Meta>
+        )}
       </span>
 
       {/* Полоса выполнения вместо «задач 3/7»: доля закрытого читается мгновенно,
@@ -229,6 +255,7 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void
 export function ProjectsScreen() {
   const [view, setView] = useState<"list" | "board">("list");
   const [tab, setTab] = useState<TabKey>("all");
+  const [clientFilter, setClientFilter] = useState(ALL_CLIENTS);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [projects, setProjects] = useState<Project[] | null>(null);
@@ -238,6 +265,12 @@ export function ProjectsScreen() {
   /** Колонка, из которой нажали «+» — проект заводится сразу в ней. */
   const [prefillStatus, setPrefillStatus] = useState<ProjectStatus | null>(null);
   const [editing, setEditing] = useState<Project | null>(null);
+  /** Фильтры переключают быстро: ответ за прошлый срез не должен лечь поверх нового. */
+  const request = useRef(0);
+
+  // На доске архива нет: у него нет колонок и порядка, поэтому вид принудительный,
+  // а выбранный человеком вид возвращается вместе с другим срезом.
+  const shownView = tab === "archive" ? "list" : view;
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(search.trim()), 300);
@@ -247,21 +280,38 @@ export function ProjectsScreen() {
   const load = useCallback(() => {
     const active = TABS.find((item) => item.key === tab) ?? TABS[0];
     // Доске нужны все колонки разом, поэтому срез вкладки на ней не применяется.
+    // Клиент — другое дело: «доска одного клиента» имеет смысл.
     const filters: ProjectFilters =
-      view === "board" ? { scope: "all" } : { ...active.filters };
+      shownView === "board" ? { scope: "all" } : { ...active.filters };
+    if (clientFilter !== ALL_CLIENTS) filters.clientId = clientFilter;
     if (debouncedSearch) filters.search = debouncedSearch;
 
     setError(null);
+    const current = (request.current += 1);
     listProjects(filters)
-      .then(setProjects)
+      .then((result) => {
+        if (current === request.current) setProjects(result);
+      })
       .catch((cause: unknown) => {
+        if (current !== request.current) return;
         setError(cause instanceof ApiError ? cause.message : "Не удалось загрузить");
         setProjects([]);
       });
-  }, [tab, view, debouncedSearch]);
+  }, [tab, shownView, clientFilter, debouncedSearch]);
 
-  useEffect(load, [load]); // Переход из глобального поиска: ?open=<id> открывает нужную карточку.
-  useOpenFromSearch(projects, setEditing);
+  useEffect(load, [load]);
+
+  // Архивный проект в загруженный список не входит, а из поиска, «Счетов» и
+  // карточки клиента открываться обязан.
+  const fetchProject = useCallback(
+    (id: string) =>
+      getProject(id)
+        .then(({ project }) => project)
+        .catch(() => null),
+    [],
+  );
+  // Переход из глобального поиска: ?open=<id> открывает нужную карточку.
+  useOpenFromSearch(projects, setEditing, fetchProject);
 
   /**
    * Блок оплаты сохраняется сам, без общей кнопки, и окно при этом остаётся
@@ -333,10 +383,14 @@ export function ProjectsScreen() {
       {/* Та же панель, что в задачах: одинаковый по смыслу фильтр не должен
           выглядеть по-разному в соседних разделах. */}
       <FilterToolbar
-        activeCount={tab === "all" ? 0 : 1}
+        activeCount={(tab === "all" ? 0 : 1) + (clientFilter === ALL_CLIENTS ? 0 : 1)}
         view={{
-          value: view,
-          onChange: (value) => setView(value as "list" | "board"),
+          value: shownView,
+          onChange: (value) => {
+            setView(value as "list" | "board");
+            // Иначе нажатие на «Доска» ничего бы не сделало: архив держит список.
+            if (value === "board" && tab === "archive") setTab("all");
+          },
           ariaLabel: "Вид списка проектов",
           options: [
             { value: "list", label: "Список" },
@@ -354,6 +408,23 @@ export function ProjectsScreen() {
                 icon={<Filter size={14} strokeWidth={2} />}
                 className={full ? "w-full" : "w-40"}
                 options={TABS.map((item) => ({ value: item.key, label: item.label }))}
+              />
+            ),
+          },
+          {
+            label: "Клиент",
+            render: (full) => (
+              <Select
+                value={clientFilter}
+                onChange={setClientFilter}
+                ariaLabel="Фильтр по клиенту"
+                icon={<Building2 size={14} strokeWidth={2} />}
+                className={full ? "w-full" : "w-52"}
+                options={[
+                  { value: ALL_CLIENTS, label: "Все клиенты" },
+                  { value: NO_CLIENT, label: "Без клиента" },
+                  ...clients.map((client) => ({ value: client.id, label: client.name })),
+                ]}
               />
             ),
           },
@@ -378,11 +449,8 @@ export function ProjectsScreen() {
         {projects === null ? (
           <p className="text-muted-foreground text-sm">Загружаем…</p>
         ) : projects.length === 0 ? (
-          <EmptyState
-            title="Пока пусто"
-            note="Проект — это работа, у которой есть начало и конец. Заведите первый."
-          />
-        ) : view === "board" ? (
+          <EmptyState {...emptyState(tab, clientFilter, debouncedSearch)} />
+        ) : shownView === "board" ? (
           <Board
             onAdd={(columnKey) => {
               setPrefillStatus(columnKey as ProjectStatus);
@@ -440,6 +508,7 @@ export function ProjectsScreen() {
       {editing && (
         <ProjectModal
           title="Проект"
+          badge={editing.archivedAt ? <Badge>архив</Badge> : undefined}
           clients={clients}
           project={editing}
           initial={projectToValues(editing)}
@@ -455,6 +524,11 @@ export function ProjectsScreen() {
             setEditing(opened ? project : null);
             load();
           }}
+          onArchive={async () => {
+            await (editing.archivedAt ? unarchiveProject : archiveProject)(editing.id);
+            setEditing(null);
+            load();
+          }}
           onDelete={async () => {
             await deleteProject(editing.id);
             setEditing(null);
@@ -466,10 +540,35 @@ export function ProjectsScreen() {
   );
 }
 
+/** Пустой список при включённом фильтре — не «заведите первый», а «тут ничего нет». */
+function emptyState(
+  tab: TabKey,
+  clientFilter: string,
+  search: string,
+): { title: string; note: string } {
+  if (tab === "archive") {
+    return {
+      title: "В архиве пусто",
+      note: "Сюда уходят проекты, которые больше не нужны на глазах. Вернуть можно в любой момент.",
+    };
+  }
+  if (tab !== "all" || clientFilter !== ALL_CLIENTS || search) {
+    return { title: "Ничего не нашлось", note: "Попробуйте другой срез или клиента." };
+  }
+  return {
+    title: "Пока пусто",
+    note: "Проект — это работа, у которой есть начало и конец. Заведите первый.",
+  };
+}
+
 function ProjectRow({ project, onOpen }: { project: Project; onOpen: () => void }) {
   const closed = (CLOSED_PROJECT_STATUSES as readonly string[]).includes(project.status);
+  // Срок убранного проекта никого не торопит, поэтому в архиве красной плашки нет.
   const deadline =
-    project.deadline && !closed ? describeDeadline(project.deadline) : null;
+    project.deadline && !closed && !project.archivedAt
+      ? describeDeadline(project.deadline)
+      : null;
+  const payment = paymentSummary(project);
 
   return (
     <li>
@@ -495,6 +594,16 @@ function ProjectRow({ project, onOpen }: { project: Project; onOpen: () => void 
               .filter(Boolean)
               .join(" · ")}
           </span>
+          {payment && (
+            <span
+              className={cn(
+                "mt-0.5 block truncate text-xs",
+                PAYMENT_TEXT_CLASS[payment.tone],
+              )}
+            >
+              {payment.label}
+            </span>
+          )}
         </div>
 
         {project.unbilledPeriod && (
@@ -517,15 +626,18 @@ function ProjectRow({ project, onOpen }: { project: Project; onOpen: () => void 
 
 function ProjectModal({
   title,
+  badge,
   initial,
   clients,
   project,
   onClose,
   onChanged,
   onSubmit,
+  onArchive,
   onDelete,
 }: {
   title: string;
+  badge?: ReactNode;
   initial: ProjectFormValues;
   clients: Client[];
   /**
@@ -538,6 +650,8 @@ function ProjectModal({
   /** Блок карточки сохранил своё без общей кнопки. */
   onChanged?: () => void;
   onSubmit: (values: ProjectFormValues) => Promise<void>;
+  /** Убрать в архив либо вернуть оттуда — смотря где проект сейчас. */
+  onArchive?: () => Promise<void>;
   onDelete?: () => Promise<void>;
 }) {
   const [values, setValues] = useState<ProjectFormValues>(initial);
@@ -558,6 +672,19 @@ function ProjectModal({
     }
   }
 
+  // Без подтверждения, в отличие от удаления: архив обратим одной кнопкой.
+  async function handleArchive() {
+    if (!onArchive) return;
+    setError(null);
+    setSaving(true);
+    try {
+      await onArchive();
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Не удалось сохранить");
+      setSaving(false);
+    }
+  }
+
   async function handleDelete() {
     if (!onDelete) return;
     if (!confirm("Удалить проект? Его задачи тоже скроются.")) return;
@@ -572,7 +699,7 @@ function ProjectModal({
   }
 
   return (
-    <Modal title={title} onClose={onClose}>
+    <Modal title={title} badge={badge} onClose={onClose}>
       <form onSubmit={handleSubmit}>
         <ProjectFields values={values} onChange={setValues} clients={clients} />
 
@@ -611,18 +738,30 @@ function ProjectModal({
           </div>
         )}
 
-        <div className="mt-5 flex items-center gap-2">
+        {/* flex-wrap: четыре кнопки на телефоне в один ряд не встают. */}
+        <div className="mt-5 flex flex-wrap items-center gap-2">
           <Button type="submit" disabled={saving}>
             {saving ? "Сохраняем…" : "Сохранить"}
           </Button>
           <Button type="button" variant="ghost" onClick={onClose}>
             Отмена
           </Button>
+          {onArchive && (
+            <Button
+              type="button"
+              variant="ghost"
+              className="ml-auto"
+              onClick={() => void handleArchive()}
+              disabled={saving}
+            >
+              {project?.archivedAt ? "Вернуть" : "В архив"}
+            </Button>
+          )}
           {onDelete && (
             <Button
               type="button"
               variant="danger"
-              className="ml-auto"
+              className={onArchive ? undefined : "ml-auto"}
               onClick={() => void handleDelete()}
               disabled={saving}
             >
