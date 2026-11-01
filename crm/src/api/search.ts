@@ -5,7 +5,7 @@ import { api } from "./client";
  * контакт или обрывок заметки.
  */
 export interface SearchHit {
-  entity: "leads" | "clients" | "projects" | "tasks" | "credentials";
+  entity: "clients" | "projects" | "tasks" | "credentials";
   label: string;
   id: string;
   title: string;

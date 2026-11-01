@@ -26,9 +26,10 @@ function Routed() {
 
   if (state.status === "anonymous") return <LoginScreen />;
 
-  // Маркетолог ведёт только лиды. Маршруты остальных разделов ему просто не
-  // существуют — при попытке зайти по адресу он окажется на лидах. Настоящий
-  // запрет при этом стоит на сервере: сюда он бы всё равно упёрся в 403.
+  // Маркетолог ведёт только лиды, и только ему они и нужны: команда раздела не
+  // видит. Маршруты остальных разделов ему просто не существуют — при попытке
+  // зайти по адресу он окажется на лидах. Настоящий запрет при этом стоит на
+  // сервере: сюда он бы всё равно упёрся в 403.
   if (state.user.role === "marketing") {
     return (
       <Routes>
@@ -45,7 +46,6 @@ function Routed() {
     <Routes>
       <Route element={<Shell />}>
         <Route index element={<TodayScreen />} />
-        <Route path="leads" element={<LeadsScreen />} />
         <Route path="projects" element={<ProjectsScreen />} />
         <Route path="tasks" element={<TasksScreen />} />
         <Route path="clients" element={<ClientsScreen />} />

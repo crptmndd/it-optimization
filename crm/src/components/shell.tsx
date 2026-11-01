@@ -26,23 +26,76 @@ import { cn } from "@/lib/cn";
  * `leadsOnly` — пункты, доступные маркетологу. Остальные он не увидит, но
  * настоящий запрет стоит на сервере: скрытая кнопка защищает от случайного
  * клика, а не от человека, который наберёт адрес руками.
+ *
+ * `marketingOnly` — только ему: команда лидами больше не занимается, поэтому
+ * пункт остаётся в списке (из него строится заголовок раздела), но ей не виден.
  */
 const NAV = [
-  { to: "/", label: "Сегодня", icon: Sun, end: true, leadsOnly: false },
-  { to: "/leads", label: "Лиды", icon: Inbox, end: false, leadsOnly: true },
-  { to: "/projects", label: "Проекты", icon: Briefcase, end: false, leadsOnly: false },
-  { to: "/tasks", label: "Задачи", icon: CheckSquare, end: false, leadsOnly: false },
-  { to: "/clients", label: "Клиенты", icon: Building2, end: false, leadsOnly: false },
-  { to: "/invoices", label: "Счета", icon: Receipt, end: false, leadsOnly: false },
+  {
+    to: "/",
+    label: "Сегодня",
+    icon: Sun,
+    end: true,
+    leadsOnly: false,
+    marketingOnly: false,
+  },
+  {
+    to: "/leads",
+    label: "Лиды",
+    icon: Inbox,
+    end: false,
+    leadsOnly: true,
+    marketingOnly: true,
+  },
+  {
+    to: "/projects",
+    label: "Проекты",
+    icon: Briefcase,
+    end: false,
+    leadsOnly: false,
+    marketingOnly: false,
+  },
+  {
+    to: "/tasks",
+    label: "Задачи",
+    icon: CheckSquare,
+    end: false,
+    leadsOnly: false,
+    marketingOnly: false,
+  },
+  {
+    to: "/clients",
+    label: "Клиенты",
+    icon: Building2,
+    end: false,
+    leadsOnly: false,
+    marketingOnly: false,
+  },
+  {
+    to: "/invoices",
+    label: "Счета",
+    icon: Receipt,
+    end: false,
+    leadsOnly: false,
+    marketingOnly: false,
+  },
   {
     to: "/credentials",
     label: "Доступы",
     icon: KeyRound,
     end: false,
     leadsOnly: false,
+    marketingOnly: false,
   },
   // Корзина последняя: заходят туда редко и по конкретному поводу.
-  { to: "/trash", label: "Корзина", icon: Trash2, end: false, leadsOnly: false },
+  {
+    to: "/trash",
+    label: "Корзина",
+    icon: Trash2,
+    end: false,
+    leadsOnly: false,
+    marketingOnly: false,
+  },
 ] as const;
 
 /**
@@ -78,7 +131,7 @@ const activeClass = "bg-accent-soft text-foreground";
 function NavItems({ leadsOnly }: { leadsOnly: boolean }) {
   return (
     <>
-      {NAV.filter((item) => !leadsOnly || item.leadsOnly).map(
+      {NAV.filter((item) => (leadsOnly ? item.leadsOnly : !item.marketingOnly)).map(
         ({ to, label, icon: Icon, end }) => (
           <NavLink
             key={to}
