@@ -115,6 +115,18 @@ export function periodTitle(period: string): string {
     .replace(/\s*г\.$/, "");
 }
 
+/**
+ * «12 нояб.» — день в поясе команды. Срок задачи хранится моментом, конец дня по
+ * часам браузера, и в UTC он уже бывает следующими сутками.
+ */
+export function formatDay(date: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "numeric",
+    month: "short",
+    timeZone,
+  }).format(date);
+}
+
 /** «3 дня», «1 день» — русские окончания, без которых текст выглядит машинным. */
 export function pluralDays(count: number): string {
   const mod100 = count % 100;

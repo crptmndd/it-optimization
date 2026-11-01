@@ -4,6 +4,7 @@ import { z } from "zod";
 import { audit } from "../../audit.js";
 import { requireTeam } from "../../auth/guard.js";
 import { prisma } from "../../db.js";
+import { notifyTaskInBackground } from "../../notify/notifications.js";
 import { invalidInput } from "../http.js";
 import { briefNotes, listNotes, noteRoutesFor } from "../notes.js";
 import {
@@ -19,6 +20,10 @@ import {
 
 const idParams = z.object({ id: z.string().uuid() });
 
+function isClosed(status: string): boolean {
+  return (CLOSED_TASK_STATUSES as readonly string[]).includes(status);
+}
+
 /**
  * Дата выполнения ставится и снимается автоматически. Руками её никто не
  * проставит, а без неё нельзя ответить на вопрос «сколько задач закрыли за
@@ -29,8 +34,7 @@ function completedAtFor(
   current: Date | null,
 ): Date | null | undefined {
   if (status === undefined) return undefined;
-  const closed = (CLOSED_TASK_STATUSES as readonly string[]).includes(status);
-  if (closed) return current ?? new Date();
+  if (isClosed(status)) return current ?? new Date();
   return null;
 }
 
@@ -126,6 +130,12 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
     });
 
     await audit(request, { entity: "tasks", entityId: task.id, action: "create" });
+
+    // Заведённая сразу закрытой задача — запись задним числом, работы в ней нет.
+    if (!isClosed(task.status)) {
+      notifyTaskInBackground(task, task.developers, "created", request.log);
+    }
+
     return reply.code(201).send({ task: toTaskDto(task) });
   });
 
@@ -186,6 +196,14 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
     });
 
     await audit(request, { entity: "tasks", entityId: task.id, action: "update" });
+
+    // Тэгаем только новых: форма присылает весь список при каждом сохранении, и
+    // сравнение с прежним не даёт будить всех исполнителей из-за правки названия.
+    const added = task.developers.filter((name) => !existing.developers.includes(name));
+    if (added.length > 0 && !isClosed(task.status)) {
+      notifyTaskInBackground(task, added, "assigned", request.log);
+    }
+
     return reply.send({ task: toTaskDto(task) });
   });
 
