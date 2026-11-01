@@ -489,6 +489,7 @@ export function TasksScreen() {
         <TaskModal
           title="Задача"
           projects={projects}
+          current={editing.project}
           taskId={editing.id}
           initial={taskToValues(editing)}
           onClose={() => setEditing(null)}
@@ -573,6 +574,7 @@ function TaskModal({
   title,
   initial,
   projects,
+  current,
   taskId,
   onClose,
   onSubmit,
@@ -581,6 +583,7 @@ function TaskModal({
   title: string;
   initial: TaskFormValues;
   projects: Project[];
+  current?: { id: string; title: string } | null;
   /** Есть только у сохранённой задачи — заметки вешать не на что, пока её нет. */
   taskId?: string;
   onClose: () => void;
@@ -619,7 +622,12 @@ function TaskModal({
   return (
     <Modal title={title} onClose={onClose}>
       <form onSubmit={handleSubmit}>
-        <TaskFields values={values} onChange={setValues} projects={projects} />
+        <TaskFields
+          values={values}
+          onChange={setValues}
+          projects={projects}
+          current={current}
+        />
 
         {taskId && (
           <div className="mt-4">

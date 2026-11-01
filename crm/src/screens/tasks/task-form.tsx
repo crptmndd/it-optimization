@@ -63,14 +63,25 @@ export function TaskFields({
   values,
   onChange,
   projects,
+  current,
 }: {
   values: TaskFormValues;
   onChange: (values: TaskFormValues) => void;
   projects: Project[];
+  /**
+   * Проект самой задачи. В выборе только открытые, а задача может стоять на закрытом
+   * или архивном: без него поле показало бы прочерк, будто привязка потеряна.
+   */
+  current?: { id: string; title: string } | null;
 }) {
   function set<K extends keyof TaskFormValues>(key: K, value: TaskFormValues[K]) {
     onChange({ ...values, [key]: value });
   }
+
+  const options =
+    current && !projects.some((project) => project.id === current.id)
+      ? [...projects, current]
+      : projects;
 
   return (
     <div className="space-y-4">
@@ -132,7 +143,7 @@ export function TaskFields({
           onChange={(projectId) => set("projectId", projectId)}
           options={[
             { value: "", label: "Без проекта" },
-            ...projects.map((project) => ({ value: project.id, label: project.title })),
+            ...options.map((project) => ({ value: project.id, label: project.title })),
           ]}
         />
       </Field>
