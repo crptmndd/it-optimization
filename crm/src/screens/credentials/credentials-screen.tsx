@@ -476,8 +476,13 @@ function Row({
       data-card-id={item.id}
       className="border-border bg-background hover:border-accent-border flex flex-col gap-1.5 rounded-xl border px-3 py-3 transition hover:shadow-sm sm:py-2.5"
     >
-      <div className="flex items-start gap-3">
-        <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
+      {/* На телефоне название отдельной строкой: иначе бейджи сжимают его до буквы. */}
+      <div className="flex flex-wrap items-start gap-x-3 gap-y-1.5 sm:flex-nowrap">
+        <button
+          type="button"
+          onClick={onOpen}
+          className="w-full min-w-0 text-left sm:w-auto sm:flex-1"
+        >
           <span className="block truncate text-sm font-medium">{item.service}</span>
           <span className="text-muted-foreground mt-0.5 block truncate text-xs">
             {[item.login, item.owner && `на ${item.owner}`].filter(Boolean).join(" · ") ||
