@@ -34,6 +34,8 @@ const TICKET_TTL_MS = 5 * 60 * 1000;
 const CONFIRM_WINDOW_MS = 10 * 60 * 1000;
 const MAX_FAILED_CODES = 5;
 const LOCK_MS = 15 * 60 * 1000;
+/** Сколько живёт начатое подключение: QR отсканировать успевают, а брошенное гаснет. */
+const SETUP_TTL_MS = 15 * 60 * 1000;
 const RECOVERY_CODE_COUNT = 10;
 const RECOVERY_CODE_LENGTH = 16;
 /** Как коды телеграма: без символов, которые путаются при вводе с бумажки. */
@@ -119,10 +121,19 @@ function noStore(reply: FastifyReply): void {
   void reply.header("Cache-Control", "no-store");
 }
 
+/** Отправка в фоне: ответ её не ждёт, а сбой телеграма только логируется. */
+function tellTeam(request: FastifyRequest, text: string): void {
+  if (!canNotify || !env.TELEGRAM_TEAM_CHAT_ID) return;
+  void trySendMessage(env.TELEGRAM_TEAM_CHAT_ID, text, request.log).catch(
+    (cause: unknown) => {
+      request.log.warn({ err: cause }, "сообщение о блокировке не отправлено");
+    },
+  );
+}
+
 /**
  * Пять неверных кодов значат, что пароль уже знает кто-то чужой, поэтому блокировка
- * видна людям, а не только журналу. Отправка в фоне: ответ на вход её не ждёт, а сбой
- * телеграма только логируется.
+ * видна людям, а не только журналу.
  */
 async function reportLock(
   request: FastifyRequest,
@@ -136,15 +147,45 @@ async function reportLock(
     action: "2fa_locked",
     userId,
   });
-
-  if (!canNotify || !env.TELEGRAM_TEAM_CHAT_ID) return;
-  const text = `🔒 Вход заблокирован после ${MAX_FAILED_CODES} неверных кодов: ${escapeHtml(email)}`;
-  void trySendMessage(env.TELEGRAM_TEAM_CHAT_ID, text, request.log).catch(
-    (cause: unknown) => {
-      request.log.warn({ err: cause }, "сообщение о блокировке не отправлено");
-    },
+  tellTeam(
+    request,
+    `🔒 Вход заблокирован после ${MAX_FAILED_CODES} неверных кодов: ${escapeHtml(email)}`,
   );
 }
+
+/** То же при подключении: чаще всего это опечатки, но так выглядит и подбор по куке. */
+async function reportSetupReset(
+  request: FastifyRequest,
+  userId: string,
+  email: string,
+): Promise<void> {
+  request.log.warn({ userId }, "подключение 2FA сброшено после неверных кодов");
+  await audit(request, { entity: "users", entityId: userId, action: "2fa_setup_reset" });
+  tellTeam(
+    request,
+    `🔒 Подключение 2FA сброшено после ${MAX_FAILED_CODES} неверных кодов: ${escapeHtml(email)}`,
+  );
+}
+
+/**
+ * Незавершённое подключение целиком. Секрет стирается, а не просто считается: новый
+ * `setup` снова потребует пароль, которого у вора с кукой нет.
+ */
+const SETUP_CLEARED = {
+  totpSecretEnc: null,
+  totpSetupAt: null,
+  totpLastStep: null,
+  totpFailedAttempts: 0,
+} as const;
+
+/** Подключение сброшено: код вводить больше не к чему, интерфейс возвращает к паролю. */
+const sendSetupReset = (reply: FastifyReply, error: string) =>
+  fail(reply, 409, "setup_reset", error);
+
+type EnableResult =
+  | { result: "enabled" }
+  | { result: "invalid" | "not_started" | "expired" | "unavailable" }
+  | { result: "reset"; email: string };
 
 const TOTP_FIELDS = {
   email: true,
@@ -465,6 +506,7 @@ export async function twoFactorRoutes(app: FastifyInstance): Promise<void> {
         where: { id: userId },
         data: {
           totpSecretEnc: seal(secret, aadFor(userId)),
+          totpSetupAt: new Date(),
           totpLastStep: null,
           totpFailedAttempts: 0,
           totpLockedUntil: null,
@@ -480,9 +522,13 @@ export async function twoFactorRoutes(app: FastifyInstance): Promise<void> {
   );
 
   /**
-   * Подтвердить подключение первым кодом. Отметка ставится условным запросом: двойная
-   * отправка не выпустит два набора кодов. Остальные сессии отзываются, потому что
-   * они вошли без второго фактора.
+   * Подтвердить подключение первым кодом. Пароля здесь нет, поэтому код проверяется
+   * той же транзакцией под блокировкой строки, что и при входе, со своим счётчиком:
+   * иначе брошенное подключение оставляло бы украденной куке перебор без лимита на
+   * человека. Пятая ошибка и истёкший срок стирают секрет: дальше нужен пароль.
+   *
+   * Блокировка заодно не даёт двойной отправке выпустить два набора кодов. Остальные
+   * сессии отзываются, потому что они вошли без второго фактора.
    */
   app.post(
     "/auth/2fa/enable",
@@ -494,60 +540,115 @@ export async function twoFactorRoutes(app: FastifyInstance): Promise<void> {
 
       const userId = request.user!.id;
       const session = request.authSession!;
-      const user = await prisma.user.findUnique({
-        where: { id: userId },
-        select: { totpSecretEnc: true, totpEnabledAt: true },
-      });
-      if (!user?.totpSecretEnc || user.totpEnabledAt) {
-        return reply.code(409).send({ error: "Подключение не начато" });
-      }
-
-      let secret: Buffer;
-      try {
-        secret = base32Decode(open(user.totpSecretEnc, aadFor(userId)));
-      } catch {
-        return sendVaultUnavailable(reply);
-      }
-
-      const step = matchStep(secret, parsed.data.code);
-      if (step === null) {
-        request.log.warn({ userId }, "код подключения 2FA не принят");
-        return sendCodeInvalid(reply, 403);
-      }
-
       const { codes, hashes } = generateRecoveryCodes();
-      const now = new Date();
-      const confirmedUntil = new Date(now.getTime() + CONFIRM_WINDOW_MS);
 
-      const enabled = await prisma.$transaction(async (tx) => {
-        const { count } = await tx.user.updateMany({
-          where: { id: userId, totpEnabledAt: null, totpSecretEnc: user.totpSecretEnc },
-          data: { totpEnabledAt: now, totpLastStep: step },
+      const outcome = await prisma.$transaction(async (tx): Promise<EnableResult> => {
+        await tx.$queryRaw`SELECT id FROM users WHERE id = ${userId}::uuid FOR UPDATE`;
+        const user = await tx.user.findUnique({
+          where: { id: userId },
+          select: {
+            email: true,
+            totpSecretEnc: true,
+            totpEnabledAt: true,
+            totpSetupAt: true,
+            totpFailedAttempts: true,
+          },
         });
-        if (count !== 1) return false;
+        if (!user?.totpSecretEnc || user.totpEnabledAt) return { result: "not_started" };
 
+        const now = new Date();
+        const startedAt = user.totpSetupAt?.getTime() ?? 0;
+        if (now.getTime() - startedAt >= SETUP_TTL_MS) {
+          await tx.user.update({ where: { id: userId }, data: SETUP_CLEARED });
+          return { result: "expired" };
+        }
+
+        let secret: Buffer;
+        try {
+          secret = base32Decode(open(user.totpSecretEnc, aadFor(userId)));
+        } catch {
+          return { result: "unavailable" };
+        }
+
+        const step = matchStep(secret, parsed.data.code, now.getTime());
+        if (step === null) {
+          const failed = user.totpFailedAttempts + 1;
+          if (failed >= MAX_FAILED_CODES) {
+            await tx.user.update({ where: { id: userId }, data: SETUP_CLEARED });
+            return { result: "reset", email: user.email };
+          }
+          await tx.user.update({
+            where: { id: userId },
+            data: { totpFailedAttempts: failed },
+          });
+          return { result: "invalid" };
+        }
+
+        await tx.user.update({
+          where: { id: userId },
+          data: {
+            totpEnabledAt: now,
+            totpLastStep: step,
+            totpSetupAt: null,
+            totpFailedAttempts: 0,
+          },
+        });
         await tx.recoveryCode.deleteMany({ where: { userId } });
         await tx.recoveryCode.createMany({
           data: hashes.map((codeHash) => ({ userId, codeHash })),
         });
         await tx.session.update({
           where: { id: session.id },
-          data: { twoFactorConfirmedUntil: confirmedUntil },
+          data: {
+            twoFactorConfirmedUntil: new Date(now.getTime() + CONFIRM_WINDOW_MS),
+          },
         });
         await tx.session.updateMany({
           where: { userId, revokedAt: null, id: { not: session.id } },
           data: { revokedAt: now },
         });
-        return true;
+        return { result: "enabled" };
       });
-      if (!enabled) return reply.code(409).send({ error: "Подключение не начато" });
 
-      await audit(request, { entity: "users", entityId: userId, action: "2fa_enable" });
-
-      noStore(reply);
-      return reply.send({ recoveryCodes: codes });
+      switch (outcome.result) {
+        case "enabled":
+          await audit(request, {
+            entity: "users",
+            entityId: userId,
+            action: "2fa_enable",
+          });
+          noStore(reply);
+          return reply.send({ recoveryCodes: codes });
+        case "invalid":
+          request.log.warn({ userId }, "код подключения 2FA не принят");
+          return sendCodeInvalid(reply, 403);
+        case "unavailable":
+          return sendVaultUnavailable(reply);
+        case "reset":
+          await reportSetupReset(request, userId, outcome.email);
+          return sendSetupReset(
+            reply,
+            "Слишком много неверных кодов. Начните подключение заново",
+          );
+        case "expired":
+          return sendSetupReset(reply, "Время на подключение вышло. Начните заново");
+        case "not_started":
+          return sendSetupReset(reply, "Подключение не начато");
+      }
     },
   );
+
+  /**
+   * Отказ от подключения. Секрет стирается сразу, а не ждёт срока, поэтому пароль здесь
+   * не нужен: вернуть секрет можно только через `setup`, а там он нужен.
+   */
+  app.post("/auth/2fa/cancel", { preHandler: requireAuth }, async (request, reply) => {
+    await prisma.user.updateMany({
+      where: { id: request.user!.id, totpEnabledAt: null },
+      data: SETUP_CLEARED,
+    });
+    return reply.code(204).send();
+  });
 
   /**
    * Новый набор кодов. Только TOTP, окно его не заменяет: иначе минутная кража сессии
@@ -622,10 +723,8 @@ export async function twoFactorRoutes(app: FastifyInstance): Promise<void> {
         prisma.user.update({
           where: { id: userId },
           data: {
-            totpSecretEnc: null,
+            ...SETUP_CLEARED,
             totpEnabledAt: null,
-            totpLastStep: null,
-            totpFailedAttempts: 0,
             totpLockedUntil: null,
           },
         }),

@@ -7,7 +7,8 @@ ALTER TABLE "users" ADD COLUMN     "totp_enabled_at" TIMESTAMP(3),
 ADD COLUMN     "totp_failed_attempts" INTEGER NOT NULL DEFAULT 0,
 ADD COLUMN     "totp_last_step" INTEGER,
 ADD COLUMN     "totp_locked_until" TIMESTAMP(3),
-ADD COLUMN     "totp_secret_enc" TEXT;
+ADD COLUMN     "totp_secret_enc" TEXT,
+ADD COLUMN     "totp_setup_at" TIMESTAMP(3);
 
 -- AlterTable
 ALTER TABLE "sessions" ADD COLUMN     "two_factor_confirmed_until" TIMESTAMP(3);

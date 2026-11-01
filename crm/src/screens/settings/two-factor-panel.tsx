@@ -62,6 +62,10 @@ export function TwoFactorPanel() {
     } catch (cause) {
       setCode("");
       setError(errorText(cause, fallback));
+      // Подключение сброшено на сервере: код вводить не к чему, нужен пароль.
+      if (cause instanceof ApiError && cause.code === "setup_reset") {
+        setStep({ name: "password" });
+      }
     } finally {
       setBusy(false);
     }
@@ -103,6 +107,12 @@ export function TwoFactorPanel() {
       load();
       await refreshUser();
     }, "Не удалось отключить");
+  }
+
+  /** Секрет стирается сразу. Сбой здесь не страшен: у подключения есть срок. */
+  function cancelSetup() {
+    twoFactorApi.cancelSetup().catch(() => {});
+    go({ name: "idle" });
   }
 
   const cancel = (
@@ -226,7 +236,9 @@ export function TwoFactorPanel() {
                 <Button type="submit" disabled={busy}>
                   {busy ? "Проверяем…" : "Включить"}
                 </Button>
-                {cancel}
+                <Button type="button" variant="ghost" onClick={cancelSetup}>
+                  Отмена
+                </Button>
               </div>
             </form>
           )}

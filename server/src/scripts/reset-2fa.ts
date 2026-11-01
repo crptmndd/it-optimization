@@ -41,6 +41,7 @@ async function main(): Promise<void> {
         totpLastStep: null,
         totpFailedAttempts: 0,
         totpLockedUntil: null,
+        totpSetupAt: null,
       },
     }),
     prisma.recoveryCode.deleteMany({ where: { userId: user.id } }),

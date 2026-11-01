@@ -20,6 +20,7 @@ export const twoFactorApi = {
   setup: (password: string) => api.post<TwoFactorSetup>("/auth/2fa/setup", { password }),
   enable: (code: string) =>
     api.post<{ recoveryCodes: string[] }>("/auth/2fa/enable", { code }),
+  cancelSetup: () => api.post<void>("/auth/2fa/cancel"),
   regenerateCodes: (code: string) =>
     api.post<{ recoveryCodes: string[] }>("/auth/2fa/recovery-codes", { code }),
   disable: (password: string, code: string) =>
