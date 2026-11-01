@@ -23,7 +23,7 @@ const PER_ENTITY = 5;
 const query = z.object({ q: z.string().trim().min(2).max(100) });
 
 export interface SearchHit {
-  entity: "leads" | "clients" | "projects" | "tasks" | "credentials";
+  entity: "clients" | "projects" | "tasks" | "credentials";
   label: string;
   id: string;
   title: string;
@@ -42,18 +42,7 @@ export async function searchRoutes(app: FastifyInstance): Promise<void> {
     const alive = { deletedAt: null };
     const take = PER_ENTITY;
 
-    const [leads, clients, projects, tasks, credentials, notes] = await Promise.all([
-      prisma.lead.findMany({
-        where: {
-          ...alive,
-          OR: [{ name: like },
-            { contact: like },
-            { message: like },
-            { nextActionNote: like },],
-        },
-        take,
-        orderBy: { createdAt: "desc" },
-      }),
+    const [clients, projects, tasks, credentials, notes] = await Promise.all([
       prisma.client.findMany({
         where: { ...alive, OR: [{ name: like }, { inn: like }, { notes: like }] },
         take,
@@ -78,22 +67,16 @@ export async function searchRoutes(app: FastifyInstance): Promise<void> {
         include: { project: { select: { title: true } } },
       }),
       // Заметки ищутся отдельно: они лежат одной таблицей на все сущности, и
-      // найденная заметка указывает на свою запись, а не на себя.
+      // найденная заметка указывает на свою запись, а не на себя. Заметки лидов
+      // отсекаются: лиды для команды скрыты, а ссылка на них никуда бы не вела.
       prisma.note.findMany({
-        where: { body: like },
+        where: { body: like, entity: { not: "lead" } },
         take: take * 2,
         orderBy: { createdAt: "desc" },
       }),
     ]);
 
     const hits: SearchHit[] = [
-      ...leads.map((item) => ({
-        entity: "leads" as const,
-        label: "Лид",
-        id: item.id,
-        title: item.name?.trim() || item.contact,
-        hint: item.name?.trim() ? item.contact : null,
-      })),
       ...clients.map((item) => ({
         entity: "clients" as const,
         label: "Клиент",
@@ -106,7 +89,7 @@ export async function searchRoutes(app: FastifyInstance): Promise<void> {
         label: "Проект",
         id: item.id,
         title: item.title,
-        hint: item.client?.name ?? null,
+        hint: projectHint(item.archivedAt !== null, item.client?.name),
       })),
       ...tasks.map((item) => ({
         entity: "tasks" as const,
@@ -126,6 +109,14 @@ export async function searchRoutes(app: FastifyInstance): Promise<void> {
 
     return reply.send({ hits, notes: await resolveNotes(notes, hits) });
   });
+}
+
+/**
+ * Архивный проект в поиске находится: иначе до него не добраться по памяти. Но по
+ * выдаче должно быть видно, что он убран, а не идёт сейчас.
+ */
+function projectHint(archived: boolean, text: string | null | undefined): string | null {
+  return [archived ? "архив" : null, text].filter(Boolean).join(" · ") || null;
 }
 
 /**
@@ -154,13 +145,13 @@ async function resolveNotes(
   for (const [entity, bucket] of byEntity) {
     const ids = [...bucket.keys()];
     const titles = await titlesFor(entity, ids);
-    for (const [id, title] of titles) {
+    for (const [id, { title, archived }] of titles) {
       found.push({
         entity: `${entity}s` as SearchHit["entity"],
         label: LABELS[entity] ?? entity,
         id,
         title,
-        hint: bucket.get(id)?.slice(0, 120) ?? null,
+        hint: projectHint(archived, bucket.get(id)?.slice(0, 120)),
       });
     }
   }
@@ -169,27 +160,31 @@ async function resolveNotes(
 }
 
 const LABELS: Record<string, string> = {
-  lead: "Лид",
   client: "Клиент",
   project: "Проект",
   task: "Задача",
 };
 
-async function titlesFor(entity: string, ids: string[]): Promise<Map<string, string>> {
-  const titles = new Map<string, string>();
+async function titlesFor(
+  entity: string,
+  ids: string[],
+): Promise<Map<string, { title: string; archived: boolean }>> {
+  const titles = new Map<string, { title: string; archived: boolean }>();
   if (ids.length === 0) return titles;
   const where = { id: { in: ids }, deletedAt: null };
 
-  if (entity === "lead") {
-    for (const row of await prisma.lead.findMany({ where })) {
-      titles.set(row.id, row.name?.trim() || row.contact);
+  if (entity === "client") {
+    for (const row of await prisma.client.findMany({ where })) {
+      titles.set(row.id, { title: row.name, archived: false });
     }
-  } else if (entity === "client") {
-    for (const row of await prisma.client.findMany({ where })) titles.set(row.id, row.name);
   } else if (entity === "project") {
-    for (const row of await prisma.project.findMany({ where })) titles.set(row.id, row.title);
+    for (const row of await prisma.project.findMany({ where })) {
+      titles.set(row.id, { title: row.title, archived: row.archivedAt !== null });
+    }
   } else if (entity === "task") {
-    for (const row of await prisma.task.findMany({ where })) titles.set(row.id, row.title);
+    for (const row of await prisma.task.findMany({ where })) {
+      titles.set(row.id, { title: row.title, archived: false });
+    }
   }
 
   return titles;
