@@ -353,7 +353,18 @@ export async function stageRoutes(app: FastifyInstance): Promise<void> {
           }
 
           const paidAt = input.paidAt !== undefined ? input.paidAt : stage.paidAt;
-          const issuedAt = input.issuedAt !== undefined ? input.issuedAt : stage.issuedAt;
+          // Дата, подставленная оплатой, следует за ней: после снятия остался бы
+          // «выставлен» у этапа, который никто не выставлял. Введённую руками дату
+          // снятие не трогает.
+          const issuedByPayment =
+            stage.paidAt !== null &&
+            stage.issuedAt?.getTime() === stage.paidAt.getTime();
+          const issuedAt =
+            input.issuedAt !== undefined
+              ? input.issuedAt
+              : issuedByPayment
+                ? paidAt
+                : stage.issuedAt;
           const updated = await tx.projectStage.update({
             where: { id: stage.id },
             data: {
