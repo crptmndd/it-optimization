@@ -1,7 +1,6 @@
 import { api } from "./client";
 import type { Credential } from "./credentials";
-import type { Lead } from "./leads";
-import type { Project } from "./projects";
+import type { Bill, Project } from "./projects";
 import type { Task } from "./tasks";
 
 /**
@@ -10,15 +9,11 @@ import type { Task } from "./tasks";
  */
 export interface TodaySnapshot {
   empty: boolean;
-  leads: {
-    overdue: Lead[];
-    today: Lead[];
-    orphanUrgent: Lead[];
-    unclaimed: Lead[];
-  };
   tasks: {
     overdue: Task[];
     today: Task[];
+    /** В работе или на очереди, но без исполнителя и без горящего срока. */
+    unassigned: Task[];
   };
   /** Сервисы, которым до продления осталось меньше двух недель. */
   credentials: {
@@ -26,11 +21,21 @@ export interface TodaySnapshot {
   };
   projects: {
     urgent: Project[];
+    /** Срок в ближайшие семь дней. */
+    soon: Project[];
     /** Помесячные проекты с пробелом в счетах — считает сервер. */
     unbilled: Project[];
   };
+  money: {
+    /** Счета к оплате, старые сверху. */
+    unpaid: Bill[];
+    /** Следующий неоплаченный этап каждого договора. */
+    nextStages: Bill[];
+  };
 }
 
-export async function getToday(): Promise<TodaySnapshot> {
-  return api.get<TodaySnapshot>("/today");
+/** Без имени — вся команда. Пустой параметр сервер отверг бы как неизвестное имя. */
+export async function getToday(developer?: string): Promise<TodaySnapshot> {
+  const query = developer ? `?developer=${encodeURIComponent(developer)}` : "";
+  return api.get<TodaySnapshot>(`/today${query}`);
 }

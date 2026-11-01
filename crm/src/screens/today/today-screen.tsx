@@ -1,13 +1,12 @@
-import { Check } from "lucide-react";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Check, UserRound } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ApiError } from "@/api/client";
 import { updateCredential, type Credential } from "@/api/credentials";
-import type { Lead } from "@/api/leads";
-import type { Project } from "@/api/projects";
+import type { Bill, Project } from "@/api/projects";
 import { updateTask, type Task } from "@/api/tasks";
 import { getToday, type TodaySnapshot } from "@/api/today";
 import { useCurrentUser } from "@/auth/auth-context";
-import { Badge, EmptyState, ErrorNote } from "@/components/ui";
+import { Badge, EmptyState, ErrorNote, Select } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import {
   describeDeadline,
@@ -17,7 +16,8 @@ import {
   periodLabel,
   toDateInputValue,
 } from "@/lib/dates";
-import { fee, money } from "@/lib/money";
+import { DEVELOPERS } from "@/lib/developers";
+import { fee, formatTotals, money, sumByCurrency } from "@/lib/money";
 import { Link } from "react-router";
 
 /**
@@ -33,42 +33,64 @@ import { Link } from "react-router";
  * «что горит», и строка здесь — пункт списка, а не пункт назначения; человек
  * может просто хотеть посмотреть, где она стоит и что рядом. Открывать окно
  * за него — решать, что он собрался править. Карточка вместо этого коротко
- * подсвечивается, чтобы её не искать глазами заново.
+ * подсвечивается, чтобы её не искать глазами заново. Исключение — деньги: счёт
+ * живёт внутри карточки проекта, и подвести можно только к ней самой.
  *
- * Порядок блоков не случаен: сверху то, что уже просрочено, снизу то, что ещё
- * можно успеть. Ничьи лиды идут выше своих задач — потерянный лид стоит дороже
- * сдвинутой задачи.
+ * Порядок блоков не случаен: сверху работа, которая уже просрочена, снизу то,
+ * что ещё можно успеть, и отдельно деньги — у них другой вопрос: не «что
+ * делать», а «кто кому должен».
  */
+
+/** Значение «вся команда» в выборе человека. В запрос оно не уходит. */
+const EVERYONE = "all";
+
+const PEOPLE = [
+  { value: EVERYONE, label: "Все" },
+  ...DEVELOPERS.map((name) => ({ value: name, label: name })),
+];
+
 export function TodayScreen() {
   const user = useCurrentUser();
+  const [person, setPerson] = useState<string>(EVERYONE);
   const [snapshot, setSnapshot] = useState<TodaySnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Ответ по прошлому человеку не должен лечь поверх уже выбранного. */
+  const request = useRef(0);
 
   const load = useCallback(() => {
     setError(null);
-    getToday()
-      .then(setSnapshot)
+    const current = (request.current += 1);
+    getToday(person === EVERYONE ? undefined : person)
+      .then((result) => {
+        if (current === request.current) setSnapshot(result);
+      })
       .catch((cause: unknown) => {
+        if (current !== request.current) return;
         setError(cause instanceof ApiError ? cause.message : "Не удалось загрузить");
       });
-  }, []);
+  }, [person]);
 
   useEffect(load, [load]);
 
   async function completeTask(task: Task) {
+    const without = (items: Task[]) => items.filter((item) => item.id !== task.id);
     setSnapshot((current) =>
       current === null
         ? null
         : {
             ...current,
             tasks: {
-              overdue: current.tasks.overdue.filter((item) => item.id !== task.id),
-              today: current.tasks.today.filter((item) => item.id !== task.id),
+              overdue: without(current.tasks.overdue),
+              today: without(current.tasks.today),
+              unassigned: without(current.tasks.unassigned),
             },
           },
     );
     try {
       await updateTask(task.id, { status: "done" });
+      // Последняя закрытая задача должна привести к пустому состоянию, а его
+      // считает сервер.
+      load();
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Не удалось сохранить");
       load();
@@ -94,14 +116,32 @@ export function TodayScreen() {
   }
 
   const greeting = user.name ? `Привет, ${user.name}` : "Сегодня";
+  const hasMoney =
+    snapshot !== null &&
+    snapshot.projects.unbilled.length +
+      snapshot.money.unpaid.length +
+      snapshot.money.nextStages.length >
+      0;
 
   return (
     <section>
-      <header>
-        <h1 className="text-xl font-bold tracking-tight">{greeting}</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          То же, что бот присылает утром. Пусто — значит всё под контролем.
-        </p>
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-xl font-bold tracking-tight">{greeting}</h1>
+          <p className="text-muted-foreground mt-1 text-sm">
+            {person === EVERYONE
+              ? "То же, что бот присылает утром. Пусто — значит всё под контролем."
+              : `Срез по человеку: ${person}. Ничьи задачи здесь не показываются.`}
+          </p>
+        </div>
+        <Select
+          value={person}
+          onChange={setPerson}
+          options={PEOPLE}
+          ariaLabel="Чьи дела показать"
+          icon={<UserRound size={14} strokeWidth={2} />}
+          className="w-40"
+        />
       </header>
 
       {error && (
@@ -116,36 +156,11 @@ export function TodayScreen() {
         <div className="mt-6">
           <EmptyState
             title="Ничего не горит"
-            note="Ни просроченных лидов, ни задач на сегодня. Свободны."
+            note="Ни просроченных задач, ни денег, которые ждут. Свободны."
           />
         </div>
       ) : (
         <div className="mt-6 space-y-9 sm:space-y-7">
-          <Block
-            title="Лиды просрочены"
-            items={snapshot.leads.overdue}
-            tone="danger"
-            render={(lead) => <LeadLine key={lead.id} lead={lead} showDeadline />}
-          />
-          <Block
-            title="Лиды на сегодня"
-            items={snapshot.leads.today}
-            render={(lead) => <LeadLine key={lead.id} lead={lead} showDeadline />}
-          />
-          <Block
-            title="Ничьи, срок наступил"
-            items={snapshot.leads.orphanUrgent}
-            tone="danger"
-            note="Не в чьём-то личном списке — про них не вспомнит никто"
-            render={(lead) => <LeadLine key={lead.id} lead={lead} showDeadline />}
-          />
-          <Block
-            title="Никто не взял"
-            items={snapshot.leads.unclaimed}
-            tone="danger"
-            note="Пришли, но исполнителя и срока нет"
-            render={(lead) => <LeadLine key={lead.id} lead={lead} />}
-          />
           <Block
             title="Задачи просрочены"
             items={snapshot.tasks.overdue}
@@ -171,8 +186,27 @@ export function TodayScreen() {
             )}
           />
           <Block
+            title="Без исполнителя"
+            items={snapshot.tasks.unassigned}
+            note="В работе или на очереди, но ни на ком не висят"
+            render={(task) => (
+              <TaskLine
+                key={task.id}
+                task={task}
+                showDeadline
+                onComplete={() => void completeTask(task)}
+              />
+            )}
+          />
+          <Block
             title="Проекты — подходит срок"
             items={snapshot.projects.urgent}
+            render={(project) => <ProjectLine key={project.id} project={project} />}
+          />
+          <Block
+            title="Проекты — скоро срок"
+            items={snapshot.projects.soon}
+            note="В ближайшие семь дней"
             render={(project) => <ProjectLine key={project.id} project={project} />}
           />
           <Block
@@ -183,17 +217,44 @@ export function TodayScreen() {
               <CredentialLine key={item.id} item={item} onPaid={() => markPaid(item)} />
             )}
           />
-          <Block
-            title="Счета не выставлены"
-            items={snapshot.projects.unbilled}
-            tone="danger"
-            note="Помесячные проекты, по которым есть пропущенный месяц"
-            render={(project) => <UnbilledLine key={project.id} project={project} />}
-          />
+
+          {hasMoney && (
+            <div className="border-border space-y-9 border-t pt-6 sm:space-y-7">
+              <p className="text-muted-foreground text-sm">Деньги</p>
+              <Block
+                title="Не выставлено"
+                items={snapshot.projects.unbilled}
+                tone="danger"
+                note="Помесячные проекты, по которым есть пропущенный месяц"
+                render={(project) => <UnbilledLine key={project.id} project={project} />}
+              />
+              <Block
+                title="Не оплачено"
+                items={snapshot.money.unpaid}
+                note={totalsNote(snapshot.money.unpaid, "Старые сверху")}
+                render={(bill) => <BillLine key={bill.id} bill={bill} />}
+              />
+              <Block
+                title="Следующий этап"
+                items={snapshot.money.nextStages}
+                note={totalsNote(
+                  snapshot.money.nextStages,
+                  "Договоры платятся по очереди, поэтому здесь по одному этапу на договор",
+                )}
+                render={(bill) => <BillLine key={bill.id} bill={bill} />}
+              />
+            </div>
+          )}
         </div>
       )}
     </section>
   );
+}
+
+/** Итог по каждой валюте отдельно: курса у CRM нет. Пустых сумм в нём нет вовсе. */
+function totalsNote(bills: Bill[], fallback: string): string {
+  const total = formatTotals(sumByCurrency(bills));
+  return total ? `Всего ${total}` : fallback;
 }
 
 function Block<T>({
@@ -225,27 +286,6 @@ function Block<T>({
   );
 }
 
-function LeadLine({ lead, showDeadline }: { lead: Lead; showDeadline?: boolean }) {
-  const deadline =
-    showDeadline && lead.nextActionAt ? describeDeadline(lead.nextActionAt) : null;
-
-  return (
-    <li className="flex items-start gap-3 py-3.5 sm:py-2.5">
-      <Link to={`/leads?focus=${lead.id}`} className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium">
-          {lead.nextActionNote?.trim() || lead.name?.trim() || lead.contact}
-        </span>
-        <span className="text-muted-foreground mt-0.5 block truncate text-xs">
-          {[lead.nextActionNote?.trim() ? lead.name?.trim() || lead.contact : null]
-            .filter(Boolean)
-            .join(" · ") || lead.contact}
-        </span>
-      </Link>
-      {deadline && <Badge tone={deadline.tone}>{deadline.label}</Badge>}
-    </li>
-  );
-}
-
 function TaskLine({
   task,
   showDeadline,
@@ -272,11 +312,14 @@ function TaskLine({
           {task.priority === "high" && "❗ "}
           {task.title}
         </span>
-        {task.project && (
-          <span className="text-muted-foreground mt-0.5 block truncate text-xs">
-            {task.project.title}
-          </span>
-        )}
+        <span className="text-muted-foreground mt-0.5 block truncate text-xs">
+          {[
+            task.project?.title,
+            task.developers.length ? task.developers.join(", ") : "ничья",
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        </span>
       </Link>
       {deadline && <Badge tone={deadline.tone}>{deadline.label}</Badge>}
     </li>
@@ -289,12 +332,17 @@ function TaskLine({
  * из них: один месяц — забывчивость, четыре — потерянные деньги.
  */
 function UnbilledLine({ project }: { project: Project }) {
+  const first = periodLabel(project.unbilledPeriod ?? "");
+
   return (
     <li className="flex items-start gap-3 py-3.5 sm:py-2.5">
       <Link to={`/projects?focus=${project.id}`} className="min-w-0 flex-1">
         <span className="block truncate text-sm font-medium">{project.title}</span>
         <span className="text-muted-foreground mt-0.5 block truncate text-xs">
-          {[project.client?.name, `с ${periodLabel(project.unbilledPeriod ?? "")}`]
+          {[
+            project.client?.name,
+            project.unbilledCount > 1 ? `первый пропуск: ${first}` : `за ${first}`,
+          ]
             .filter(Boolean)
             .join(" · ")}
         </span>
@@ -303,6 +351,41 @@ function UnbilledLine({ project }: { project: Project }) {
       {project.monthlyAmountMinor !== null && (
         <span className="text-sm font-medium">
           {money(project.monthlyAmountMinor * project.unbilledCount, project.currency)}
+        </span>
+      )}
+    </li>
+  );
+}
+
+/**
+ * Счёт либо этап договора. Ведёт в карточку проекта, а не к ней: оплата и сумма
+ * правятся там, и показать «где она стоит» здесь нечего. Сумма справа, как у
+ * невыставленных: это не срок, а деньги.
+ */
+function BillLine({ bill }: { bill: Bill }) {
+  const what = bill.stage
+    ? `Этап ${bill.stage.position} из ${bill.stage.total}`
+    : bill.period && periodLabel(bill.period);
+
+  return (
+    <li className="flex items-start gap-3 py-3.5 sm:py-2.5">
+      <Link to={`/projects?open=${bill.project.id}`} className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-medium">{bill.project.title}</span>
+        <span className="text-muted-foreground mt-0.5 block truncate text-xs">
+          {[
+            bill.project.client,
+            what,
+            bill.issuedAt ? `выставлен ${formatDate(bill.issuedAt)}` : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        </span>
+      </Link>
+      {bill.amountMinor === null ? (
+        <Badge>сумма не указана</Badge>
+      ) : (
+        <span className="shrink-0 text-sm font-medium whitespace-nowrap">
+          {money(bill.amountMinor, bill.currency)}
         </span>
       )}
     </li>
