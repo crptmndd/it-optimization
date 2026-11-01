@@ -14,7 +14,7 @@ import {
 import { Badge, Button, ErrorNote, Input, Select } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { CurrencySelect } from "@/components/currency-select";
-import { periodLabel } from "@/lib/dates";
+import { formatDate, periodLabel } from "@/lib/dates";
 import {
   amountToInput,
   money,
@@ -29,6 +29,9 @@ import {
  * CRM документы не рисует — она помнит, за какой месяц что выставлено и оплачено.
  * У помесячных проектов записи заводит система в начале месяца, поэтому сумму
  * существующей записи здесь можно указать: автозапись без суммы её требует.
+ *
+ * Оплата есть только у счёта. Акт — документ, а не долг: с автодокументами акт
+ * каждого месяца иначе стоял бы «не оплачен», и его никогда не закрыть.
  */
 
 /** Текущий месяц как ГГГГ-ММ — им заполняется поле по умолчанию. */
@@ -222,32 +225,37 @@ export function ProjectInvoices({
             {items.map((invoice) => (
               <li key={invoice.id} className="py-2">
                 <div className="flex items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() => void togglePaid(invoice)}
-                    className="min-w-0 flex-1 text-left"
-                    title={
-                      invoice.paidAt ? "Снять отметку об оплате" : "Отметить оплаченным"
-                    }
-                  >
-                    <span className="block text-sm">
-                      <span
-                        className={cn(
-                          "font-medium",
-                          invoice.kind === "act" && "text-muted-foreground",
-                        )}
+                  {invoice.kind === "act" ? (
+                    <>
+                      <span className="min-w-0 flex-1">
+                        <RecordTitle invoice={invoice} />
+                      </span>
+                      <span className="text-muted-foreground shrink-0 text-xs">
+                        {invoice.issuedAt
+                          ? `выставлен ${formatDate(invoice.issuedAt)}`
+                          : "не выставлен"}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => void togglePaid(invoice)}
+                        className="min-w-0 flex-1 text-left"
+                        title={
+                          invoice.paidAt
+                            ? "Снять отметку об оплате"
+                            : "Отметить оплаченным"
+                        }
                       >
-                        {INVOICE_KIND_LABELS[invoice.kind]}
-                      </span>{" "}
-                      за {periodLabel(invoice.period)}
-                      {invoice.amountMinor !== null &&
-                        ` — ${formatAmount(invoice.amountMinor, invoice.currency)}`}
-                    </span>
-                  </button>
+                        <RecordTitle invoice={invoice} />
+                      </button>
 
-                  <Badge tone={invoice.paidAt ? "success" : "warning"}>
-                    {invoice.paidAt ? "оплачен" : "не оплачен"}
-                  </Badge>
+                      <Badge tone={invoice.paidAt ? "success" : "warning"}>
+                        {invoice.paidAt ? "оплачен" : "не оплачен"}
+                      </Badge>
+                    </>
+                  )}
 
                   <button
                     type="button"
@@ -310,5 +318,20 @@ export function ProjectInvoices({
         )}
       </div>
     </div>
+  );
+}
+
+function RecordTitle({ invoice }: { invoice: Invoice }) {
+  return (
+    <span className="block text-sm">
+      <span
+        className={cn("font-medium", invoice.kind === "act" && "text-muted-foreground")}
+      >
+        {INVOICE_KIND_LABELS[invoice.kind]}
+      </span>{" "}
+      за {periodLabel(invoice.period)}
+      {invoice.amountMinor !== null &&
+        ` — ${formatAmount(invoice.amountMinor, invoice.currency)}`}
+    </span>
   );
 }
