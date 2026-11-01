@@ -1,9 +1,12 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { resolveUser, type AuthenticatedUser } from "./session.js";
+import { env } from "../env.js";
+import { resolveAuth, type AuthContext, type AuthenticatedUser } from "./session.js";
 
 declare module "fastify" {
   interface FastifyRequest {
     user?: AuthenticatedUser;
+    /** Сессия запроса: окно подтверждения 2FA живёт в её строке. */
+    authSession?: AuthContext["session"];
   }
 }
 
@@ -15,12 +18,13 @@ export async function requireAuth(
   request: FastifyRequest,
   reply: FastifyReply,
 ): Promise<void> {
-  const user = await resolveUser(request);
-  if (!user) {
+  const auth = await resolveAuth(request);
+  if (!auth) {
     await reply.code(401).send({ error: "Не авторизован" });
     return;
   }
-  request.user = user;
+  request.user = auth.user;
+  request.authSession = auth.session;
 }
 
 /**
@@ -35,16 +39,17 @@ export function requireRole(
   ...allowed: AuthenticatedUser["role"][]
 ): (request: FastifyRequest, reply: FastifyReply) => Promise<void> {
   return async function guard(request, reply) {
-    const user = await resolveUser(request);
-    if (!user) {
+    const auth = await resolveAuth(request);
+    if (!auth) {
       await reply.code(401).send({ error: "Не авторизован" });
       return;
     }
-    if (!allowed.includes(user.role)) {
+    if (!allowed.includes(auth.user.role)) {
       await reply.code(403).send({ error: "Недостаточно прав" });
       return;
     }
-    request.user = user;
+    request.user = auth.user;
+    request.authSession = auth.session;
   };
 }
 
@@ -53,3 +58,23 @@ export function requireRole(
  * Маркетолог сюда не ходит — он ведёт только лиды.
  */
 export const requireTeam = requireRole("owner", "editor");
+
+/** Учётки и Telegram-ники команды. */
+export const requireOwner = requireRole("owner");
+
+/**
+ * Пароли открываются только со страницы CRM. Кука общая на домен, а сайт с панелью
+ * тоже стоит в WEB_ORIGIN: раньше скрипт на сайте получил бы шифротекст, теперь пароль
+ * расшифровывает сервер, и хранимый XSS на сайте дотянулся бы до паролей человека с
+ * открытым окном. От `curl` с украденной кукой это не защищает и не должно: для неё
+ * есть код.
+ */
+export async function requireCrmOrigin(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  if (!env.CRM_ORIGIN || request.headers.origin === env.CRM_ORIGIN) return;
+  await reply
+    .code(403)
+    .send({ error: "Пароли открываются только из CRM", code: "origin_forbidden" });
+}

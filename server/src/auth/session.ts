@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { User } from "@prisma/client";
+import { canVault } from "../crypto/sealed.js";
 import { prisma } from "../db.js";
 import { env } from "../env.js";
 
@@ -11,7 +12,7 @@ export const SESSION_COOKIE = "itopt_session";
  * базы не даёт возможности войти, а отозвать сессию можно мгновенно (в отличие
  * от JWT, который живёт до истечения срока).
  */
-function hashToken(token: string): string {
+export function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
@@ -23,6 +24,7 @@ export async function createSession(
   reply: FastifyReply,
   user: User,
   request: FastifyRequest,
+  twoFactorConfirmedUntil?: Date,
 ): Promise<void> {
   const token = randomBytes(32).toString("base64url");
   const expiresAt = expiryDate();
@@ -34,6 +36,7 @@ export async function createSession(
       expiresAt,
       ip: request.ip,
       userAgent: request.headers["user-agent"]?.slice(0, 255),
+      twoFactorConfirmedUntil,
     },
   });
 
@@ -69,12 +72,16 @@ export interface AuthenticatedUser {
   email: string;
   name: string | null;
   role: User["role"];
+  totpEnabledAt: Date | null;
 }
 
-/** Пользователь текущей сессии или null. Просроченные сессии не проходят. */
-export async function resolveUser(
-  request: FastifyRequest,
-): Promise<AuthenticatedUser | null> {
+export interface AuthContext {
+  user: AuthenticatedUser;
+  session: { id: string; twoFactorConfirmedUntil: Date | null };
+}
+
+/** Пользователь и сессия текущего запроса или null. Просроченные сессии не проходят. */
+export async function resolveAuth(request: FastifyRequest): Promise<AuthContext | null> {
   const token = request.cookies[SESSION_COOKIE];
   if (!token) return null;
 
@@ -86,13 +93,54 @@ export async function resolveUser(
   if (!session || session.revokedAt || session.expiresAt < new Date()) return null;
   if (session.user.disabledAt) return null;
 
-  const { id, email, name, role } = session.user;
-  return { id, email, name, role };
+  const { id, email, name, role, totpEnabledAt } = session.user;
+  return {
+    user: { id, email, name, role, totpEnabledAt },
+    session: {
+      id: session.id,
+      twoFactorConfirmedUntil: session.twoFactorConfirmedUntil,
+    },
+  };
+}
+
+export async function resolveUser(
+  request: FastifyRequest,
+): Promise<AuthenticatedUser | null> {
+  return (await resolveAuth(request))?.user ?? null;
+}
+
+/**
+ * Что наружу уходит о вошедшем. Перечень явный и один на все ответы: сессия читает
+ * строку `users` целиком, вместе с `passwordHash` и `totpSecretEnc`.
+ */
+export function toUserDto(user: {
+  id: string;
+  email: string;
+  name: string | null;
+  role: User["role"];
+  totpEnabledAt: Date | null;
+}) {
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    role: user.role,
+    twoFactorEnabled: user.totpEnabledAt !== null,
+    twoFactorAvailable: canVault,
+  };
 }
 
 /** Убирает из базы мусор: истёкшие и отозванные сессии. */
 export async function purgeExpiredSessions(): Promise<number> {
   const { count } = await prisma.session.deleteMany({
+    where: { expiresAt: { lt: new Date() } },
+  });
+  return count;
+}
+
+/** То же для билетов входа: живут минуты, а строки остались бы навсегда. */
+export async function purgeExpiredTickets(): Promise<number> {
+  const { count } = await prisma.loginTicket.deleteMany({
     where: { expiresAt: { lt: new Date() } },
   });
   return count;

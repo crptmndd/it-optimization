@@ -13,12 +13,14 @@ export async function audit(
     entityId?: string;
     action: string;
     diff?: Prisma.InputJsonValue;
+    /** На шаге входа `request.user` ещё пуст, и строка вышла бы без автора. */
+    userId?: string;
   },
 ): Promise<void> {
   try {
     await prisma.auditLog.create({
       data: {
-        userId: request.user?.id ?? null,
+        userId: entry.userId ?? request.user?.id ?? null,
         entity: entry.entity,
         entityId: entry.entityId ?? null,
         action: entry.action,

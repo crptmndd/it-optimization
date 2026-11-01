@@ -2,7 +2,8 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../db.js";
 import { verifyPassword } from "./password.js";
-import { createSession, destroySession, resolveUser } from "./session.js";
+import { createSession, destroySession, resolveUser, toUserDto } from "./session.js";
+import { issueLoginTicket } from "./two-factor.js";
 
 const loginBody = z.object({
   email: z.string().email(),
@@ -37,15 +38,20 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(401).send({ error: "Неверная почта или пароль" });
       }
 
+      // Условие только в признаке: ключ сюда не входит намеренно. Без VAULT_KEY вход
+      // не упрощается, а закрывается: TOTP даёт 503, работают коды восстановления.
+      if (user.totpEnabledAt) {
+        const ticket = await issueLoginTicket(user.id, request.ip);
+        return reply.send({ twoFactorRequired: true, ...ticket });
+      }
+
       await createSession(reply, user, request);
       await prisma.user.update({
         where: { id: user.id },
         data: { lastLoginAt: new Date() },
       });
 
-      return reply.send({
-        user: { id: user.id, email: user.email, name: user.name, role: user.role },
-      });
+      return reply.send({ user: toUserDto(user) });
     },
   );
 
@@ -57,6 +63,6 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.get("/auth/me", async (request, reply) => {
     const user = await resolveUser(request);
     if (!user) return reply.code(401).send({ error: "Не авторизован" });
-    return reply.send({ user });
+    return reply.send({ user: toUserDto(user) });
   });
 }

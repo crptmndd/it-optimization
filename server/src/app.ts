@@ -4,6 +4,7 @@ import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
 import Fastify, { type FastifyError, type FastifyInstance } from "fastify";
 import { authRoutes } from "./auth/routes.js";
+import { twoFactorRoutes } from "./auth/two-factor.js";
 import { caseRoutes } from "./cases/routes.js";
 import { leadRoutes } from "./crm/leads/routes.js";
 import { teamRoutes } from "./crm/team.js";
@@ -61,6 +62,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   app.get("/health", async () => ({ ok: true }));
 
   await app.register(authRoutes);
+  await app.register(twoFactorRoutes);
   await app.register(caseRoutes);
   await app.register(publishRoutes);
   await app.register(postRoutes);

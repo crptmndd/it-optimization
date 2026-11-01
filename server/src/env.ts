@@ -67,6 +67,32 @@ const schema = z.object({
   /** Пояс, в котором считаются «сегодня» и время дайджеста. */
   TIMEZONE: z.string().default("Europe/Moscow"),
 
+  /**
+   * Ключ паролей и секретов 2FA: 32 байта в base64. Живёт только здесь: в базе и
+   * дампах его нет, поэтому утёкший дамп не раскрывает ничего.
+   */
+  VAULT_KEY: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim() || undefined)
+    .refine((value) => {
+      if (!value) return true;
+      const key = Buffer.from(value, "base64");
+      // Сверка обратным кодированием: Buffer молча пропускает мусор, и фраза из
+      // 43 букв прошла бы как ключ на 32 байта.
+      return key.length === 32 && key.toString("base64") === value;
+    }, "ожидается 32 байта в base64: openssl rand -base64 32"),
+
+  /**
+   * Откуда можно открывать пароли. Сайт с панелью тоже стоит в WEB_ORIGIN, но
+   * паролей им не нужно. Пусто — проверки нет: так работает локальный запуск.
+   */
+  CRM_ORIGIN: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim().replace(/\/$/, "") || undefined)
+    .pipe(z.string().url().optional()),
+
   GITHUB_TOKEN: z.string().optional(),
   GITHUB_OWNER: z.string().default("crptmndd"),
   GITHUB_REPO: z.string().default("it-optimization"),
