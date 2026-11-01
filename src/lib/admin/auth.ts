@@ -57,26 +57,59 @@ export async function fetchCurrentUser(): Promise<AdminUser | null> {
   return body.user;
 }
 
-export async function signIn(email: string, password: string): Promise<AdminUser> {
+/** При включённой 2FA пароль сессию не создаёт: нужен код и этот билет. */
+export type SignInResult = { user: AdminUser } | { ticket: string };
+
+const TOO_MANY_ATTEMPTS = "Слишком много попыток входа. Подожди несколько минут.";
+
+export async function signIn(email: string, password: string): Promise<SignInResult> {
   const response = await apiFetch("/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
   });
 
+  // Ответ на превышение лимита пишет плагин, и по-английски.
+  if (response.status === 429) throw new Error(TOO_MANY_ATTEMPTS);
   if (!response.ok) {
-    throw new Error(
-      await readApiError(
-        response,
-        response.status === 429
-          ? "Слишком много попыток входа. Подожди несколько минут."
-          : "Не удалось войти",
-      ),
-    );
+    throw new Error(await readApiError(response, "Не удалось войти"));
   }
 
-  const body = (await response.json()) as { user: AdminUser };
-  return body.user;
+  const body = (await response.json()) as
+    { user: AdminUser } | { twoFactorRequired: true; ticket: string };
+  return "user" in body ? { user: body.user } : { ticket: body.ticket };
+}
+
+/** Билет истёк или использован: форма возвращается к паролю. */
+export class TicketExpiredError extends Error {}
+
+/**
+ * Второй шаг входа. Тело разбирается здесь, а не через `readApiError`: тот возвращает
+ * только текст, а панели нужен `code`, чтобы отличить истёкший билет от неверного кода.
+ */
+export async function verifySecondFactor(
+  ticket: string,
+  code: string,
+): Promise<AdminUser> {
+  const response = await apiFetch("/auth/login/2fa", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ticket, code }),
+  });
+
+  const body = (await response.json().catch(() => null)) as {
+    user?: AdminUser;
+    error?: string;
+    code?: string;
+  } | null;
+
+  if (response.ok && body?.user) return body.user;
+  if (body?.code === "ticket_expired") {
+    throw new TicketExpiredError(body.error ?? "Время на ввод кода вышло");
+  }
+  // Свой отказ по блокировке приходит с `code` и русским текстом, отказ плагина нет.
+  if (response.status === 429 && !body?.code) throw new Error(TOO_MANY_ATTEMPTS);
+  throw new Error(body?.error || "Не удалось войти");
 }
 
 export async function signOut(): Promise<void> {

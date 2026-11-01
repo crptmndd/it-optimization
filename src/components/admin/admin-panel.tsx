@@ -12,6 +12,8 @@ import {
   fetchCurrentUser,
   signIn,
   signOut,
+  TicketExpiredError,
+  verifySecondFactor,
   type AdminUser,
 } from "@/lib/admin/auth";
 import { CasesPanel } from "./cases-panel";
@@ -80,8 +82,16 @@ export function AdminPanel() {
     setTokenInput("");
   };
 
+  /** Билет второго шага или `null`, если вход уже состоялся. */
   const logIn = async (email: string, password: string) => {
-    setUser(await signIn(email, password));
+    const result = await signIn(email, password);
+    if ("ticket" in result) return result.ticket;
+    setUser(result.user);
+    return null;
+  };
+
+  const confirmCode = async (ticket: string, code: string) => {
+    setUser(await verifySecondFactor(ticket, code));
   };
 
   const logOut = async () => {
@@ -104,7 +114,7 @@ export function AdminPanel() {
   }
 
   if (ADMIN_MODE === "api" && !user) {
-    return <LoginGate onSubmit={logIn} />;
+    return <LoginGate onSubmit={logIn} onCode={confirmCode} />;
   }
 
   if (ADMIN_MODE === "github" && !token) {
@@ -137,11 +147,16 @@ export function AdminPanel() {
 
 function LoginGate({
   onSubmit,
+  onCode,
 }: {
-  onSubmit: (email: string, password: string) => Promise<void>;
+  onSubmit: (email: string, password: string) => Promise<string | null>;
+  onCode: (ticket: string, code: string) => Promise<void>;
 }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  /** Билет между паролем и кодом. Только здесь: ни в адрес, ни в localStorage. */
+  const [ticket, setTicket] = useState<string | null>(null);
+  const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -150,7 +165,12 @@ function LoginGate({
     setBusy(true);
     setError(null);
     try {
-      await onSubmit(email.trim(), password);
+      const issued = await onSubmit(email.trim(), password);
+      // Пароль больше не нужен, и держать его в памяти незачем.
+      if (issued) {
+        setTicket(issued);
+        setPassword("");
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
       setPassword("");
@@ -159,57 +179,132 @@ function LoginGate({
     }
   };
 
+  const backToPassword = (message: string | null = null) => {
+    setTicket(null);
+    setCode("");
+    setError(message);
+  };
+
+  const submitCode = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!ticket) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onCode(ticket, code.trim());
+    } catch (cause) {
+      if (cause instanceof TicketExpiredError) {
+        backToPassword(cause.message);
+      } else {
+        setError(cause instanceof Error ? cause.message : String(cause));
+        setCode("");
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const errorNote = error && (
+    <p className="mt-4 flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-900">
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+      <span>{error}</span>
+    </p>
+  );
+
   return (
     <div className="bg-muted/40 flex min-h-screen items-center justify-center px-5">
-      <form
-        onSubmit={submit}
-        className="border-border bg-background w-full max-w-sm rounded-2xl border p-6"
-      >
-        <h1 className="font-display text-xl">Вход в панель</h1>
-        <p className="text-muted-foreground mt-2 text-sm">
-          Кейсы, блог и каталог услуг сайта it-optimization.ru.
-        </p>
-
-        <label className="mt-6 block text-sm font-medium">
-          Почта
-          <input
-            type="email"
-            required
-            autoComplete="username"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            className="border-border focus:border-foreground mt-1.5 h-11 w-full rounded-lg border px-3 text-base outline-none"
-          />
-        </label>
-
-        <label className="mt-4 block text-sm font-medium">
-          Пароль
-          <input
-            type="password"
-            required
-            autoComplete="current-password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            className="border-border focus:border-foreground mt-1.5 h-11 w-full rounded-lg border px-3 text-base outline-none"
-          />
-        </label>
-
-        {error && (
-          <p className="mt-4 flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-900">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-            <span>{error}</span>
-          </p>
-        )}
-
-        <button
-          type="submit"
-          disabled={busy}
-          className="bg-foreground text-background hover:bg-accent hover:text-accent-foreground mt-6 inline-flex h-11 w-full cursor-pointer items-center justify-center gap-2 rounded-full text-sm font-medium transition-colors disabled:opacity-50"
+      {/* Разные key: иначе React переделал бы поле почты в поле кода, autoFocus не
+          сработал бы, а кнопка «Войти» перетекла бы в «Назад» через чёрный фон. */}
+      {ticket ? (
+        <form
+          key="code"
+          onSubmit={submitCode}
+          className="border-border bg-background w-full max-w-sm rounded-2xl border p-6"
         >
-          {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-          Войти
-        </button>
-      </form>
+          <h1 className="font-display text-xl">Код подтверждения</h1>
+          <p className="text-muted-foreground mt-2 text-sm">
+            Шесть цифр из приложения. Телефона нет — код восстановления.
+          </p>
+
+          {/* inputMode="text": в коде восстановления есть буквы. */}
+          <label className="mt-6 block text-sm font-medium">
+            Код
+            <input
+              required
+              autoFocus
+              autoComplete="one-time-code"
+              inputMode="text"
+              value={code}
+              onChange={(event) => setCode(event.target.value)}
+              className="border-border focus:border-foreground mt-1.5 h-11 w-full rounded-lg border px-3 text-base outline-none"
+            />
+          </label>
+
+          {errorNote}
+
+          <button
+            type="submit"
+            disabled={busy}
+            className="bg-foreground text-background hover:bg-accent hover:text-accent-foreground mt-6 inline-flex h-11 w-full cursor-pointer items-center justify-center gap-2 rounded-full text-sm font-medium transition-colors disabled:opacity-50"
+          >
+            {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+            Войти
+          </button>
+          <button
+            type="button"
+            onClick={() => backToPassword()}
+            className="text-muted-foreground hover:text-foreground mt-3 w-full cursor-pointer text-sm transition-colors"
+          >
+            Назад
+          </button>
+        </form>
+      ) : (
+        <form
+          key="password"
+          onSubmit={submit}
+          className="border-border bg-background w-full max-w-sm rounded-2xl border p-6"
+        >
+          <h1 className="font-display text-xl">Вход в панель</h1>
+          <p className="text-muted-foreground mt-2 text-sm">
+            Кейсы, блог и каталог услуг сайта it-optimization.ru.
+          </p>
+
+          <label className="mt-6 block text-sm font-medium">
+            Почта
+            <input
+              type="email"
+              required
+              autoComplete="username"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              className="border-border focus:border-foreground mt-1.5 h-11 w-full rounded-lg border px-3 text-base outline-none"
+            />
+          </label>
+
+          <label className="mt-4 block text-sm font-medium">
+            Пароль
+            <input
+              type="password"
+              required
+              autoComplete="current-password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              className="border-border focus:border-foreground mt-1.5 h-11 w-full rounded-lg border px-3 text-base outline-none"
+            />
+          </label>
+
+          {errorNote}
+
+          <button
+            type="submit"
+            disabled={busy}
+            className="bg-foreground text-background hover:bg-accent hover:text-accent-foreground mt-6 inline-flex h-11 w-full cursor-pointer items-center justify-center gap-2 rounded-full text-sm font-medium transition-colors disabled:opacity-50"
+          >
+            {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+            Войти
+          </button>
+        </form>
+      )}
     </div>
   );
 }
