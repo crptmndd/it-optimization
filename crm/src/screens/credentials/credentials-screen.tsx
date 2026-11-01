@@ -714,6 +714,8 @@ function CredentialModal({
    * вслепую и потом искать, что изменилось.
    */
   const paidUntil = nextRenewalDate(values.renewsDate);
+  /** То же условие, что в строке списка, только по значениям формы. */
+  const payable = values.renewsDate !== "" || parseAmount(values.amount) !== null;
 
   function set<K extends keyof FormValues>(key: K, value: FormValues[K]) {
     setValues((current) => ({ ...current, [key]: value }));
@@ -956,18 +958,20 @@ function CredentialModal({
             или подписки означает ровно одно — срок сдвинулся вперёд. Кнопка
             только подставляет дату в форму; записывается она обычным
             «Сохранить», поэтому промах отменяется закрытием окна. */}
-        <div className="mt-3 flex justify-center">
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => set("renewsDate", paidUntil)}
-            disabled={saving || values.renewsDate === paidUntil}
-            title={`Продлить срок до ${formatDate(fromDateInputValue(paidUntil) ?? "")}`}
-          >
-            <Check size={15} strokeWidth={2.5} />
-            Оплатил до {formatDate(fromDateInputValue(paidUntil) ?? "")}
-          </Button>
-        </div>
+        {payable && (
+          <div className="mt-3 flex justify-center">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => set("renewsDate", paidUntil)}
+              disabled={saving || values.renewsDate === paidUntil}
+              title={`Продлить срок до ${formatDate(fromDateInputValue(paidUntil) ?? "")}`}
+            >
+              <Check size={15} strokeWidth={2.5} />
+              Оплатил до {formatDate(fromDateInputValue(paidUntil) ?? "")}
+            </Button>
+          </div>
+        )}
       </form>
     </Modal>
   );
