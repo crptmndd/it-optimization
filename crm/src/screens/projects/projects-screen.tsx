@@ -53,7 +53,9 @@ import {
   valuesToProjectInput,
   type ProjectFormValues,
 } from "./project-form";
+import { ProjectBilling } from "./project-billing";
 import { ProjectInvoices } from "./project-invoices";
+import { ProjectStages } from "./project-stages";
 
 const TABS = [
   { key: "all", label: "Все", filters: { scope: "all" } },
@@ -260,6 +262,23 @@ export function ProjectsScreen() {
 
   useEffect(load, [load]); // Переход из глобального поиска: ?open=<id> открывает нужную карточку.
   useOpenFromSearch(projects, setEditing);
+
+  /**
+   * Блок оплаты сохраняется сам, без общей кнопки, и окно при этом остаётся
+   * открытым. Форма не сбрасывается: `initial` читается только при монтировании.
+   */
+  const refreshOpened = useCallback(
+    (id: string) => {
+      load();
+      getProject(id)
+        .then(({ project }) =>
+          // Окно могли успеть закрыть, и ответ не должен открывать его заново.
+          setEditing((current) => (current?.id === id ? project : current)),
+        )
+        .catch(() => {});
+    },
+    [load],
+  );
   useFocusFromLink(projects !== null);
 
   useEffect(() => {
@@ -408,9 +427,11 @@ export function ProjectsScreen() {
             setPrefillStatus(null);
           }}
           onSubmit={async (values) => {
-            await createProject(valuesToProjectInput(values));
+            const project = await createProject(valuesToProjectInput(values));
             setCreating(false);
             setPrefillStatus(null);
+            // Сумма задаётся в карточке, поэтому туда и ведём.
+            if (project.payment.mode !== "none") setEditing(project);
             load();
           }}
         />
@@ -420,12 +441,18 @@ export function ProjectsScreen() {
         <ProjectModal
           title="Проект"
           clients={clients}
-          projectId={editing.id}
+          project={editing}
           initial={projectToValues(editing)}
           onClose={() => setEditing(null)}
+          onChanged={() => refreshOpened(editing.id)}
           onSubmit={async (values) => {
-            await updateProject(editing.id, valuesToProjectInput(values));
-            setEditing(null);
+            const project = await updateProject(editing.id, valuesToProjectInput(values));
+            // Смена режима оплаты открыла новый блок: окно остаётся, иначе сумму
+            // пришлось бы искать, открывая проект заново.
+            const opened =
+              project.payment.mode !== "none" &&
+              project.payment.mode !== editing.payment.mode;
+            setEditing(opened ? project : null);
             load();
           }}
           onDelete={async () => {
@@ -492,17 +519,24 @@ function ProjectModal({
   title,
   initial,
   clients,
-  projectId,
+  project,
   onClose,
+  onChanged,
   onSubmit,
   onDelete,
 }: {
   title: string;
   initial: ProjectFormValues;
   clients: Client[];
-  /** Есть только у сохранённого проекта — счета вешать не на что, пока его нет. */
-  projectId?: string;
+  /**
+   * Есть только у сохранённого проекта — счета вешать не на что, пока его нет.
+   * Блоки оплаты строятся по нему, а не по значениям формы: выбранный, но не
+   * сохранённый вид работы этапов ещё не создал.
+   */
+  project?: Project;
   onClose: () => void;
+  /** Блок карточки сохранил своё без общей кнопки. */
+  onChanged?: () => void;
   onSubmit: (values: ProjectFormValues) => Promise<void>;
   onDelete?: () => Promise<void>;
 }) {
@@ -518,6 +552,8 @@ function ProjectModal({
       await onSubmit(values);
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Не удалось сохранить");
+    } finally {
+      // Окно может остаться открытым и после успеха: см. onSubmit у карточки.
       setSaving(false);
     }
   }
@@ -540,15 +576,29 @@ function ProjectModal({
       <form onSubmit={handleSubmit}>
         <ProjectFields values={values} onChange={setValues} clients={clients} />
 
-        {projectId && (
+        {project && (
           <>
+            {project.payment.mode === "monthly" && (
+              <div className="mt-4">
+                <ProjectBilling project={project} onSaved={() => onChanged?.()} />
+              </div>
+            )}
+            <ProjectStages project={project} onChanged={() => onChanged?.()} />
             <div className="mt-4">
-              <ProjectInvoices projectId={projectId} defaultCurrency={values.currency} />
+              {/* key: сохранённая сумма могла дойти до записей текущего месяца, а
+                  валюта и режим читаются только при монтировании. */}
+              <ProjectInvoices
+                key={project.updatedAt}
+                projectId={project.id}
+                defaultCurrency={project.currency}
+                mode={project.payment.mode}
+                onChanged={onChanged}
+              />
             </div>
             <div className="mt-4">
               <NotesPanel
-                load={async () => (await getProject(projectId)).notes}
-                add={(body) => addProjectNote(projectId, body)}
+                load={async () => (await getProject(project.id)).notes}
+                add={(body) => addProjectNote(project.id, body)}
                 hint="Пока пусто. Сюда — договорённости с клиентом и решения по проекту."
               />
             </div>

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { Client } from "@/api/clients";
 import {
   PROJECT_STATUSES,
@@ -7,9 +8,7 @@ import {
   type ProjectInput,
   type ProjectStatus,
 } from "@/api/projects";
-import { CurrencySelect } from "@/components/currency-select";
 import { DeveloperPicker } from "@/components/developer-picker";
-import { amountToInput, parseAmount, sanitizeAmount, type Currency } from "@/lib/money";
 import { Field, Input, Select, Textarea } from "@/components/ui";
 import { fromDateInputValue, toDateInputValue } from "@/lib/dates";
 
@@ -27,9 +26,6 @@ export interface ProjectFormValues {
   contractNumber: string;
   contractDate: string;
   billingMonthly: boolean;
-  currency: Currency;
-  /** Строкой, а не числом: пустое поле ввода — это "", а не 0. */
-  monthlyAmount: string;
 }
 
 export function emptyProjectValues(): ProjectFormValues {
@@ -46,8 +42,6 @@ export function emptyProjectValues(): ProjectFormValues {
     contractNumber: "",
     contractDate: "",
     billingMonthly: false,
-    currency: "rub",
-    monthlyAmount: "",
   };
 }
 
@@ -64,12 +58,17 @@ export function projectToValues(project: Project): ProjectFormValues {
     workType: project.workType ?? "",
     contractNumber: project.contractNumber ?? "",
     contractDate: toDateInputValue(project.contractDate),
+    // Как есть, без подстановки true для сопровождения: она ушла бы на сервер при
+    // обычном сохранении и включила бы признак у старого проекта.
     billingMonthly: project.billingMonthly,
-    currency: project.currency,
-    monthlyAmount: amountToInput(project.monthlyAmountMinor),
   };
 }
 
+/**
+ * Суммы и валюты здесь нет: они живут в блоке оплаты карточки, со своей кнопкой.
+ * Если бы форма слала их тоже, общий «Сохранить» перезаписывал бы то, что там
+ * уже сохранили.
+ */
 export function valuesToProjectInput(values: ProjectFormValues): ProjectInput {
   return {
     title: values.title.trim(),
@@ -84,9 +83,6 @@ export function valuesToProjectInput(values: ProjectFormValues): ProjectInput {
     contractNumber: values.contractNumber.trim() || null,
     contractDate: fromDateInputValue(values.contractDate),
     billingMonthly: values.billingMonthly,
-    currency: values.currency,
-    // Пустое поле — это «не задано», а не ноль.
-    monthlyAmountMinor: parseAmount(values.monthlyAmount),
   };
 }
 
@@ -102,6 +98,24 @@ export function ProjectFields({
   function set<K extends keyof ProjectFormValues>(key: K, value: ProjectFormValues[K]) {
     onChange({ ...values, [key]: value });
   }
+
+  /** Режим оплаты следует за видом работы, то же правило держит сервер. */
+  function setWorkType(workType: string) {
+    const billingMonthly =
+      workType === "support"
+        ? true
+        : workType === "contract"
+          ? false
+          : values.billingMonthly;
+    onChange({ ...values, workType, billingMonthly });
+  }
+
+  const support = values.workType === "support";
+  // Запоминается при открытии: иначе у старого договора галочка исчезала бы прямо
+  // под курсором, и случайное снятие было бы нечем вернуть.
+  const [oldContractFlag] = useState(
+    values.workType === "contract" && values.billingMonthly,
+  );
 
   return (
     <div className="space-y-4">
@@ -175,10 +189,17 @@ export function ProjectFields({
             />
           </Field>
 
-          <Field label="Вид работы">
+          <Field
+            label="Вид работы"
+            hint={
+              values.workType === "contract"
+                ? "Три этапа оплаты: суммы — в карточке проекта"
+                : undefined
+            }
+          >
             <Select
               value={values.workType}
-              onChange={(workType) => set("workType", workType)}
+              onChange={setWorkType}
               options={[
                 { value: "", label: "Не указан" },
                 ...WORK_TYPES.map((type) => ({ value: type.value, label: type.label })),
@@ -206,41 +227,26 @@ export function ProjectFields({
           </Field>
         </div>
 
-        <label className="flex cursor-pointer items-start gap-2.5">
-          <input
-            type="checkbox"
-            checked={values.billingMonthly}
-            onChange={(event) => set("billingMonthly", event.target.checked)}
-            className="accent-accent mt-0.5 size-4 shrink-0"
-          />
-          <span className="text-sm">
-            Счёт каждый месяц
-            <span className="text-muted-foreground mt-0.5 block text-sm">
-              Бот напомнит в общем чате, если за текущий месяц счёта ещё нет
+        {/* На договоре галочка скрыта, только если не стоит: старый договор с
+            галочкой должен её видеть и иметь возможность снять. */}
+        {(values.workType !== "contract" || values.billingMonthly || oldContractFlag) && (
+          <label className="flex cursor-pointer items-start gap-2.5">
+            <input
+              type="checkbox"
+              checked={values.billingMonthly || support}
+              disabled={support}
+              onChange={(event) => set("billingMonthly", event.target.checked)}
+              className="accent-accent mt-0.5 size-4 shrink-0"
+            />
+            <span className="text-sm">
+              Счёт каждый месяц
+              <span className="text-muted-foreground mt-0.5 block text-sm">
+                {support
+                  ? "Сопровождение всегда помесячно"
+                  : "В начале месяца счёт и акт появятся сами. Сумма — в карточке проекта"}
+              </span>
             </span>
-          </span>
-        </label>
-
-        {values.billingMonthly && (
-          <Field
-            label="Сумма в месяц"
-            hint="Можно с копейками: 45000 или 5,19. Пустое — не задано"
-          >
-            <div className="flex gap-2">
-              <Input
-                value={values.monthlyAmount}
-                onChange={(event) =>
-                  set("monthlyAmount", sanitizeAmount(event.target.value))
-                }
-                inputMode="numeric"
-                placeholder="45000"
-              />
-              <CurrencySelect
-                value={values.currency}
-                onChange={(currency) => set("currency", currency)}
-              />
-            </div>
-          </Field>
+          </label>
         )}
       </div>
 

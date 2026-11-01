@@ -24,6 +24,18 @@ export const PROJECT_STATUS_LABELS: Record<ProjectStatus, string> = {
 
 export const CLOSED_PROJECT_STATUSES: readonly ProjectStatus[] = ["done", "cancelled"];
 
+/** Как платит проект: этапами, помесячно или никак. Правило живёт на сервере. */
+export interface ProjectPayment {
+  mode: "stages" | "monthly" | "none";
+  stages: {
+    paid: number;
+    total: number;
+    next: { position: number; amountMinor: number | null; currency: Currency } | null;
+  } | null;
+  /** Счёт за текущий месяц: missing — записи нет. */
+  monthly: { period: string; status: "paid" | "unpaid" | "missing" } | null;
+}
+
 export interface Project {
   /** Последняя заметка — приходит только в списках. */
   note?: NoteBrief | null;
@@ -54,6 +66,8 @@ export interface Project {
    */
   unbilledPeriod: string | null;
   unbilledCount: number;
+  archivedAt: string | null;
+  payment: ProjectPayment;
 
   caseId: string | null;
   openTaskCount: number;
@@ -131,22 +145,99 @@ export interface InvoiceInput {
   note?: string | null;
 }
 
-/** Счёт вместе с проектом, к которому относится, — для сквозного списка. */
-export interface InvoiceWithProject extends Invoice {
-  project: { id: string; title: string; client: string | null };
+/** Этап договора. Порядок оплаты проверяет сервер, здесь только его ответ. */
+export interface Stage {
+  id: string;
+  position: number;
+  amountMinor: number | null;
+  currency: Currency;
+  issuedAt: string | null;
+  paidAt: string | null;
+  note: string | null;
+  /** Можно отметить оплату. */
+  payable: boolean;
+  /** Можно снять оплату. */
+  unpayable: boolean;
+}
+
+export interface StagesResult {
+  stages: Stage[];
+  totals: Totals;
+}
+
+export type StageAmounts = { currency?: Currency } & (
+  { totalMinor: number | null } | { amounts: (number | null)[] }
+);
+
+export interface StageInput {
+  paidAt?: string | null;
+  issuedAt?: string | null;
+  note?: string | null;
+}
+
+export async function getStages(projectId: string): Promise<StagesResult> {
+  return api.get<StagesResult>(`/projects/${projectId}/stages`);
+}
+
+export async function saveStageAmounts(
+  projectId: string,
+  input: StageAmounts,
+): Promise<StagesResult> {
+  return api.put<StagesResult>(`/projects/${projectId}/stages`, input);
+}
+
+export async function updateStage(
+  projectId: string,
+  position: number,
+  input: StageInput,
+): Promise<{ stage: Stage; stages: Stage[] }> {
+  return api.patch<{ stage: Stage; stages: Stage[] }>(
+    `/projects/${projectId}/stages/${position}`,
+    input,
+  );
+}
+
+export type BillScope = "due" | "paid" | "all";
+
+/** Строка экрана «Счета»: обычный счёт либо этап договора. */
+export interface Bill {
+  id: string;
+  source: "invoice" | "stage";
+  /** ГГГГ-ММ; у этапа null. */
+  period: string | null;
+  stage: {
+    position: number;
+    total: number;
+    payable: boolean;
+    unpayable: boolean;
+    /** Какой этап мешает нажать кнопку оплаты. */
+    blockedBy: number | null;
+  } | null;
+  amountMinor: number | null;
+  currency: Currency;
+  issuedAt: string | null;
+  paidAt: string | null;
+  note: string | null;
+  createdAt: string;
+  project: {
+    id: string;
+    title: string;
+    status: ProjectStatus;
+    archived: boolean;
+    developers: string[];
+    client: string | null;
+    clientId: string | null;
+  };
 }
 
 /**
- * Все счета поверх проектов. Без этого «кто нам должен» отвечается только
- * обходом каждого проекта по очереди — то есть не отвечается.
+ * Все счета поверх проектов. Итог считает сервер и по каждой валюте отдельно:
+ * складывать рубли с долларами нечем, а выдача может быть обрезана.
  */
-export async function listAllInvoices(
-  scope: "unpaid" | "all" = "unpaid",
-): Promise<{ invoices: InvoiceWithProject[]; totals: Totals }> {
-  // Итог по каждой валюте отдельно: складывать рубли с долларами нечем.
-  return api.get<{ invoices: InvoiceWithProject[]; totals: Totals }>(
-    `/invoices?scope=${scope}`,
-  );
+export async function listBills(
+  scope: BillScope,
+): Promise<{ invoices: Bill[]; totals: Totals }> {
+  return api.get<{ invoices: Bill[]; totals: Totals }>(`/invoices?scope=${scope}`);
 }
 
 export async function listInvoices(projectId: string): Promise<Invoice[]> {
