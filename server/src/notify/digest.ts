@@ -158,8 +158,10 @@ export async function buildDigest(): Promise<string | null> {
     ...block(
       `💸 Счета не выставлены (${projects.unbilled.length})`,
       projects.unbilled.map((project) => {
+        // За все пропущенные месяцы, как на экранах: рядом с числом месяцев сумма за
+        // один читалась бы как итог.
         const amount = project.monthlyAmountMinor
-          ? ` — ${formatMoney(project.monthlyAmountMinor, project.currency)}`
+          ? ` — ${formatMoney(project.monthlyAmountMinor * project.unbilledCount, project.currency)}`
           : "";
         const client = project.client ? ` · ${escapeHtml(project.client.name)}` : "";
         // Сколько месяцев пропущено — важнее самого раннего: один месяц это
