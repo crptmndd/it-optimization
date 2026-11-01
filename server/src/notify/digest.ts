@@ -1,15 +1,16 @@
 import { formatMoney } from "../crm/currency.js";
+import type { BillDto } from "../crm/projects/bills.js";
 import { collectToday, isQuietSnapshot } from "../crm/today.js";
 import { env } from "../env.js";
 import { escapeHtml, sendMessage, TelegramError } from "./telegram.js";
-import { daysOverdue, daysUntil, pluralDays } from "./zone.js";
+import { daysOverdue, daysUntil, periodTitle, pluralDays } from "./zone.js";
 
 /**
  * Утренняя сводка в общий чат.
  *
- * Личных дайджестов нет: разработчики работают под общим входом и значатся
- * именами, так что «что делать мне» система вычислить не может. Зато у каждой
- * строки указано, на ком она висит, — в чате на троих это и нужно.
+ * Личных дайджестов нет: исполнители значатся именами, а не учётками, так что
+ * «что делать мне» система вычислить не может. Зато у каждой строки указано, на
+ * ком она висит, — в общем чате команды это и нужно.
  *
  * Если напоминать не о чем, сообщение не отправляется вовсе. Ежедневное «всё
  * чисто» приучает не открывать бота, и тогда важное сообщение тоже пролистают.
@@ -22,10 +23,13 @@ interface Log {
   error: (obj: unknown, msg: string) => void;
 }
 
-/** Имя необязательное, поэтому запасной вариант — почта. */
-function personName(user: { name: string | null; email: string }): string {
-  return user.name?.trim() || user.email;
-}
+/**
+ * Предел строк в блоке и символов в сообщении. Телеграм не принимает текст длиннее
+ * 4096 символов, а его ошибку 400 код читает как «чат недоступен»: сводка молча
+ * пропала бы как раз в тот день, когда горит больше всего.
+ */
+const MAX_LINES = 15;
+const MAX_MESSAGE_LENGTH = 4000;
 
 /** «· Егор, Вадим» или «· ничья» — кто отвечает, приписью в конце строки. */
 function who(names: string[], nobody: string): string {
@@ -43,7 +47,34 @@ function lateSuffix(date: Date | null): string {
 }
 
 function block(title: string, lines: string[]): string[] {
-  return lines.length ? [`<b>${title}</b>`, ...lines, ""] : [];
+  if (lines.length === 0) return [];
+  const rest = lines.length - MAX_LINES;
+  return [
+    `<b>${title}</b>`,
+    ...lines.slice(0, MAX_LINES),
+    ...(rest > 0 ? [`…и ещё ${rest}`] : []),
+    "",
+  ];
+}
+
+/**
+ * Режем по строкам, а не по символам: каждая строка сама закрывает свои теги, и
+ * обрезка посреди строки дала бы ту же ошибку 400. Срезается низ сводки: блоки
+ * там стоят по убыванию срочности.
+ */
+function fitMessage(lines: string[]): string {
+  const text = lines.join("\n").trimEnd();
+  if (text.length <= MAX_MESSAGE_LENGTH) return text;
+
+  const tail = "…не всё поместилось, остальное в CRM";
+  const kept: string[] = [];
+  let length = tail.length;
+  for (const line of lines) {
+    length += line.length + 1;
+    if (length > MAX_MESSAGE_LENGTH) break;
+    kept.push(line);
+  }
+  return [...kept, tail].join("\n");
 }
 
 export async function buildDigest(): Promise<string | null> {
@@ -52,16 +83,7 @@ export async function buildDigest(): Promise<string | null> {
   // между двумя проверками см. у них самих.
   if (isQuietSnapshot(snapshot)) return null;
 
-  const { leads, tasks, credentials, projects } = snapshot;
-
-  const leadLine = (lead: (typeof leads.overdue)[number], withLate: boolean) => {
-    const what = lead.nextActionNote?.trim();
-    const head = what ? `<b>${escapeHtml(what)}</b> — ` : "";
-    const name = escapeHtml(lead.name?.trim() || lead.contact);
-    const late = withLate ? lateSuffix(lead.nextActionAt) : "";
-    const owner = lead.owner ? ` · ${escapeHtml(personName(lead.owner))}` : " · <i>ничей</i>";
-    return `• ${head}${name}${late}${owner}`;
-  };
+  const { tasks, credentials, projects, money } = snapshot;
 
   const credentialLine = (item: (typeof credentials.urgent)[number]) => {
     const left = item.renewsAt ? daysUntil(item.renewsAt, env.TIMEZONE) : 0;
@@ -90,20 +112,19 @@ export async function buildDigest(): Promise<string | null> {
     return `• ${urgent}${escapeHtml(task.title)}${where}${late}${who(task.developers, "ничья")}`;
   };
 
+  const billLine = (bill: BillDto) => {
+    const what = bill.stage
+      ? `этап ${bill.stage.position} из ${bill.stage.total}`
+      : periodTitle(bill.period ?? "");
+    const amount =
+      bill.amountMinor === null
+        ? "сумма не указана"
+        : formatMoney(bill.amountMinor, bill.currency);
+    const client = bill.project.client ? ` · ${escapeHtml(bill.project.client)}` : "";
+    return `• ${escapeHtml(bill.project.title)} (${what}) — ${amount}${client}`;
+  };
+
   const blocks = [
-    ...block(
-      `Лиды просрочены (${leads.overdue.length})`,
-      leads.overdue.map((lead) => leadLine(lead, true)),
-    ),
-    ...block(
-      `Лиды на сегодня (${leads.today.length})`,
-      leads.today.map((lead) => leadLine(lead, false)),
-    ),
-    ...block(
-      `Никто не взял (${leads.unclaimed.length})`,
-      leads.unclaimed.map((lead) => leadLine(lead, false)),
-    ),
-    // Задачи после лидов: потерянный лид стоит дороже сдвинутой задачи.
     ...block(
       `Задачи просрочены (${tasks.overdue.length})`,
       tasks.overdue.map((task) => taskLine(task, true)),
@@ -111,6 +132,10 @@ export async function buildDigest(): Promise<string | null> {
     ...block(
       `Задачи на сегодня (${tasks.today.length})`,
       tasks.today.map((task) => taskLine(task, false)),
+    ),
+    ...block(
+      `Без исполнителя (${tasks.unassigned.length})`,
+      tasks.unassigned.map((task) => taskLine(task, false)),
     ),
     ...block(
       `Проекты — срок (${projects.urgent.length})`,
@@ -128,7 +153,7 @@ export async function buildDigest(): Promise<string | null> {
       `🔑 Продлить (${credentials.urgent.length})`,
       credentials.urgent.map(credentialLine),
     ),
-    // Счета последними, но со значком: забытый счёт — это недополученные
+    // Деньги последними, но со значком: забытый счёт — это недополученные
     // деньги, и среди сроков его легко пролистать.
     ...block(
       `💸 Счета не выставлены (${projects.unbilled.length})`,
@@ -146,16 +171,25 @@ export async function buildDigest(): Promise<string | null> {
         return `• ${escapeHtml(project.title)}${months}${amount}${client}`;
       }),
     ),
+    // Только давние: свежий счёт — обычное дело, клиент платит не в тот же день.
+    ...block(
+      `⏳ Не оплачено (${money.unpaidUrgent.length})`,
+      money.unpaidUrgent.map(billLine),
+    ),
     // Самый низ и без значка — это справка, а не повод действовать сегодня.
     // Сводку такие строки не поднимают (см. `isQuietSnapshot`), но раз она уже
-    // вышла, пусть весь горизонт продлений будет виден целиком.
+    // вышла, пусть следующие этапы и весь горизонт продлений будут видны целиком.
+    ...block(
+      `Следующие этапы (${money.nextStages.length})`,
+      money.nextStages.map(billLine),
+    ),
     ...block(
       `Скоро продлить (${credentials.later.length})`,
       credentials.later.map(credentialLine),
     ),
   ];
 
-  return ["🌅 <b>Что горит</b>", "", ...blocks].join("\n").trimEnd();
+  return fitMessage(["🌅 <b>Что горит</b>", "", ...blocks]);
 }
 
 /** Отправляет сводку в общий чат. */
