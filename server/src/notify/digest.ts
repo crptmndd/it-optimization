@@ -164,10 +164,11 @@ export async function buildDigest(): Promise<string | null> {
         const client = project.client ? ` · ${escapeHtml(project.client.name)}` : "";
         // Сколько месяцев пропущено — важнее самого раннего: один месяц это
         // забывчивость, четыре — потерянные деньги.
+        const first = periodTitle(project.unbilledPeriod);
         const months =
           project.unbilledCount > 1
-            ? ` (${project.unbilledCount} мес., с ${project.unbilledPeriod})`
-            : ` (за ${project.unbilledPeriod})`;
+            ? ` (${project.unbilledCount} мес., первый пропуск: ${first})`
+            : ` (за ${first})`;
         return `• ${escapeHtml(project.title)}${months}${amount}${client}`;
       }),
     ),

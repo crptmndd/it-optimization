@@ -46,6 +46,12 @@ function subject(bill: Bill): string {
   return bill.period ? periodLabel(bill.period) : "";
 }
 
+/** Как на «Сегодня»: месяц в именительном падеже после «с» читается как опечатка. */
+function unbilledSince(project: Project): string {
+  const first = periodLabel(project.unbilledPeriod ?? "");
+  return project.unbilledCount > 1 ? `первый пропуск: ${first}` : `за ${first}`;
+}
+
 function dates(bill: Bill): string {
   const parts = [
     bill.issuedAt ? `выставлен ${formatDate(bill.issuedAt)}` : "не выставлен",
@@ -159,10 +165,7 @@ export function InvoicesScreen() {
                       {project.title}
                     </span>
                     <span className="text-muted-foreground mt-0.5 block truncate text-xs">
-                      {[
-                        project.client?.name,
-                        `с ${periodLabel(project.unbilledPeriod ?? "")}`,
-                      ]
+                      {[project.client?.name, unbilledSince(project)]
                         .filter(Boolean)
                         .join(" · ")}
                     </span>

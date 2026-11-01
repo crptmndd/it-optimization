@@ -55,7 +55,7 @@ import {
 import { cn } from "@/lib/cn";
 import { NoteHint } from "@/components/note-hint";
 import { money } from "@/lib/money";
-import { describeDeadline, formatDate } from "@/lib/dates";
+import { describeDeadline, formatDate, periodLabel } from "@/lib/dates";
 import {
   emptyProjectValues,
   ProjectFields,
@@ -183,7 +183,7 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void
           {project.unbilledPeriod && (
             <span className="bg-danger inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium text-white">
               <Wallet size={11} strokeWidth={2.5} />
-              счёт за {project.unbilledPeriod}
+              счёт за {periodLabel(project.unbilledPeriod)}
             </span>
           )}
         </span>
@@ -608,7 +608,7 @@ function ProjectRow({ project, onOpen }: { project: Project; onOpen: () => void 
 
         {project.unbilledPeriod && (
           <Badge tone="danger" className="mt-0.5">
-            счёт за {project.unbilledPeriod}
+            счёт за {periodLabel(project.unbilledPeriod)}
           </Badge>
         )}
         {deadline && (
