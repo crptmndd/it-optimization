@@ -6,6 +6,6 @@
  * в его списке, так что забытая строка здесь превратится в ошибку сохранения,
  * а не в тихо испорченные данные.
  */
-export const DEVELOPERS = ["Егор", "Вадим", "Камиль"] as const;
+export const DEVELOPERS = ["Егор", "Вадим", "Камиль", "Тимур"] as const;
 
 export type Developer = (typeof DEVELOPERS)[number];
