@@ -21,6 +21,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router";
 import { useAuth, useCurrentUser } from "@/auth/auth-context";
 import { GlobalSearch } from "@/components/global-search";
+import { ScreenBoundary } from "@/components/screen-boundary";
 import { cn } from "@/lib/cn";
 
 /**
@@ -415,7 +416,9 @@ export function Shell() {
             меняет только параметр, и перемонтирование сбросило бы уже
             загруженный список ровно тогда, когда в нём надо открыть карточку. */}
         <div key={pathname} className="crm-rise-in">
-          <Outlet />
+          <ScreenBoundary>
+            <Outlet />
+          </ScreenBoundary>
         </div>
       </main>
     </div>
