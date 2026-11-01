@@ -17,7 +17,15 @@ export interface User {
   email: string;
   name: string | null;
   role: UserRole;
+  twoFactorEnabled: boolean;
+  /** На сервере задан ключ: без него 2FA подключить нельзя. */
+  twoFactorAvailable: boolean;
 }
+
+/** Пароль принят. При включённой 2FA сессии ещё нет: нужен код и этот билет. */
+export type LoginResult = { status: "done" } | { status: "two_factor"; ticket: string };
+
+type LoginResponse = { user: User } | { twoFactorRequired: true; ticket: string };
 
 /**
  * Три состояния вместо `user | null`: пока идёт первая проверка сессии, нельзя
@@ -31,7 +39,10 @@ type AuthState =
 
 interface AuthContextValue {
   state: AuthState;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<LoginResult>;
+  completeTwoFactor: (ticket: string, code: string) => Promise<void>;
+  /** Перечитать пользователя: после подключения 2FA баннер должен уйти сам. */
+  refreshUser: () => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -59,8 +70,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const login = useCallback(async (email: string, password: string) => {
-    const { user } = await api.post<{ user: User }>("/auth/login", { email, password });
+  const login = useCallback(
+    async (email: string, password: string): Promise<LoginResult> => {
+      const result = await api.post<LoginResponse>("/auth/login", { email, password });
+      if ("twoFactorRequired" in result) {
+        return { status: "two_factor", ticket: result.ticket };
+      }
+      setState({ status: "authenticated", user: result.user });
+      return { status: "done" };
+    },
+    [],
+  );
+
+  const completeTwoFactor = useCallback(async (ticket: string, code: string) => {
+    const { user } = await api.post<{ user: User }>("/auth/login/2fa", { ticket, code });
+    setState({ status: "authenticated", user });
+  }, []);
+
+  const refreshUser = useCallback(async () => {
+    const { user } = await api.get<{ user: User }>("/auth/me");
     setState({ status: "authenticated", user });
   }, []);
 
@@ -74,7 +102,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setState({ status: "anonymous" });
   }, []);
 
-  const value = useMemo(() => ({ state, login, logout }), [state, login, logout]);
+  const value = useMemo(
+    () => ({ state, login, completeTwoFactor, refreshUser, logout }),
+    [state, login, completeTwoFactor, refreshUser, logout],
+  );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

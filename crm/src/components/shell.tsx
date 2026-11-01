@@ -12,12 +12,13 @@ import {
   Menu,
   Search,
   Settings,
+  ShieldAlert,
   Sun,
   Trash2,
   X,
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { NavLink, Outlet, useLocation } from "react-router";
+import { Link, NavLink, Outlet, useLocation } from "react-router";
 import { useAuth, useCurrentUser } from "@/auth/auth-context";
 import { GlobalSearch } from "@/components/global-search";
 import { cn } from "@/lib/cn";
@@ -222,6 +223,16 @@ export function Shell() {
   const leadsOnly = user.role === "marketing";
   const { pathname } = useLocation();
   const title = useSectionTitle();
+  /*
+   * Не закрывается: 2FA не принудительная, чтобы никого не запереть, и это
+   * единственное, что о ней напоминает. Маркетологу Доступы закрыты, текст был бы
+   * неправдой, а на самих Настройках он только мешал бы.
+   */
+  const suggestTwoFactor =
+    user.twoFactorAvailable &&
+    !user.twoFactorEnabled &&
+    !leadsOnly &&
+    pathname !== "/settings";
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -390,6 +401,16 @@ export function Shell() {
         ref={main}
         className="min-w-0 flex-1 overflow-y-auto px-4 py-5 sm:px-5 sm:py-6 md:px-8 md:py-8"
       >
+        {suggestTwoFactor && (
+          <Link
+            to="/settings"
+            className="bg-warning-soft text-warning mb-5 flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition hover:opacity-80"
+          >
+            <ShieldAlert size={16} strokeWidth={2} className="shrink-0" />
+            Включите двухфакторный вход: без него пароли в Доступах не открываются
+          </Link>
+        )}
+
         {/* key по пути, а не по всему адресу: `?open=<id>` из «Сегодня» и поиска
             меняет только параметр, и перемонтирование сбросило бы уже
             загруженный список ровно тогда, когда в нём надо открыть карточку. */}

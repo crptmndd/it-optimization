@@ -4,6 +4,8 @@ import { ApiError } from "@/api/client";
 import { BOT_USERNAME, telegramApi, type TelegramStatus } from "@/api/telegram";
 import { Button, ErrorNote } from "@/components/ui";
 import { useCurrentUser } from "@/auth/auth-context";
+import { TeamPanel } from "./settings/team-panel";
+import { TwoFactorPanel } from "./settings/two-factor-panel";
 
 export function SettingsScreen() {
   const user = useCurrentUser();
@@ -57,6 +59,8 @@ export function SettingsScreen() {
     <section className="max-w-2xl">
       <h1 className="text-xl font-bold tracking-tight">Настройки</h1>
       <p className="text-muted-foreground mt-1 text-sm">{user.email}</p>
+
+      <TwoFactorPanel />
 
       {canUseBot && (
         <div className="border-border mt-6 rounded-xl border p-5">
@@ -135,6 +139,8 @@ export function SettingsScreen() {
           </div>
         </div>
       )}
+
+      {user.role === "owner" && <TeamPanel />}
     </section>
   );
 }

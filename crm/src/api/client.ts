@@ -14,6 +14,8 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** Причина отказа, на которую реагирует интерфейс. Текст — только для человека. */
+    readonly code?: string,
   ) {
     super(message);
     this.name = "ApiError";
@@ -51,11 +53,19 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   const payload: unknown = await response.json().catch(() => null);
 
   if (!response.ok) {
+    const body =
+      payload && typeof payload === "object"
+        ? (payload as { error?: unknown; code?: unknown })
+        : {};
+    const code = typeof body.code === "string" ? body.code : undefined;
+    // Отказ по лимиту пишет плагин, и по-английски. Свои 429 приходят с `code`.
     const message =
-      payload && typeof payload === "object" && "error" in payload
-        ? String((payload as { error: unknown }).error)
-        : `Ошибка ${response.status}`;
-    throw new ApiError(response.status, message);
+      response.status === 429 && !code
+        ? "Слишком много попыток. Подождите несколько минут"
+        : body.error !== undefined
+          ? String(body.error)
+          : `Ошибка ${response.status}`;
+    throw new ApiError(response.status, message, code);
   }
 
   return payload as T;
