@@ -4,6 +4,7 @@ import { purgeExpiredSessions } from "./auth/session.js";
 import { prisma } from "./db.js";
 import { canNotify, canPublish, env } from "./env.js";
 import { startBot } from "./notify/bot.js";
+import { startScheduler } from "./notify/scheduler.js";
 
 const app = await buildApp();
 
@@ -33,9 +34,12 @@ const cleanup = setInterval(
 );
 cleanup.unref();
 
+let stopScheduler = () => {};
+
 async function shutdown(signal: string): Promise<void> {
   app.log.info({ signal }, "остановка");
   clearInterval(cleanup);
+  stopScheduler();
   await stopBot();
   await app.close();
   await prisma.$disconnect();
@@ -47,6 +51,7 @@ process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
 try {
   await app.listen({ port: env.PORT, host: "0.0.0.0" });
+  stopScheduler = startScheduler(app.log);
 } catch (cause) {
   app.log.error({ cause }, "не удалось запустить сервер");
   process.exit(1);

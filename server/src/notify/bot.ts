@@ -1,9 +1,8 @@
 import { prisma } from "../db.js";
 import { env } from "../env.js";
-import { buildDigest, sendTeamDigest } from "./digest.js";
+import { buildDigest } from "./digest.js";
 
 import { callBotApi, escapeHtml, trySendMessage } from "./telegram.js";
-import { zonedNow } from "./zone.js";
 
 /**
  * Бот работает на длинных опросах (getUpdates), а не на вебхуках. Вебхук
@@ -128,53 +127,8 @@ async function handleCommand(chatId: string, text: string, log: Log): Promise<vo
   await trySendMessage(chatId, HELP, log);
 }
 
-const DIGEST_JOB = "daily-digest";
-
-/**
- * Планировщик. Отдельного cron-пакета не берём: одна проверка в минуту решает
- * задачу целиком.
- *
- * Условие «время наступило и сегодня ещё не слали» вместо точного совпадения
- * минуты — чтобы перезапуск сервиса в 08:59 не съедал дайджест этого дня.
- * Отметка о рассылке лежит в базе, а не в памяти: иначе каждый перезапуск днём
- * выглядел бы как «сегодня ещё не рассылали».
- */
-async function runDigestIfDue(log: Log): Promise<void> {
-  const { date, time } = zonedNow(env.TIMEZONE);
-  if (time < env.DIGEST_TIME) return;
-
-  const previous = await prisma.jobRun.findUnique({ where: { job: DIGEST_JOB } });
-  if (previous?.ranOn === date) return;
-
-  // Отметку ставим до рассылки, а не после: рассылка идёт по одному сообщению
-  // на человека и может занять дольше минуты, а следующий тик за это время
-  // успел бы начать её заново.
-  await prisma.jobRun.upsert({
-    where: { job: DIGEST_JOB },
-    create: { job: DIGEST_JOB, ranOn: date },
-    update: { ranOn: date },
-  });
-
-  await sendTeamDigest(log);
-}
-
-function startScheduler(log: Log): () => void {
-  const tick = setInterval(
-    () => {
-      runDigestIfDue(log).catch((cause: unknown) => {
-        log.error({ err: cause }, "рассылка дайджеста не удалась");
-      });
-    },
-    60 * 1000,
-  );
-  tick.unref();
-
-  return () => clearInterval(tick);
-}
-
 export function startBot(log: Log): () => Promise<void> {
   const controller = new AbortController();
-  const stopScheduler = startScheduler(log);
   let offset = 0;
 
   async function poll(): Promise<void> {
@@ -212,7 +166,6 @@ export function startBot(log: Log): () => Promise<void> {
   log.info({ digestAt: env.DIGEST_TIME, timeZone: env.TIMEZONE }, "бот уведомлений запущен");
 
   return async () => {
-    stopScheduler();
     controller.abort();
   };
 }

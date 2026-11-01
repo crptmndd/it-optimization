@@ -98,6 +98,23 @@ export function daysUntil(deadline: Date, timeZone: string, now = new Date()): n
   return Math.max(0, Math.round((target - start) / (24 * 60 * 60 * 1000)));
 }
 
+/**
+ * «2026-11» → «ноябрь 2026». Месяц собирается из частей строки и форматируется в
+ * UTC: период — календарный месяц, и `new Date("2026-11-01")` в поясе с
+ * отрицательным смещением дал бы октябрь.
+ */
+export function periodTitle(period: string): string {
+  const [year, month] = period.split("-").map(Number);
+  if (!year || !month) return period;
+  return new Intl.DateTimeFormat("ru-RU", {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  })
+    .format(new Date(Date.UTC(year, month - 1, 1)))
+    .replace(/\s*г\.$/, "");
+}
+
 /** «3 дня», «1 день» — русские окончания, без которых текст выглядит машинным. */
 export function pluralDays(count: number): string {
   const mod100 = count % 100;
