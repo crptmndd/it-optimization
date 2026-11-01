@@ -53,6 +53,15 @@ find "$DIR" -name 'uploads_*.tar.gz' -mtime +$KEEP_DAYS -delete
 
 ls -lh "$DIR" | tail -5
 
-# Восстановление (осознанно, вручную):
+# Восстановление (осознанно, вручную). Только в чистую схему и при остановленном API.
+# Поверх базы с более новой схемой дамп ляжет частично: новые таблицы держат внешние
+# ключи на users и projects, DROP из дампа падает, а psql без ON_ERROR_STOP всё равно
+# вернёт 0. Дальше API не стартует ни на какой версии (P3009 в migrate deploy).
+#
+#   docker compose -f docker-compose.prod.yml stop api
+#   docker compose -f docker-compose.prod.yml exec -T db \
+#     psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'
 #   gunzip -c backups/itopt_ГГГГ-ММ-ДД_ЧЧММ.sql.gz \
-#     | docker compose -f docker-compose.prod.yml exec -T db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+#     | docker compose -f docker-compose.prod.yml exec -T db \
+#       psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+#   docker compose -f docker-compose.prod.yml up -d api
