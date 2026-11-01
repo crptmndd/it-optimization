@@ -63,11 +63,11 @@ export const requireTeam = requireRole("owner", "editor");
 export const requireOwner = requireRole("owner");
 
 /**
- * Пароли открываются только со страницы CRM. Кука общая на домен, а сайт с панелью
- * тоже стоит в WEB_ORIGIN: раньше скрипт на сайте получил бы шифротекст, теперь пароль
- * расшифровывает сервер, и хранимый XSS на сайте дотянулся бы до паролей человека с
- * открытым окном. От `curl` с украденной кукой это не защищает и не должно: для неё
- * есть код.
+ * Пароли и привязка телеграма — только со страницы CRM. Кука общая на домен, а сайт с
+ * панелью тоже стоит в WEB_ORIGIN: раньше скрипт на сайте получил бы шифротекст, теперь
+ * пароль расшифровывает сервер, и хранимый XSS на сайте дотянулся бы до паролей
+ * человека с открытым окном. От `curl` с украденной кукой это не защищает и не должно:
+ * для неё есть код и пароль.
  */
 export async function requireCrmOrigin(
   request: FastifyRequest,
@@ -76,5 +76,5 @@ export async function requireCrmOrigin(
   if (!env.CRM_ORIGIN || request.headers.origin === env.CRM_ORIGIN) return;
   await reply
     .code(403)
-    .send({ error: "Пароли открываются только из CRM", code: "origin_forbidden" });
+    .send({ error: "Это действие доступно только из CRM", code: "origin_forbidden" });
 }

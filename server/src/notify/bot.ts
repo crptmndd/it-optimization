@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { env } from "../env.js";
 import { buildDigest } from "./digest.js";
@@ -41,6 +42,22 @@ const HELP = [
   "Если присылать нечего — молчу.",
 ].join("\n");
 
+/** Привязка открывает `/today` мимо сессий, поэтому оставляет след в журнале. */
+async function auditLink(
+  userId: string,
+  action: "telegram_link" | "telegram_unlink",
+  diff: Prisma.InputJsonValue,
+  log: Log,
+): Promise<void> {
+  try {
+    await prisma.auditLog.create({
+      data: { userId, entity: "users", entityId: userId, action, diff },
+    });
+  } catch (cause) {
+    log.error({ err: cause }, "не удалось записать audit_log");
+  }
+}
+
 async function linkByCode(chatId: string, code: string, log: Log): Promise<void> {
   const user = await prisma.user.findFirst({
     where: {
@@ -71,6 +88,12 @@ async function linkByCode(chatId: string, code: string, log: Log): Promise<void>
     data: { telegramChatId: chatId, telegramLinkCode: null, telegramLinkExpiresAt: null },
   });
 
+  await auditLink(
+    user.id,
+    "telegram_link",
+    { chatId, previousChatId: user.telegramChatId },
+    log,
+  );
   log.info({ email: user.email }, "телеграм привязан");
   await trySendMessage(
     chatId,
@@ -111,6 +134,7 @@ async function handleCommand(chatId: string, text: string, log: Log): Promise<vo
   if (command === "/stop") {
     if (user) {
       await prisma.user.update({ where: { id: user.id }, data: { telegramChatId: null } });
+      await auditLink(user.id, "telegram_unlink", { reason: "stop" }, log);
     }
     await trySendMessage(chatId, "Напоминания отключены. Вернуть — командой /start с кодом из CRM.", log);
     return;

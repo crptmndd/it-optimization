@@ -28,7 +28,7 @@ function errorText(cause: unknown, fallback: string): string {
   return cause instanceof ApiError ? cause.message : fallback;
 }
 
-export function TwoFactorPanel() {
+export function TwoFactorPanel({ onEnabled }: { onEnabled: () => void }) {
   const { refreshUser } = useAuth();
   const [status, setStatus] = useState<TwoFactorStatus | null>(null);
   const [step, setStep] = useState<Step>({ name: "idle" });
@@ -85,6 +85,7 @@ export function TwoFactorPanel() {
       const { recoveryCodes } = await twoFactorApi.enable(code.trim());
       go({ name: "codes", codes: recoveryCodes });
       load();
+      onEnabled();
       // Баннер снимается здесь, а не на «Я сохранил»: человек может и не нажать.
       await refreshUser();
     }, "Не удалось включить");
@@ -205,7 +206,11 @@ export function TwoFactorPanel() {
 
           {step.name === "scan" && (
             <form onSubmit={confirmSetup} className="mt-4">
-              <p className="text-sm">Отсканируйте код в приложении:</p>
+              <p className="text-muted-foreground text-sm">
+                После включения другие входы завершатся, а телеграм надо будет подключить
+                заново.
+              </p>
+              <p className="mt-3 text-sm">Отсканируйте код в приложении:</p>
               {/* Белая подложка обязательна: на тёмной теме QR не читается. */}
               <img
                 src={`data:image/svg+xml;base64,${btoa(step.setup.qrSvg)}`}

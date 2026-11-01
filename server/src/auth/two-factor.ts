@@ -178,12 +178,19 @@ const SETUP_CLEARED = {
   totpFailedAttempts: 0,
 } as const;
 
+/** Чат, привязанный к учётке, читает `/today` мимо сессий. Код снимается вместе с ним. */
+const TELEGRAM_CLEARED = {
+  telegramChatId: null,
+  telegramLinkCode: null,
+  telegramLinkExpiresAt: null,
+} as const;
+
 /** Подключение сброшено: код вводить больше не к чему, интерфейс возвращает к паролю. */
 const sendSetupReset = (reply: FastifyReply, error: string) =>
   fail(reply, 409, "setup_reset", error);
 
 type EnableResult =
-  | { result: "enabled" }
+  | { result: "enabled"; telegramChatId: string | null }
   | { result: "invalid" | "not_started" | "expired" | "unavailable" }
   | { result: "reset"; email: string };
 
@@ -528,7 +535,8 @@ export async function twoFactorRoutes(app: FastifyInstance): Promise<void> {
    * человека. Пятая ошибка и истёкший срок стирают секрет: дальше нужен пароль.
    *
    * Блокировка заодно не даёт двойной отправке выпустить два набора кодов. Остальные
-   * сессии отзываются, потому что они вошли без второго фактора.
+   * сессии отзываются, потому что они вошли без второго фактора. Привязка телеграма
+   * снимается по той же причине: чат читает сводку мимо сессий.
    */
   app.post(
     "/auth/2fa/enable",
@@ -548,6 +556,7 @@ export async function twoFactorRoutes(app: FastifyInstance): Promise<void> {
           where: { id: userId },
           select: {
             email: true,
+            telegramChatId: true,
             totpSecretEnc: true,
             totpEnabledAt: true,
             totpSetupAt: true,
@@ -591,6 +600,7 @@ export async function twoFactorRoutes(app: FastifyInstance): Promise<void> {
             totpLastStep: step,
             totpSetupAt: null,
             totpFailedAttempts: 0,
+            ...TELEGRAM_CLEARED,
           },
         });
         await tx.recoveryCode.deleteMany({ where: { userId } });
@@ -607,7 +617,7 @@ export async function twoFactorRoutes(app: FastifyInstance): Promise<void> {
           where: { userId, revokedAt: null, id: { not: session.id } },
           data: { revokedAt: now },
         });
-        return { result: "enabled" };
+        return { result: "enabled", telegramChatId: user.telegramChatId };
       });
 
       switch (outcome.result) {
@@ -617,6 +627,14 @@ export async function twoFactorRoutes(app: FastifyInstance): Promise<void> {
             entityId: userId,
             action: "2fa_enable",
           });
+          if (outcome.telegramChatId) {
+            await audit(request, {
+              entity: "users",
+              entityId: userId,
+              action: "telegram_unlink",
+              diff: { reason: "2fa_enable" },
+            });
+          }
           noStore(reply);
           return reply.send({ recoveryCodes: codes });
         case "invalid":

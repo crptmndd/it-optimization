@@ -13,7 +13,8 @@ export interface LinkCode {
 
 export const telegramApi = {
   status: () => api.get<TelegramStatus>("/telegram/status"),
-  requestCode: () => api.post<LinkCode>("/telegram/link-code"),
+  requestCode: (password: string) =>
+    api.post<LinkCode>("/telegram/link-code", { password }),
   unlink: () => api.post<void>("/telegram/unlink"),
 };
 

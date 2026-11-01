@@ -18,6 +18,9 @@ import { hashPassword, validatePasswordStrength } from "../auth/password.js";
  * 2FA скрипт не трогает: забытый пароль не повод её снимать. Если учётка переходит к
  * другому человеку, нужен ещё `user:reset-2fa`, иначе вход останется за старым
  * телефоном и старыми кодами.
+ *
+ * Смена пароля снимает привязку телеграма: чат читает сводку мимо сессий, и отзыв
+ * сессий его бы не коснулся. Подключить заново можно в Настройках CRM.
  */
 const ROLES = ["owner", "editor", "marketing"] as const;
 type Role = (typeof ROLES)[number];
@@ -49,7 +52,7 @@ async function main(): Promise<void> {
   const email = emailArg.toLowerCase().trim();
   const existing = await prisma.user.findUnique({
     where: { email },
-    select: { id: true, role: true, disabledAt: true },
+    select: { id: true, role: true, disabledAt: true, telegramChatId: true },
   });
 
   // Правило «Команды» не должно обходиться отсюда: система без владельца не чинится
@@ -100,6 +103,23 @@ async function main(): Promise<void> {
       data: { revokedAt: new Date() },
     }),
     prisma.loginTicket.deleteMany({ where: { userId: user.id } }),
+    prisma.user.update({
+      where: { id: user.id },
+      data: { telegramChatId: null, telegramLinkCode: null, telegramLinkExpiresAt: null },
+    }),
+    ...(existing?.telegramChatId
+      ? [
+          prisma.auditLog.create({
+            data: {
+              userId: user.id,
+              entity: "users",
+              entityId: user.id,
+              action: "telegram_unlink",
+              diff: { reason: "password_change" },
+            },
+          }),
+        ]
+      : []),
   ]);
 
   console.log(`Готово: ${user.email} (${user.role})`);
