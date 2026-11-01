@@ -31,7 +31,7 @@ interface TelegramUpdate {
 }
 
 const HELP = [
-  "Я напоминаю о лидах, про которые пора что-то сделать.",
+  "Я напоминаю о задачах, сроках и деньгах.",
   "",
   "<b>/today</b> — что горит прямо сейчас",
   "<b>/chatid</b> — идентификатор этого чата",
@@ -117,8 +117,15 @@ async function handleCommand(chatId: string, text: string, log: Log): Promise<vo
   }
 
   if (command === "/today") {
-    // Сводка общая, поэтому привязка для неё не нужна: спросить «что горит»
-    // может любой, кто и так сидит в рабочем чате.
+    // Сводка про деньги и клиентов: только рабочий чат и действующая команда.
+    // Бот отвечает любому аккаунту телеграма, поэтому проверка нужна здесь:
+    // маркетолог и отключённая учётка до этих данных в CRM не дойдут.
+    const member = user && !user.disabledAt && user.role !== "marketing";
+    if (chatId !== env.TELEGRAM_TEAM_CHAT_ID && !member) {
+      await trySendMessage(chatId, "Сводка доступна только команде.", log);
+      return;
+    }
+
     const digest = await buildDigest();
     await trySendMessage(chatId, digest ?? "Ничего не горит. Свободны.", log);
     return;
