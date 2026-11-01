@@ -19,6 +19,7 @@ import {
   valuesToClientInput,
   type ClientFormValues,
 } from "./client-form";
+import { ClientProjects } from "./client-projects";
 
 const CONTACT_LABELS = new Map<string, string>(
   CONTACT_TYPES.map((type) => [type.value, type.label]),
@@ -112,8 +113,10 @@ export function ClientsScreen() {
       {editing && (
         <ClientModal
           title="Клиент"
+          client={editing}
           initial={clientToValues(editing)}
           onClose={() => setEditing(null)}
+          onChanged={load}
           onSubmit={async (values) => {
             await updateClient(editing.id, valuesToClientInput(values));
             setEditing(null);
@@ -171,14 +174,20 @@ function ClientRow({ client, onOpen }: { client: Client; onOpen: () => void }) {
 
 function ClientModal({
   title,
+  client,
   initial,
   onClose,
+  onChanged,
   onSubmit,
   onDelete,
 }: {
   title: string;
+  /** Есть только у сохранённого клиента: привязывать проект пока не к кому. */
+  client?: Client;
   initial: ClientFormValues;
   onClose: () => void;
+  /** Блок проектов сохранил своё без общей кнопки. */
+  onChanged?: () => void;
   onSubmit: (values: ClientFormValues) => Promise<void>;
   onDelete?: () => Promise<void>;
 }) {
@@ -217,6 +226,14 @@ function ClientModal({
     <Modal title={title} onClose={onClose}>
       <form onSubmit={handleSubmit}>
         <ClientFields values={values} onChange={setValues} />
+
+        {client && (
+          <ClientProjects
+            clientId={client.id}
+            clientName={client.name}
+            onChanged={() => onChanged?.()}
+          />
+        )}
 
         {error && (
           <div className="mt-4">
