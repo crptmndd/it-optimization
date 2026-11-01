@@ -18,7 +18,7 @@ const idParams = z.object({ id: z.string().uuid() });
 
 /** Проекты подтягиваются только ради счётчиков в списке — отсюда узкий select. */
 const WITH_PROJECT_STATUSES = {
-  projects: { where: { deletedAt: null }, select: { status: true } },
+  projects: { where: { deletedAt: null }, select: { status: true, archivedAt: true } },
 } as const;
 
 export async function clientRoutes(app: FastifyInstance): Promise<void> {
@@ -134,7 +134,8 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
     if (!existing) return reply.code(404).send({ error: "Клиент не найден" });
 
     // Клиент с проектами не удаляется: иначе в проектах остаётся ссылка в
-    // никуда, и непонятно, чья это была работа.
+    // никуда, и непонятно, чья это была работа. Архивные считаются тоже: они
+    // так же показывают, чья это была работа.
     if (existing.projects.length > 0) {
       return reply.code(409).send({
         error: `Сначала удалите или перенесите проекты клиента (${existing.projects.length})`,

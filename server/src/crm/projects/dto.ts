@@ -87,7 +87,10 @@ export const invoiceBody = z.object({
 export const listProjectsQuery = z.object({
   status: z.enum(PROJECT_STATUSES).optional(),
   scope: z.enum(["open", "closed", "all"]).default("all"),
-  clientId: z.string().uuid().optional(),
+  /// `none` — проекты без клиента: это и есть очередь на привязку.
+  clientId: z.union([z.string().uuid(), z.literal("none")]).optional(),
+  /// По умолчанию архива нет: все старые вызовы и доска не видят его сами.
+  archived: z.enum(["exclude", "only", "include"]).default("exclude"),
   /// Проекты одного человека — «что на мне висит».
   developer: z.enum(DEVELOPERS).optional(),
   /** Только те, у кого срок уже прошёл, а проект ещё не закрыт. */

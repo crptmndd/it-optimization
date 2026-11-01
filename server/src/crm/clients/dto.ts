@@ -36,7 +36,10 @@ export interface ClientDto {
   site: string | null;
   contacts: z.infer<typeof contact>[];
   notes: string | null;
-  /** Сколько всего проектов и сколько идут сейчас — видно прямо в списке. */
+  /**
+   * Сколько всего проектов и сколько идут сейчас — видно прямо в списке. Архивный
+   * проект остаётся проектом клиента, но в работе уже не числится.
+   */
   projectCount: number;
   activeProjectCount: number;
   createdAt: string;
@@ -44,7 +47,7 @@ export interface ClientDto {
 }
 
 type ClientWithCounts = Client & {
-  projects?: { status: string }[];
+  projects?: { status: string; archivedAt: Date | null }[];
 };
 
 export function toClientDto(item: ClientWithCounts): ClientDto {
@@ -59,7 +62,9 @@ export function toClientDto(item: ClientWithCounts): ClientDto {
     contacts: (item.contacts as z.infer<typeof contact>[] | null) ?? [],
     notes: item.notes,
     projectCount: projects.length,
-    activeProjectCount: projects.filter((project) => project.status === "active").length,
+    activeProjectCount: projects.filter(
+      (project) => project.status === "active" && !project.archivedAt,
+    ).length,
     createdAt: item.createdAt.toISOString(),
     updatedAt: item.updatedAt.toISOString(),
   };

@@ -1,5 +1,5 @@
 import type { Prisma } from "@prisma/client";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { audit } from "../../audit.js";
 import { requireTeam } from "../../auth/guard.js";
@@ -64,19 +64,52 @@ async function assertReferences(input: {
   return null;
 }
 
+/**
+ * Архив — отдельный признак, а не статус: проект сохраняет итог («сдан»,
+ * «отменён»), а статус говорит о работе, а не о том, видно ли её.
+ *
+ * Условие стоит в самом запросе, поэтому повтор не сдвигает дату архивации и не
+ * пишет в журнал второй раз.
+ */
+function archiveHandler(action: "archive" | "unarchive") {
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    const params = idParams.safeParse(request.params);
+    if (!params.success) return invalidInput(reply, params.error);
+
+    const { id } = params.data;
+    const archive = action === "archive";
+    const { count } = await prisma.project.updateMany({
+      where: { id, deletedAt: null, archivedAt: archive ? null : { not: null } },
+      data: { archivedAt: archive ? new Date() : null },
+    });
+
+    const project = await prisma.project.findFirst({
+      where: { id, deletedAt: null },
+      include: PROJECT_RELATIONS,
+    });
+    if (!project) return reply.code(404).send({ error: "Проект не найден" });
+
+    if (count > 0) await audit(request, { entity: "projects", entityId: id, action });
+    return reply.send({ project: toProjectDto(project, env.TIMEZONE) });
+  };
+}
+
 export async function projectRoutes(app: FastifyInstance): Promise<void> {
   app.get("/projects", { preHandler: requireTeam }, async (request, reply) => {
     const query = listProjectsQuery.safeParse(request.query);
     if (!query.success) return invalidInput(reply, query.error);
 
-    const { status, scope, clientId, developer, overdue, search } = query.data;
+    const { status, scope, clientId, archived, developer, overdue, search } = query.data;
     const where: Prisma.ProjectWhereInput = { deletedAt: null };
+
+    if (archived === "exclude") where.archivedAt = null;
+    else if (archived === "only") where.archivedAt = { not: null };
 
     if (status) where.status = status;
     else if (scope === "open") where.status = { in: [...OPEN_PROJECT_STATUSES] };
     else if (scope === "closed") where.status = { in: [...CLOSED_PROJECT_STATUSES] };
 
-    if (clientId) where.clientId = clientId;
+    if (clientId) where.clientId = clientId === "none" ? null : clientId;
     if (developer) where.developers = { has: developer };
 
     if (overdue) {
@@ -96,8 +129,12 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
 
     const projects = await prisma.project.findMany({
       where,
-      // Сначала те, у кого горит срок; проекты без срока — в конце.
-      orderBy: [{ deadline: { sort: "asc", nulls: "last" } }, { createdAt: "desc" }],
+      // Сначала те, у кого горит срок; проекты без срока — в конце. Срок в архиве
+      // уже ничего не значит, там сверху то, что убрали недавно.
+      orderBy:
+        archived === "only"
+          ? [{ archivedAt: "desc" }]
+          : [{ deadline: { sort: "asc", nulls: "last" } }, { createdAt: "desc" }],
       include: PROJECT_RELATIONS,
       take: 500,
     });
@@ -262,9 +299,9 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
     const { status, ids } = parsed.data;
 
     // Берём только те, что действительно в этой колонке: присланный список мог
-    // устареть, пока его тащили мышью.
+    // устареть, пока его тащили мышью. Архива на доске нет.
     const existing = await prisma.project.findMany({
-      where: { id: { in: ids }, status, deletedAt: null },
+      where: { id: { in: ids }, status, deletedAt: null, archivedAt: null },
       select: { id: true },
     });
     const known = new Set(existing.map((project) => project.id));
@@ -279,6 +316,17 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
 
     return reply.code(204).send();
   });
+
+  app.post(
+    "/projects/:id/archive",
+    { preHandler: requireTeam },
+    archiveHandler("archive"),
+  );
+  app.post(
+    "/projects/:id/unarchive",
+    { preHandler: requireTeam },
+    archiveHandler("unarchive"),
+  );
 
   await invoiceRoutes(app);
   await stageRoutes(app);
