@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { Link } from "react-router";
 import { ApiError } from "@/api/client";
+import { revealCredential, type RevealedPassword } from "@/api/credentials";
 import { Button, ErrorNote, Field, Input, Modal } from "@/components/ui";
 
 /**
@@ -57,6 +58,19 @@ export function useSecondFactor(): {
 
   return { withCode, prompt: waiting && <TwoFactorPrompt waiting={waiting} /> };
 }
+
+/** Просмотр пароля. Результат живёт только в состоянии того, кто его попросил. */
+export function useRevealPassword() {
+  const { withCode, prompt } = useSecondFactor();
+  const reveal = useCallback(
+    (id: string): Promise<RevealedPassword | null> =>
+      withCode((code) => revealCredential(id, code)),
+    [withCode],
+  );
+  return { reveal, prompt };
+}
+
+export type RevealPassword = ReturnType<typeof useRevealPassword>["reveal"];
 
 function TwoFactorPrompt({ waiting }: { waiting: Waiting }) {
   const [code, setCode] = useState("");

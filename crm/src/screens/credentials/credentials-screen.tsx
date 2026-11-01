@@ -9,7 +9,7 @@ import {
   Lock,
   Plus,
 } from "lucide-react";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { ApiError } from "@/api/client";
 import { useFocusFromLink } from "@/lib/focus-card";
 import { useOpenFromSearch } from "@/lib/open-from-search";
@@ -50,20 +50,19 @@ import {
   sanitizeAmount,
   type Currency,
 } from "@/lib/money";
-import { useVault } from "@/vault/vault-context";
-import { VaultControl } from "./vault-panel";
+import { useRevealPassword, type RevealPassword } from "@/components/two-factor-prompt";
+import { LegacyMigration } from "./legacy-migration";
 
 /**
  * Справочник учёток сервисов, включая пароли.
  *
- * Пароли шифруются здесь же, в браузере: на сервер уходит шифротекст, ключ
- * выводится из мастер-фразы и наружу не попадает. База по-прежнему уезжает в
- * ночные дампы, но теперь их утечка отдаёт нечитаемый текст, а не все сервисы
- * разом — раньше именно из-за этого паролей здесь не было вовсе.
+ * Пароли шифрует сервер ключом из своего окружения, поэтому дамп базы без него ничего
+ * не раскрывает. Список и карточка пароль не получают: он открывается отдельным
+ * запросом с кодом 2FA, и каждый просмотр пишется в журнал.
  *
  * Отсюда правило, которое легко нарушить: открытый пароль существует только в
- * состоянии формы и в буфере обмена. Его нельзя ни отправить на сервер, ни
- * положить в localStorage, ни записать в журнал.
+ * состоянии компонента, который его показывает, и в буфере обмена. Его нельзя ни
+ * положить в localStorage, ни подставить в форму заранее.
  */
 interface FormValues {
   service: string;
@@ -75,8 +74,10 @@ interface FormValues {
   amount: string;
   currency: Currency;
   monthlyFee: boolean;
-  /** Открытый пароль. Живёт только в состоянии формы — наружу уходит шифротекст. */
-  secret: string;
+  /** Новый пароль. Пусто — не менять: текущий в форму не попадает никогда. */
+  password: string;
+  /** Стереть пароль при сохранении. Отдельно: пустое поле значит «не менять». */
+  clearPassword: boolean;
   notes: string;
 }
 
@@ -91,12 +92,13 @@ function empty(): FormValues {
     amount: "",
     currency: "rub",
     monthlyFee: false,
-    secret: "",
+    password: "",
+    clearPassword: false,
     notes: "",
   };
 }
 
-function toValues(item: Credential, secret: string): FormValues {
+function toValues(item: Credential): FormValues {
   return {
     service: item.service,
     login: item.login ?? "",
@@ -107,7 +109,8 @@ function toValues(item: Credential, secret: string): FormValues {
     amount: amountToInput(item.amountMinor),
     currency: item.currency ?? "rub",
     monthlyFee: item.monthlyFee ?? false,
-    secret,
+    password: "",
+    clearPassword: false,
     notes: item.notes ?? "",
   };
 }
@@ -124,28 +127,12 @@ function toInput(values: FormValues): CredentialInput {
     currency: values.currency,
     monthlyFee: values.monthlyFee,
     notes: values.notes.trim() || null,
+    // Без trim: пробелы в пароле значимы. Поле опускается, а не шлётся пустым: иначе
+    // обычное сохранение карточки стирало бы пароль.
+    ...(values.clearPassword
+      ? { password: null }
+      : values.password && { password: values.password }),
   };
-}
-
-/**
- * Что можно делать с паролем открытой карточки.
- *
- * `unreadable` — отдельное состояние, а не разновидность запертого: шифротекст
- * есть, но текущий ключ его не берёт (например, фразу сбросили в другой
- * вкладке). Раньше такая запись запиралась намертво — прочитать нельзя и
- * заменить нельзя. Теперь заменить можно: пустое поле оставляет старое,
- * заполненное перезаписывает.
- *
- * `uninitialized` отделено от `locked` по той же причине: «разблокируйте
- * хранилище» там, где хранилища ещё нет, отправляет искать несуществующую
- * кнопку.
- */
-type SecretState = "editable" | "unreadable" | "locked" | "uninitialized";
-
-interface EditTarget {
-  item: Credential;
-  secret: string;
-  secretState: SecretState;
 }
 
 /** Значение фильтра для записей без проекта: пустая строка уже занята под «все». */
@@ -188,11 +175,9 @@ export function CredentialsScreen() {
   const [projectFilter, setProjectFilter] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed);
   const [creating, setCreating] = useState(false);
-  const [editing, setEditing] = useState<EditTarget | null>(null);
-  const { unlocked, configured, revision, encryptSecret, decryptSecret } = useVault();
-
-  /** Состояние поля пароля, когда ключа нет: фразы вовсе нет или просто заперто. */
-  const closedState: SecretState = configured === false ? "uninitialized" : "locked";
+  const [editing, setEditing] = useState<Credential | null>(null);
+  // Одно окно кода на экран: и строка, и карточка просят его одинаково.
+  const { reveal, prompt } = useRevealPassword();
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(search.trim()), 300);
@@ -220,8 +205,8 @@ export function CredentialsScreen() {
 
   /**
    * Продление из списка. Отправляем только `renewsAt`: PATCH применяет
-   * пришедшие поля и не трогает остальные, поэтому шифротекст пароля и всё
-   * прочее остаются как были.
+   * пришедшие поля и не трогает остальные, поэтому пароль и всё прочее
+   * остаются как были.
    */
   async function markPaid(item: Credential) {
     const next = nextRenewalDate(toDateInputValue(item.renewsAt));
@@ -233,57 +218,10 @@ export function CredentialsScreen() {
     }
   }
 
-  useEffect(() => {
-    // `revision` здесь не украшение: после сброса сервер обнулил все
-    // шифротексты, а список в памяти остался со старыми. Без перезагрузки
-    // записи выглядят как «пароль сохранён», хотя его больше нет, и карточка
-    // запирается — новый ключ старый шифротекст не читает.
-    void revision;
-    load();
-  }, [load, revision]);
-
-  /**
-   * Расшифровка при открытии карточки, а не при сохранении: тогда поле пароля
-   * ведёт себя как все остальные — что видно, то и сохранится. Иначе пустое
-   * поле означало бы то «не менять», то «стереть», и однажды стёрло бы.
-   */
-  async function openEdit(item: Credential) {
-    if (!unlocked) {
-      setEditing({ item, secret: "", secretState: closedState });
-      return;
-    }
-    if (!item.secret) {
-      setEditing({ item, secret: "", secretState: "editable" });
-      return;
-    }
-    try {
-      setEditing({
-        item,
-        secret: await decryptSecret(item.secret),
-        secretState: "editable",
-      });
-    } catch {
-      setEditing({ item, secret: "", secretState: "unreadable" });
-    }
-  }
-
-  /**
-   * Поле пароля опускается, когда стирать его было бы не решением человека, а
-   * побочным эффектом: при запертом хранилище — всегда, при нечитаемом
-   * шифротексте — если поле оставили пустым.
-   */
-  async function buildInput(values: FormValues, state: SecretState) {
-    const input = toInput(values);
-    if (state === "locked" || state === "uninitialized") return input;
-    if (state === "unreadable" && !values.secret) return input;
-    return {
-      ...input,
-      secret: values.secret ? await encryptSecret(values.secret) : null,
-    };
-  }
+  useEffect(load, [load]);
 
   // Переход из глобального поиска: ?open=<id> открывает нужную карточку.
-  useOpenFromSearch(items, (item) => void openEdit(item));
+  useOpenFromSearch(items, setEditing);
   useFocusFromLink(items !== null);
 
   // Фильтр применяется здесь, а не запросом: список доступов целиком уже в
@@ -309,8 +247,8 @@ export function CredentialsScreen() {
     <section>
       <header className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-bold tracking-tight">Доступы</h1>
-        <div className="flex items-center gap-2">
-          <VaultControl />
+        <div className="flex flex-wrap items-center gap-2">
+          <LegacyMigration watch={items} onDone={load} />
           <Button onClick={() => setCreating(true)}>
             <Plus size={16} strokeWidth={2.5} />
             Новая запись
@@ -320,9 +258,8 @@ export function CredentialsScreen() {
 
       <p className="text-muted-foreground mt-1 max-w-prose text-sm">
         Что за сервис, на кого оформлен, когда продлевать и под каким паролем заходят.
-        Пароли шифруются <b className="text-foreground">в браузере</b>: на сервер уходит
-        только шифротекст, и прочитать его без мастер-фразы нельзя никому — включая тех, у
-        кого есть доступ к серверу.
+        Пароли шифруются <b className="text-foreground">на сервере</b>, посмотреть их
+        можно только с двухфакторным входом, и каждый просмотр остаётся в журнале.
       </p>
 
       <div className="mt-6 sm:mt-5">
@@ -418,8 +355,9 @@ export function CredentialsScreen() {
                         <Row
                           key={item.id}
                           item={item}
-                          onOpen={() => void openEdit(item)}
+                          onOpen={() => setEditing(item)}
                           onPaid={() => markPaid(item)}
+                          reveal={reveal}
                         />
                       ))}
                     </ul>
@@ -436,13 +374,10 @@ export function CredentialsScreen() {
           title="Новая запись"
           initial={empty()}
           projects={projects}
-          secretState={unlocked ? "editable" : closedState}
-          hasSecret={false}
+          reveal={reveal}
           onClose={() => setCreating(false)}
           onSubmit={async (values) => {
-            await createCredential(
-              await buildInput(values, unlocked ? "editable" : closedState),
-            );
+            await createCredential(toInput(values));
             setCreating(false);
             load();
           }}
@@ -451,27 +386,26 @@ export function CredentialsScreen() {
 
       {editing && (
         <CredentialModal
-          title={editing.item.service}
-          initial={toValues(editing.item, editing.secret)}
+          title={editing.service}
+          initial={toValues(editing)}
+          item={editing}
           projects={projects}
-          secretState={editing.secretState}
-          hasSecret={Boolean(editing.item.secret)}
+          reveal={reveal}
           onClose={() => setEditing(null)}
           onSubmit={async (values) => {
-            await updateCredential(
-              editing.item.id,
-              await buildInput(values, editing.secretState),
-            );
+            await updateCredential(editing.id, toInput(values));
             setEditing(null);
             load();
           }}
           onDelete={async () => {
-            await deleteCredential(editing.item.id);
+            await deleteCredential(editing.id);
             setEditing(null);
             load();
           }}
         />
       )}
+
+      {prompt}
     </section>
   );
 }
@@ -512,13 +446,20 @@ function Row({
   item,
   onOpen,
   onPaid,
+  reveal,
 }: {
   item: Credential;
   onOpen: () => void;
   onPaid: () => Promise<void>;
+  reveal: RevealPassword;
 }) {
   const renews = item.renewsAt ? describeDeadline(item.renewsAt) : null;
   const [saving, setSaving] = useState(false);
+  const secret = useShownPassword(item.id, reveal);
+  const { hide } = secret;
+
+  // Список перечитан: запись могли поправить, а показанное значение уже устарело.
+  useEffect(hide, [item, hide]);
 
   /*
    * Продлевать имеет смысл только то, за что платят. У записи без срока и без
@@ -543,7 +484,31 @@ function Row({
           <NoteHint text={item.notes} />
         </button>
 
-        <SecretButton item={item} />
+        {item.hasPassword && (
+          <button
+            type="button"
+            onClick={() => (secret.shown === null ? void secret.show() : secret.hide())}
+            disabled={secret.loading}
+            aria-label={secret.shown === null ? "Показать пароль" : "Скрыть пароль"}
+            title={secret.shown === null ? "Показать пароль" : "Скрыть пароль"}
+            className="text-muted-foreground hover:bg-muted hover:text-foreground mt-0.5 shrink-0 rounded-lg p-1.5 transition disabled:opacity-50"
+          >
+            {secret.shown === null ? (
+              <Eye size={15} strokeWidth={2} />
+            ) : (
+              <EyeOff size={15} strokeWidth={2} />
+            )}
+          </button>
+        )}
+
+        {item.legacyPending && (
+          <span
+            title="Старый пароль ещё не перенесён: нажмите «Перенести пароли»"
+            className="text-muted-foreground mt-0.5 shrink-0 p-1.5 opacity-50"
+          >
+            <Lock size={15} strokeWidth={2} />
+          </span>
+        )}
 
         {item.amountMinor != null && (
           <span className="mt-0.5 shrink-0 text-sm font-medium">
@@ -569,6 +534,9 @@ function Row({
           </a>
         )}
       </div>
+
+      {secret.shown !== null && <ShownPassword password={secret.shown} />}
+      {secret.error && <p className="text-danger text-xs">{secret.error}</p>}
 
       {/* Продление прямо из списка: открывать карточку ради одной даты — три
           лишних движения на записи, которых у команды десятки. Дата стоит на
@@ -596,32 +564,60 @@ function Row({
   );
 }
 
+/** Открытый пароль сам скрывается: забытый на экране он виден всем вокруг. */
+const SHOWN_MS = 30_000;
+
 /**
- * Пароль отдаётся в буфер обмена, а не на экран: он нужен, чтобы его вставить,
- * а показанный текст видят все, кто смотрит в монитор.
+ * Показ пароля в строке или карточке. Значение живёт только в этом состоянии и
+ * пропадает вместе с компонентом, поэтому закрытая карточка пароль не помнит.
  */
-function SecretButton({ item }: { item: Credential }) {
-  const { unlocked, decryptSecret } = useVault();
+function useShownPassword(id: string, reveal: RevealPassword) {
+  const [shown, setShown] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const hide = useCallback(() => {
+    if (timer.current) clearTimeout(timer.current);
+    setShown(null);
+  }, []);
+
+  useEffect(() => hide, [hide]);
+
+  async function show() {
+    setError(null);
+    setLoading(true);
+    try {
+      const result = await reveal(id);
+      if (!result) return;
+      if (result.password === null) {
+        setError("Пароль уже стёрт");
+        return;
+      }
+      setShown(result.password);
+      timer.current = setTimeout(hide, SHOWN_MS);
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Не удалось открыть пароль");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return { shown, error, loading, show, hide };
+}
+
+/**
+ * Копирование отдельной кнопкой, а не сразу после просмотра: Safari запрещает запись
+ * в буфер после ожидания сети, вне жеста пользователя.
+ */
+function ShownPassword({ password }: { password: string }) {
   const [copied, setCopied] = useState(false);
   const [failed, setFailed] = useState(false);
-
-  if (!item.secret) return null;
-
-  if (!unlocked) {
-    return (
-      <span
-        title="Пароль сохранён — разблокируйте хранилище"
-        className="text-muted-foreground mt-0.5 shrink-0 p-1.5 opacity-50"
-      >
-        <Lock size={15} strokeWidth={2} />
-      </span>
-    );
-  }
 
   async function copy() {
     setFailed(false);
     try {
-      await navigator.clipboard.writeText(await decryptSecret(item.secret!));
+      await navigator.clipboard.writeText(password);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
@@ -630,59 +626,75 @@ function SecretButton({ item }: { item: Credential }) {
   }
 
   return (
-    <button
-      type="button"
-      onClick={() => void copy()}
-      aria-label="Скопировать пароль"
-      title={failed ? "Не получилось скопировать" : "Скопировать пароль"}
-      className="text-muted-foreground hover:bg-muted hover:text-foreground mt-0.5 shrink-0 rounded-lg p-1.5 transition"
-    >
-      {copied ? (
-        <Check size={15} strokeWidth={2.5} className="text-success" />
-      ) : (
-        <Copy size={15} strokeWidth={2} />
-      )}
-    </button>
+    <div className="bg-muted flex items-center gap-2 rounded-lg px-3 py-1.5">
+      <code className="min-w-0 flex-1 font-mono text-sm break-all whitespace-pre-wrap">
+        {password}
+      </code>
+      <button
+        type="button"
+        onClick={() => void copy()}
+        aria-label="Скопировать пароль"
+        title={failed ? "Не получилось скопировать" : "Скопировать пароль"}
+        className="text-muted-foreground hover:bg-background hover:text-foreground shrink-0 rounded-lg p-1.5 transition"
+      >
+        {copied ? (
+          <Check size={15} strokeWidth={2.5} className="text-success" />
+        ) : (
+          <Copy size={15} strokeWidth={2} />
+        )}
+      </button>
+    </div>
   );
 }
 
-/**
- * Подсказка под полем пароля.
- *
- * Каждое состояние называет следующий шаг человека, а не своё внутреннее имя:
- * «разблокируйте хранилище» там, где хранилища ещё нет, отправляло бы искать
- * кнопку, которой в интерфейсе не существует.
- */
-function secretHint(state: SecretState, hasSecret: boolean): string {
-  switch (state) {
-    case "editable":
-      return "Шифруется в браузере. Пустое поле — пароль не хранится";
-    case "unreadable":
-      return "Зашифрован другой фразой и не читается. Введите новый, чтобы заменить — пустое поле оставит старый";
-    case "uninitialized":
-      return "Сначала задайте мастер-фразу — ею шифруются пароли";
-    case "locked":
-      return hasSecret
-        ? "Сохранён. Разблокируйте хранилище, чтобы увидеть или заменить"
-        : "Разблокируйте хранилище, чтобы сохранить пароль";
-  }
+/** Форма ничего не расшифровывает при открытии: пароль только по нажатию. */
+function CurrentPassword({ id, reveal }: { id: string; reveal: RevealPassword }) {
+  const secret = useShownPassword(id, reveal);
+
+  return (
+    <div>
+      <span className="mb-1.5 block text-sm font-medium">Текущий пароль</span>
+      {secret.shown !== null ? (
+        <ShownPassword password={secret.shown} />
+      ) : (
+        <p className="text-muted-foreground text-sm">••••••••</p>
+      )}
+      {secret.error && <p className="text-danger mt-1 text-xs">{secret.error}</p>}
+      <div className="mt-1.5">
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={() => (secret.shown === null ? void secret.show() : secret.hide())}
+          disabled={secret.loading}
+        >
+          {secret.shown === null ? (
+            <Eye size={15} strokeWidth={2} />
+          ) : (
+            <EyeOff size={15} strokeWidth={2} />
+          )}
+          {secret.shown === null ? "Показать" : "Скрыть"}
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 function CredentialModal({
   title,
   initial,
+  item,
   projects,
-  secretState,
-  hasSecret,
+  reveal,
   onClose,
   onSubmit,
   onDelete,
 }: {
   title: string;
   initial: FormValues;
+  /** Сохранённая запись. Нет — создаём новую. */
+  item?: Credential;
   projects: Project[];
-  secretState: SecretState;
-  hasSecret: boolean;
+  reveal: RevealPassword;
   onClose: () => void;
   onSubmit: (values: FormValues) => Promise<void>;
   onDelete?: () => Promise<void>;
@@ -690,8 +702,9 @@ function CredentialModal({
   const [values, setValues] = useState<FormValues>(initial);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  // Сбрасывается вместе с окном: закрыли карточку — пароль снова скрыт.
+  // Сбрасывается вместе с окном: закрыли карточку — введённый пароль снова скрыт.
   const [revealed, setRevealed] = useState(false);
+  const canClear = Boolean(item?.hasPassword || item?.legacyPending);
 
   /**
    * Куда уедет срок, если нажать «Оплатил». Считается заранее и стоит прямо на
@@ -785,33 +798,33 @@ function CredentialModal({
             />
           </Field>
 
-          <Field label="Пароль" hint={secretHint(secretState, hasSecret)}>
+          {item?.hasPassword && <CurrentPassword id={item.id} reveal={reveal} />}
+
+          <Field
+            label={item?.hasPassword ? "Новый пароль" : "Пароль"}
+            hint={
+              item?.legacyPending
+                ? "Старый пароль ещё не перенесён. Новый заменит его"
+                : item?.hasPassword
+                  ? "Пусто — не менять"
+                  : "Шифруется на сервере. Пусто — пароль не хранится"
+            }
+          >
             {/*
-             * Показать пароль можно, но по умолчанию он скрыт: чаще его
-             * копируют, а открытый текст видит любой, кто смотрит в монитор.
-             * Глазок нужен там, где буфер обмена не помогает, — ввести на
-             * телефоне, на роутере, продиктовать.
+             * autoComplete обязателен: иначе браузер подставит пароль от CRM, и
+             * «Сохранить» молча заменит им пароль сервиса.
              */}
             <div className="relative">
               <Input
                 type={revealed ? "text" : "password"}
-                value={values.secret}
-                onChange={(event) => set("secret", event.target.value)}
-                disabled={secretState === "locked" || secretState === "uninitialized"}
+                value={values.password}
+                onChange={(event) => set("password", event.target.value)}
+                disabled={values.clearPassword}
                 autoComplete="new-password"
-                placeholder={
-                  secretState === "unreadable"
-                    ? "новый пароль"
-                    : // Точки обещают сохранённый пароль, поэтому рисуются
-                      // только когда он и правда есть.
-                      hasSecret && secretState === "locked"
-                      ? "••••••••"
-                      : ""
-                }
                 maxLength={500}
-                className={cn(values.secret && "pr-10", revealed && "font-mono")}
+                className={cn(values.password && "pr-10", revealed && "font-mono")}
               />
-              {values.secret !== "" && (
+              {values.password !== "" && (
                 <button
                   type="button"
                   onClick={() => setRevealed((shown) => !shown)}
@@ -828,6 +841,31 @@ function CredentialModal({
               )}
             </div>
           </Field>
+
+          {canClear &&
+            (values.clearPassword ? (
+              <p className="text-muted-foreground flex flex-wrap items-center gap-2 text-sm">
+                Пароль будет стёрт при сохранении.
+                <button
+                  type="button"
+                  onClick={() => set("clearPassword", false)}
+                  className="text-foreground underline underline-offset-2"
+                >
+                  Отменить
+                </button>
+              </p>
+            ) : (
+              <Button
+                type="button"
+                variant="danger"
+                onClick={() => {
+                  set("password", "");
+                  set("clearPassword", true);
+                }}
+              >
+                Стереть пароль
+              </Button>
+            ))}
 
           <Field label="Продлить до" hint="Попадёт наверх списка, когда срок подойдёт">
             <Input

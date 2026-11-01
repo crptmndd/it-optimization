@@ -1,26 +1,15 @@
 /**
- * Шифрование паролей на устройстве.
+ * Старые пароли на мастер-фразе. Только для переноса.
  *
- * Ключ выводится из мастер-фразы прямо здесь и никогда не покидает браузер:
- * на сервер уезжает только шифротекст. Поэтому утечка ночного дампа отдаёт
- * нечитаемый текст, а не все сервисы разом, — ради этого всё и затевалось.
+ * Новые пароли шифрует сервер, а эти лежат в колонке `secret`, зашифрованные в
+ * браузере, и прочитать их может только тот, кто знает фразу. Поэтому переносит их
+ * браузер: выводит ключ, расшифровывает и отправляет на сервер, а тот шифрует своим
+ * ключом. Зашифровать здесь больше нечего, поэтому функций записи нет.
  *
- * Следствия, которые нельзя «починить»:
- *
- * - забытая мастер-фраза означает потерянные пароли, восстановить их не может
- *   никто, включая владельца сервера;
- * - искать и проверять пароли на сервере невозможно;
- * - остаётся риск, общий для всех веб-хранилищ: захвативший сервер может
- *   подменить этот самый файл и собирать фразу при вводе. Защита от него —
- *   не криптография, а то, что доступ к серверу закрыт.
- *
- * PBKDF2 взят потому, что он есть в WebCrypto нативно: Argon2 пришлось бы
- * тащить wasm-библиотекой ради выигрыша, который при 600 000 итераций и
- * длинной фразе роли не играет.
+ * Параметры менять нельзя: они вшиты в уже записанные шифротексты.
  */
 
 const KDF_ITERATIONS = 600_000;
-const SALT_BYTES = 16;
 /** AES-GCM требует ровно 96 бит: больше не безопаснее, а совместимость хуже. */
 const IV_BYTES = 12;
 
@@ -31,12 +20,6 @@ const IV_BYTES = 12;
  */
 const VERIFIER_PLAINTEXT = "it-optimization-vault";
 
-function toBase64(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
-}
-
 // Возвращаемый тип уточнён намеренно: WebCrypto принимает только буфер,
 // подкреплённый обычным ArrayBuffer, а `new Uint8Array(n)` выводится шире.
 function fromBase64(value: string): Uint8Array<ArrayBuffer> {
@@ -46,10 +29,6 @@ function fromBase64(value: string): Uint8Array<ArrayBuffer> {
     bytes[index] = binary.charCodeAt(index);
   }
   return bytes;
-}
-
-export function randomSalt(): string {
-  return toBase64(crypto.getRandomValues(new Uint8Array(SALT_BYTES)));
 }
 
 /**
@@ -75,28 +54,14 @@ export async function deriveKey(passphrase: string, salt: string): Promise<Crypt
     material,
     { name: "AES-GCM", length: 256 },
     false,
-    ["encrypt", "decrypt"],
+    ["decrypt"],
   );
 }
 
-/** Результат — base64 от `iv || ciphertext`: вектор нужен при расшифровке. */
-export async function encrypt(key: CryptoKey, plaintext: string): Promise<string> {
-  const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
-  const cipher = new Uint8Array(
-    await crypto.subtle.encrypt(
-      { name: "AES-GCM", iv },
-      key,
-      new TextEncoder().encode(plaintext),
-    ),
-  );
-
-  const packed = new Uint8Array(iv.length + cipher.length);
-  packed.set(iv);
-  packed.set(cipher, iv.length);
-  return toBase64(packed);
-}
-
-/** Бросает, если ключ не тот: у AES-GCM встроена проверка подлинности. */
+/**
+ * Вход — base64 от `iv || ciphertext`. Бросает, если ключ не тот: у AES-GCM встроена
+ * проверка подлинности.
+ */
 export async function decrypt(key: CryptoKey, packed: string): Promise<string> {
   const bytes = fromBase64(packed);
   const plain = await crypto.subtle.decrypt(
@@ -105,10 +70,6 @@ export async function decrypt(key: CryptoKey, packed: string): Promise<string> {
     bytes.slice(IV_BYTES),
   );
   return new TextDecoder().decode(plain);
-}
-
-export async function makeVerifier(key: CryptoKey): Promise<string> {
-  return encrypt(key, VERIFIER_PLAINTEXT);
 }
 
 /**

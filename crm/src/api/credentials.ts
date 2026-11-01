@@ -2,12 +2,11 @@ import { api } from "./client";
 import type { Currency } from "@/lib/money";
 
 /**
- * Справочник учёток сервисов вместе с паролями.
+ * Справочник учёток сервисов.
  *
- * `secret` приходит и уходит только зашифрованным: ключ выводится из
- * мастер-фразы в браузере (см. `lib/vault.ts`) и на сервер не передаётся.
- * Поэтому утечка ночного дампа отдаёт нечитаемый текст, а не все сервисы
- * разом.
+ * Пароль сюда не приходит ни в каком виде: списки и карточки его не отдают. Открыть
+ * его можно только через `revealCredential`, с кодом 2FA, и каждый просмотр пишется в
+ * журнал. Записывается он открытым текстом по HTTPS, шифрует сервер.
  */
 export interface Credential {
   id: string;
@@ -17,11 +16,10 @@ export interface Credential {
   owner: string | null;
   /** Проект, к которому относится доступ. `null` — общий для всей команды. */
   project: { id: string; title: string } | null;
-  /**
-   * Пароль, зашифрованный в браузере. Сервер хранит его непрозрачно и
-   * расшифровать не может — ключа у него нет и не будет.
-   */
-  secret: string | null;
+  /** Пароль сохранён и открывается через `revealCredential`. */
+  hasPassword: boolean;
+  /** Есть старый пароль на мастер-фразе, который ещё не перенесён. */
+  legacyPending: boolean;
   renewsAt: string | null;
   /**
    * Минорные единицы. Валюта — в `currency`, период — в `monthlyFee`.
@@ -42,7 +40,8 @@ export interface CredentialInput {
   url?: string | null;
   owner?: string | null;
   projectId?: string | null;
-  secret?: string | null;
+  /** Строка — новый пароль, `null` — стереть, поля нет — не менять. */
+  password?: string | null;
   renewsAt?: string | null;
   amountMinor?: number | null;
   currency?: Currency;
@@ -79,4 +78,44 @@ export async function updateCredential(
 
 export async function deleteCredential(id: string): Promise<void> {
   await api.delete<void>(`/credentials/${id}`);
+}
+
+export interface RevealedPassword {
+  /** `null` — пароля у записи нет: его стёрли в другой вкладке. */
+  password: string | null;
+  confirmedUntil: string;
+}
+
+/** Код нужен, только если у сессии нет открытого окна подтверждения. */
+export async function revealCredential(
+  id: string,
+  code?: string,
+): Promise<RevealedPassword> {
+  return api.post<RevealedPassword>(`/credentials/${id}/reveal`, { code });
+}
+
+export interface LegacySecret {
+  id: string;
+  service: string;
+  /** Шифротекст на мастер-фразе: расшифровывает браузер, см. `lib/vault.ts`. */
+  secret: string;
+}
+
+export async function readLegacySecrets(code?: string): Promise<LegacySecret[]> {
+  const { items } = await api.post<{ items: LegacySecret[] }>("/credentials/legacy", {
+    code,
+  });
+  return items;
+}
+
+export interface MigrationResult {
+  migrated: number;
+  skipped: number;
+}
+
+export async function migrateSecrets(
+  items: { id: string; password: string }[],
+  code?: string,
+): Promise<MigrationResult> {
+  return api.post<MigrationResult>("/credentials/migrate", { items, code });
 }

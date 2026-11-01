@@ -11,7 +11,6 @@ import { SettingsScreen } from "@/screens/settings";
 import { TasksScreen } from "@/screens/tasks/tasks-screen";
 import { TodayScreen } from "@/screens/today/today-screen";
 import { TrashScreen } from "@/screens/trash/trash-screen";
-import { VaultProvider } from "@/vault/vault-context";
 
 function Routed() {
   const { state } = useAuth();
@@ -79,14 +78,7 @@ export function App() {
   return (
     <HashRouter>
       <AuthProvider>
-        {/*
-         * Хранилище паролей обёрнуто вокруг всего приложения, чтобы ключ не
-         * терялся при переходе с «Доступов» на любой другой раздел. Живёт он
-         * только в памяти, поэтому перезагрузка запирает хранилище сама.
-         */}
-        <VaultProvider>
-          <Routed />
-        </VaultProvider>
+        <Routed />
       </AuthProvider>
     </HashRouter>
   );

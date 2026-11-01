@@ -103,7 +103,7 @@ export function TodayScreen() {
    * «Доступы» ради одной даты значит терять половину продлений по дороге.
    *
    * Отправляем только `renewsAt`: PATCH применяет пришедшие поля и не трогает
-   * остальные, поэтому шифротекст пароля остаётся на месте.
+   * остальные, поэтому пароль остаётся на месте.
    */
   async function markPaid(item: Credential) {
     const next = nextRenewalDate(toDateInputValue(item.renewsAt));
