@@ -42,6 +42,8 @@ export function ProjectStages({
 }) {
   const [stages, setStages] = useState<Stage[] | null>(null);
   const [total, setTotal] = useState("");
+  /** Сумма этапов в базе: по ней видно, что в поле «Общая сумма» набрано новое. */
+  const [savedTotal, setSavedTotal] = useState<number | null>(null);
   const [amounts, setAmounts] = useState<string[]>([]);
   const [dates, setDates] = useState<string[]>([]);
   // Из этапов, а не из проекта: у оплаченной суммы валюта своя.
@@ -56,6 +58,7 @@ export function ProjectStages({
     setAmounts(result.stages.map((stage) => amountToInput(stage.amountMinor)));
     setDates(result.stages.map((stage) => toDateInputValue(stage.issuedAt)));
     setTotal(amountToInput(result.totals[next] ?? null));
+    setSavedTotal(result.totals[next] ?? null);
   }
 
   const projectId = project.id;
@@ -75,6 +78,39 @@ export function ProjectStages({
     // Режим в зависимостях: смена вида работы создаёт этапы на сервере.
   }, [projectId, mode]);
 
+  const editable = mode === "stages";
+
+  /**
+   * Что в полях расходится с базой. Сумма по строкам точнее общей, поэтому важнее её.
+   * Валюта без новых сумм идёт по строкам: общая сумма разложила бы ручную разбивку
+   * поровну.
+   */
+  function enteredAmounts(): StageAmounts | null {
+    if (!editable || stages === null) return null;
+    const rows = amounts.map((value) => parseAmount(value));
+    if (rows.some((value, index) => value !== stages[index]?.amountMinor)) {
+      return { amounts: rows };
+    }
+    if (parseAmount(total) !== savedTotal) return { totalMinor: parseAmount(total) };
+    return currency !== stages[0]?.currency ? { amounts: rows } : null;
+  }
+
+  async function writeAmounts(input: StageAmounts) {
+    setError(null);
+    setBusy(true);
+    try {
+      show(await saveStageAmounts(projectId, { ...input, currency }));
+      onChanged();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function writeEntered() {
+    const input = enteredAmounts();
+    if (input) await writeAmounts(input);
+  }
+
   if (stages === null) {
     return error ? (
       <div className="mt-4">
@@ -83,48 +119,47 @@ export function ProjectStages({
     ) : null;
   }
 
+  const loaded = stages;
   const anyPaid = stages.some((stage) => stage.paidAt);
   // Этапы, с которых ушли на помесячную оплату, видны только ради их оплат.
   if (mode !== "stages" && !anyPaid) return null;
 
-  const editable = mode === "stages";
   // Договор со старого API может прийти без строк: `every` на пустом дал бы true.
   const allPaid = stages.length > 0 && stages.every((stage) => stage.paidAt);
+  // Заполненная сумма оплаченного этапа не меняется, а пустую вписать можно.
+  const amountsOpen = stages.some((stage) => !stage.paidAt || stage.amountMinor === null);
   const totals = sumByCurrency(stages);
   const paidTotals = sumByCurrency(stages.filter((stage) => stage.paidAt));
 
-  async function saveAmounts(input: StageAmounts) {
-    setError(null);
-    setBusy(true);
-    try {
-      show(await saveStageAmounts(projectId, { ...input, currency }));
-      onChanged();
-    } catch (cause) {
-      setError(failure(cause));
-    } finally {
-      setBusy(false);
-    }
+  function run(action: () => Promise<void>) {
+    action().catch((cause: unknown) => setError(failure(cause)));
   }
 
-  /** Меняет один этап, не трогая набранное в остальных строках. */
+  /** Меняет один этап, не трогая набранное: сумма сохраняется только своей кнопкой. */
   async function patch(stage: Stage, input: Parameters<typeof updateStage>[2]) {
+    const result = await updateStage(projectId, stage.position, input);
+    const index = result.stages.findIndex((item) => item.id === stage.id);
+    setStages(result.stages);
+    setDates((current) =>
+      current.map((value, at) =>
+        at === index ? toDateInputValue(result.stage.issuedAt) : value,
+      ),
+    );
+    // Валюта из ответа, а не из выбора рядом: выбранная могла быть ещё не сохранена.
+    const stageCurrency = result.stages[0]?.currency ?? currency;
+    const nextTotal = sumByCurrency(result.stages)[stageCurrency] ?? null;
+    setSavedTotal(nextTotal);
+    setTotal((current) =>
+      parseAmount(current) === savedTotal ? amountToInput(nextTotal) : current,
+    );
+    onChanged();
+  }
+
+  async function changeStage(action: () => Promise<void>) {
     setError(null);
     setBusy(true);
     try {
-      const result = await updateStage(projectId, stage.position, input);
-      const index = result.stages.findIndex((item) => item.id === stage.id);
-      setStages(result.stages);
-      setDates((current) =>
-        current.map((value, at) =>
-          at === index ? toDateInputValue(result.stage.issuedAt) : value,
-        ),
-      );
-      setAmounts((current) =>
-        current.map((value, at) =>
-          at === index ? amountToInput(result.stage.amountMinor) : value,
-        ),
-      );
-      onChanged();
+      await action();
     } catch (cause) {
       setError(failure(cause));
     } finally {
@@ -135,7 +170,29 @@ export function ProjectStages({
   function commitDate(stage: Stage, index: number) {
     const value = dates[index] ?? "";
     if (value === toDateInputValue(stage.issuedAt)) return;
-    void patch(stage, { issuedAt: fromDateInputValue(value) });
+    void changeStage(() => patch(stage, { issuedAt: fromDateInputValue(value) }));
+  }
+
+  /**
+   * Сумма, вписанная в строку перед отметкой, сохраняется первой: иначе этап стал бы
+   * оплаченным без суммы, а итог договора занижен. Остальные строки идут как есть в
+   * базе: их черновики этой отметки не касаются.
+   */
+  function togglePaid(stage: Stage, index: number) {
+    if (stage.paidAt) {
+      void changeStage(() => patch(stage, { paidAt: null }));
+      return;
+    }
+    void changeStage(async () => {
+      const typed = parseAmount(amounts[index] ?? "");
+      if (editable && typed !== stage.amountMinor) {
+        await saveStageAmounts(projectId, {
+          amounts: loaded.map((item, at) => (at === index ? typed : item.amountMinor)),
+          currency,
+        });
+      }
+      await patch(stage, { paidAt: new Date().toISOString() });
+    });
   }
 
   return (
@@ -161,10 +218,11 @@ export function ProjectStages({
                   // Enter здесь значит «эта сумма», а не «сохранить проект».
                   if (event.key !== "Enter") return;
                   event.preventDefault();
-                  void saveAmounts({ totalMinor: parseAmount(total) });
+                  run(() => writeAmounts({ totalMinor: parseAmount(total) }));
                 }}
+                disabled={allPaid}
                 inputMode="numeric"
-                placeholder="300000"
+                placeholder="Не указана"
               />
             </Field>
           </div>
@@ -173,7 +231,7 @@ export function ProjectStages({
             type="button"
             variant="ghost"
             className="border-border border"
-            onClick={() => void saveAmounts({ totalMinor: parseAmount(total) })}
+            onClick={() => run(() => writeAmounts({ totalMinor: parseAmount(total) }))}
             disabled={busy || allPaid}
           >
             Разделить поровну
@@ -248,25 +306,21 @@ export function ProjectStages({
                 next={stages[index + 1]}
                 editable={editable}
                 busy={busy}
-                onToggle={() =>
-                  void patch(stage, {
-                    paidAt: stage.paidAt ? null : new Date().toISOString(),
-                  })
-                }
+                onToggle={() => togglePaid(stage, index)}
               />
             </div>
           </li>
         ))}
       </ul>
 
-      {editable && stages.length > 0 && (
+      {/* Общая сумма здесь тоже применяется: кнопка самая заметная в блоке, и набранное
+          в верхнем поле не должно пропадать при ответе 200. */}
+      {editable && amountsOpen && (
         <div className="mt-3">
           <Button
             type="button"
-            onClick={() =>
-              void saveAmounts({ amounts: amounts.map((value) => parseAmount(value)) })
-            }
-            disabled={busy}
+            onClick={() => run(writeEntered)}
+            disabled={busy || enteredAmounts() === null}
           >
             {busy ? "Сохраняем…" : "Сохранить суммы"}
           </Button>
