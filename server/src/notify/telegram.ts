@@ -79,6 +79,32 @@ export function escapeHtml(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+/**
+ * Телеграм не принимает текст длиннее 4096 символов, а его ошибку 400 код читает как
+ * «чат недоступен»: сообщение молча пропало бы как раз тогда, когда в нём больше всего.
+ */
+const MAX_MESSAGE_LENGTH = 4000;
+
+/**
+ * Режем по строкам, а не по символам: каждая строка сама закрывает свои теги, и
+ * обрезка посреди строки дала бы ту же ошибку 400. Срезается низ сообщения, `tail`
+ * получает число отрезанных строк.
+ */
+export function fitMessage(lines: string[], tail: (dropped: number) => string): string {
+  const text = lines.join("\n").trimEnd();
+  if (text.length <= MAX_MESSAGE_LENGTH) return text;
+
+  const kept: string[] = [];
+  // Хвост с самым большим числом: настоящий не длиннее его.
+  let length = tail(lines.length).length;
+  for (const line of lines) {
+    length += line.length + 1;
+    if (length > MAX_MESSAGE_LENGTH) break;
+    kept.push(line);
+  }
+  return [...kept, tail(lines.length - kept.length)].join("\n");
+}
+
 export async function sendMessage(chatId: string, text: string): Promise<void> {
   await callBotApi("sendMessage", {
     chat_id: chatId,

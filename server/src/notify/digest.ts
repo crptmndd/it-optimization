@@ -2,7 +2,7 @@ import { formatMoney } from "../crm/currency.js";
 import type { BillDto } from "../crm/projects/bills.js";
 import { collectToday, isQuietSnapshot } from "../crm/today.js";
 import { env } from "../env.js";
-import { escapeHtml, sendMessage, TelegramError } from "./telegram.js";
+import { escapeHtml, fitMessage, sendMessage, TelegramError } from "./telegram.js";
 import { daysOverdue, daysUntil, periodTitle, pluralDays } from "./zone.js";
 
 /**
@@ -23,13 +23,8 @@ interface Log {
   error: (obj: unknown, msg: string) => void;
 }
 
-/**
- * Предел строк в блоке и символов в сообщении. Телеграм не принимает текст длиннее
- * 4096 символов, а его ошибку 400 код читает как «чат недоступен»: сводка молча
- * пропала бы как раз в тот день, когда горит больше всего.
- */
+/** Предел строк в блоке: иначе один длинный список вытеснил бы из сводки остальные. */
 const MAX_LINES = 15;
-const MAX_MESSAGE_LENGTH = 4000;
 
 /** «· Егор, Вадим» или «· ничья» — кто отвечает, приписью в конце строки. */
 function who(names: string[], nobody: string): string {
@@ -55,26 +50,6 @@ function block(title: string, lines: string[]): string[] {
     ...(rest > 0 ? [`…и ещё ${rest}`] : []),
     "",
   ];
-}
-
-/**
- * Режем по строкам, а не по символам: каждая строка сама закрывает свои теги, и
- * обрезка посреди строки дала бы ту же ошибку 400. Срезается низ сводки: блоки
- * там стоят по убыванию срочности.
- */
-function fitMessage(lines: string[]): string {
-  const text = lines.join("\n").trimEnd();
-  if (text.length <= MAX_MESSAGE_LENGTH) return text;
-
-  const tail = "…не всё поместилось, остальное в CRM";
-  const kept: string[] = [];
-  let length = tail.length;
-  for (const line of lines) {
-    length += line.length + 1;
-    if (length > MAX_MESSAGE_LENGTH) break;
-    kept.push(line);
-  }
-  return [...kept, tail].join("\n");
 }
 
 export async function buildDigest(): Promise<string | null> {
@@ -192,7 +167,11 @@ export async function buildDigest(): Promise<string | null> {
     ),
   ];
 
-  return fitMessage(["🌅 <b>Что горит</b>", "", ...blocks]);
+  // Блоки стоят по убыванию срочности, поэтому срезается наименее срочное.
+  return fitMessage(
+    ["🌅 <b>Что горит</b>", "", ...blocks],
+    () => "…не всё поместилось, остальное в CRM",
+  );
 }
 
 /** Отправляет сводку в общий чат. */

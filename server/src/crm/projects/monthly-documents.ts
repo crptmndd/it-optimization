@@ -1,6 +1,6 @@
 import { prisma } from "../../db.js";
 import { canNotify, env } from "../../env.js";
-import { escapeHtml, trySendMessage } from "../../notify/telegram.js";
+import { escapeHtml, fitMessage, trySendMessage } from "../../notify/telegram.js";
 import { periodTitle, zonedNow } from "../../notify/zone.js";
 import { formatMoney } from "../currency.js";
 import { currentPeriod } from "./dto.js";
@@ -21,9 +21,6 @@ import { currentPeriod } from "./dto.js";
 
 export const MONTHLY_DOCUMENTS_JOB = "monthly-documents";
 
-/** Сообщение ограничено: 400 от телеграма код читает как «чат недоступен». */
-const MAX_MESSAGE_LINES = 40;
-
 interface Log {
   info: (obj: unknown, msg: string) => void;
   warn: (obj: unknown, msg: string) => void;
@@ -38,7 +35,7 @@ interface CreatedBill {
 }
 
 function billsMessage(period: string, bills: CreatedBill[]): string {
-  const lines = bills.slice(0, MAX_MESSAGE_LINES).map((bill) => {
+  const lines = bills.map((bill) => {
     const amount =
       bill.amountMinor === null
         ? "сумма не указана"
@@ -46,9 +43,11 @@ function billsMessage(period: string, bills: CreatedBill[]): string {
     const client = bill.client ? ` · ${escapeHtml(bill.client)}` : "";
     return `• ${escapeHtml(bill.title)} — ${amount}${client}`;
   });
-  const rest = bills.length - lines.length;
-  if (rest > 0) lines.push(`…и ещё ${rest}`);
-  return [`🧾 <b>Счета за ${periodTitle(period)}</b>`, ...lines].join("\n");
+  // Метка месяца уже стоит: сообщение, не прошедшее по длине, не повторится никогда.
+  return fitMessage(
+    [`🧾 <b>Счета за ${periodTitle(period)}</b>`, ...lines],
+    (dropped) => `…и ещё ${dropped}`,
+  );
 }
 
 /** Счета уже созданы, поэтому сбой отправки только логируется и ничего не откатывает. */
