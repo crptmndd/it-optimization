@@ -160,10 +160,11 @@ docker compose -f docker-compose.prod.yml exec api npx prisma migrate deploy
 `VAULT_KEY` должен оказаться в `.env` **до первого старта новой версии**. Без него API
 запустится, но пароли и 2FA работать не будут.
 
-Сначала проверить диск. В `package.json` появилась зависимость, поэтому слои `npm install`
-собираются заново: сборка забирает около 1,15 ГБ, а после неё старый образ и кэш остаются
-лежать. Нужно свободных 1,5 ГБ **после** бэкапа. Старый образ сохраняется под своим именем:
-это откат без сборки и ещё 1,15 ГБ.
+Сначала проверить диск. Когда меняется `package.json` или базовый образ, слои `npm install`
+собираются заново. Сам образ весит около 1,15 ГБ, но с промежуточными слоями и базой
+`node:22-alpine` сборка на этом VPS съела 2,2 ГБ: на выкате 02.11.2026 свободное место упало
+с 2,4 ГБ до 171 МБ. Нужно свободных 2,5 ГБ **после** бэкапа. Старый образ сохраняется под
+своим именем: это откат без сборки и ещё 1,1 ГБ.
 
 ```bash
 cd /opt/it-optimization/server
@@ -175,10 +176,11 @@ openssl rand -base64 32               # вписать в .env как VAULT_KEY,
 nano .env                             # там же CRM_ORIGIN=https://crm.it-optimization.ru
 ```
 
-Места мало — сначала `docker builder prune -f`: кэш сборки уйдёт, а образ под тегом
-останется. Удалять этот образ до конца выката нельзя: без него и без кэша откат тоже
-потребует полной сборки. Сборка, упавшая с `ENOSPC`, оставляет диск почти полным рядом с
-работающим Postgres, поэтому кэш чистится сразу, а не после разбора.
+Места мало — сначала `docker builder prune -af`: кэш сборки уйдёт, а образ под тегом
+останется. Без `-a` чистится только часть кэша. Удалять этот образ до конца выката нельзя:
+без него и без кэша откат тоже потребует полной сборки. Сборка, упавшая с `ENOSPC`,
+оставляет диск почти полным рядом с работающим Postgres, поэтому кэш чистится сразу, а не
+после разбора.
 
 Порядок важен, потому что CRM и сайт уезжают сами при пуше в `main`, а API обновляется
 руками:
@@ -189,9 +191,14 @@ nano .env                             # там же CRM_ORIGIN=https://crm.it-op
    `git pull` ответит `Already up to date`, сборка пройдёт без ошибок, и API останется
    старым. Новый API работает и со старой CRM, и со старой панелью.
 
+   Собирать и переключать лучше отдельно: старый API работает всё время сборки, а диск
+   можно освободить до замены контейнера. `--no-deps` оставляет на месте базу и туннель.
+
    ```bash
    cd /opt/it-optimization && git fetch origin && git checkout crm-fixes
-   cd server && docker compose -f docker-compose.prod.yml up -d --build
+   cd server && docker compose -f docker-compose.prod.yml build api
+   docker builder prune -af
+   docker compose -f docker-compose.prod.yml up -d --no-deps --no-build api
    ```
 
 3. Убедиться, что отвечает именно новый API. `/health` и вход этого не покажут, они есть и
@@ -216,15 +223,14 @@ nano .env                             # там же CRM_ORIGIN=https://crm.it-op
 7. Проверить `GITHUB_OWNER` в `.env` и переменную `NEXT_PUBLIC_ADMIN_REPO_OWNER` в Actions:
    заданное там явно значение перекрывает умолчание `crptmndd`.
 8. Вернуть сервер на `main`. Иначе следующие `git pull` будут отвечать
-   `Already up to date` и правки из `main` на сервер не приедут:
+   `Already up to date` и правки из `main` на сервер не приедут. Коммит тот же, что уже
+   собран, поэтому пересборка не нужна:
 
    ```bash
    cd /opt/it-optimization && git checkout main && git pull
-   cd server && docker compose -f docker-compose.prod.yml up -d --build
    ```
 
-9. Когда выкат устоялся, освободить диск: `docker image rm server-api:before-crm-fixes`,
-   затем `docker builder prune -f`.
+9. Когда выкат устоялся, освободить диск: `docker image rm server-api:before-crm-fixes`.
 
 После выката разобрать старые договоры, работе они не мешают:
 
