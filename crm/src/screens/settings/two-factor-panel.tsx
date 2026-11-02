@@ -1,4 +1,4 @@
-import { Check, Copy, ShieldCheck } from "lucide-react";
+import { Check, Copy } from "lucide-react";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { ApiError } from "@/api/client";
 import {
@@ -6,8 +6,8 @@ import {
   type TwoFactorSetup,
   type TwoFactorStatus,
 } from "@/api/two-factor";
-import { useAuth } from "@/auth/auth-context";
-import { Button, ErrorNote, Field, Input } from "@/components/ui";
+import { useAuth, useCurrentUser } from "@/auth/auth-context";
+import { Badge, Button, Card, ErrorNote, Field, Input } from "@/components/ui";
 import { formatDate } from "@/lib/dates";
 
 /**
@@ -30,6 +30,8 @@ function errorText(cause: unknown, fallback: string): string {
 
 export function TwoFactorPanel({ onEnabled }: { onEnabled: () => void }) {
   const { refreshUser } = useAuth();
+  // Лаймовая кнопка одна на экран: у владельца это «Сохранить ники» ниже.
+  const owner = useCurrentUser().role === "owner";
   const [status, setStatus] = useState<TwoFactorStatus | null>(null);
   const [step, setStep] = useState<Step>({ name: "idle" });
   const [password, setPassword] = useState("");
@@ -129,188 +131,198 @@ export function TwoFactorPanel({ onEnabled }: { onEnabled: () => void }) {
   );
 
   return (
-    <div className="border-border mt-6 rounded-xl border p-5">
-      <div className="flex items-start gap-3">
-        <ShieldCheck size={18} className="mt-0.5 shrink-0" strokeWidth={2} />
-        <div className="min-w-0 flex-1">
-          <h2 className="text-sm font-semibold">Двухфакторный вход</h2>
-          <p className="text-muted-foreground mt-1 text-sm">
-            При входе, кроме пароля, нужен код из приложения: Google Authenticator, Яндекс
-            Ключ, 1Password. Без него пароли в Доступах не открываются.
-          </p>
-
-          {status && !status.available && (
-            <p className="text-muted-foreground mt-4 text-sm">
-              На сервере не задан ключ шифрования, поэтому подключить 2FA пока нельзя.
-            </p>
-          )}
-
-          {step.name === "idle" && (
-            <>
-              {status?.enabled && (
-                <div className="mt-4 space-y-3">
-                  <p className="text-success inline-flex items-center gap-1.5 text-sm font-medium">
-                    <Check size={16} strokeWidth={2.5} />
-                    Включён
-                    {status.enabledAt ? ` с ${formatDate(status.enabledAt)}` : ""}
-                  </p>
-                  <p className="text-muted-foreground text-sm">
-                    Кодов восстановления осталось: {status.recoveryCodesLeft}
-                  </p>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      variant="ghost"
-                      onClick={() => go({ name: "regenerate" })}
-                      disabled={!status.available}
-                    >
-                      Новые коды восстановления
-                    </Button>
-                    <Button variant="danger" onClick={() => go({ name: "disable" })}>
-                      Отключить
-                    </Button>
-                  </div>
-                </div>
-              )}
-
-              {status && !status.enabled && status.available && (
-                <div className="mt-4">
-                  <Button onClick={() => go({ name: "password" })}>Подключить</Button>
-                </div>
-              )}
-
-              {errorNote}
-            </>
-          )}
-
-          {step.name === "password" && (
-            <form onSubmit={startSetup} className="mt-4 max-w-sm">
-              <Field label="Пароль от CRM">
-                <Input
-                  type="password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  required
-                  autoFocus
-                  autoComplete="current-password"
-                />
-              </Field>
-              {errorNote}
-              <div className="mt-4 flex items-center gap-2">
-                <Button type="submit" disabled={busy}>
-                  {busy ? "Проверяем…" : "Дальше"}
-                </Button>
-                {cancel}
-              </div>
-            </form>
-          )}
-
-          {step.name === "scan" && (
-            <form onSubmit={confirmSetup} className="mt-4">
-              <p className="text-muted-foreground text-sm">
-                После включения другие входы завершатся, а телеграм надо будет подключить
-                заново.
-              </p>
-              <p className="mt-3 text-sm">Отсканируйте код в приложении:</p>
-              {/* Белая подложка обязательна: на тёмной теме QR не читается. */}
-              <img
-                src={`data:image/svg+xml;base64,${btoa(step.setup.qrSvg)}`}
-                alt="QR-код для приложения"
-                className="mt-3 size-48 rounded-lg bg-white p-2"
-              />
-              <p className="text-muted-foreground mt-3 text-sm">
-                Не сканируется — введите ключ вручную:
-              </p>
-              <code className="bg-muted mt-1.5 block rounded-lg px-3 py-2.5 font-mono text-sm break-all">
-                {step.setup.secret}
-              </code>
-              <div className="mt-4 max-w-sm">
-                <Field label="Код из приложения">
-                  <Input
-                    value={code}
-                    onChange={(event) => setCode(event.target.value)}
-                    required
-                    autoComplete="one-time-code"
-                    inputMode="numeric"
-                    pattern="\d{6}"
-                    maxLength={6}
-                  />
-                </Field>
-              </div>
-              {errorNote}
-              <div className="mt-4 flex items-center gap-2">
-                <Button type="submit" disabled={busy}>
-                  {busy ? "Проверяем…" : "Включить"}
-                </Button>
-                <Button type="button" variant="ghost" onClick={cancelSetup}>
-                  Отмена
-                </Button>
-              </div>
-            </form>
-          )}
-
-          {step.name === "codes" && (
-            <RecoveryCodes codes={step.codes} onDone={() => go({ name: "idle" })} />
-          )}
-
-          {step.name === "regenerate" && (
-            <form onSubmit={regenerate} className="mt-4 max-w-sm">
-              <Field
-                label="Код из приложения"
-                hint="Старые коды восстановления перестанут работать"
-              >
-                <Input
-                  value={code}
-                  onChange={(event) => setCode(event.target.value)}
-                  required
-                  autoFocus
-                  autoComplete="one-time-code"
-                  inputMode="numeric"
-                  pattern="\d{6}"
-                  maxLength={6}
-                />
-              </Field>
-              {errorNote}
-              <div className="mt-4 flex items-center gap-2">
-                <Button type="submit" disabled={busy}>
-                  {busy ? "Выпускаем…" : "Выпустить"}
-                </Button>
-                {cancel}
-              </div>
-            </form>
-          )}
-
-          {step.name === "disable" && (
-            <form onSubmit={disable} className="mt-4 max-w-sm space-y-4">
-              <Field label="Пароль от CRM">
-                <Input
-                  type="password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  required
-                  autoFocus
-                  autoComplete="current-password"
-                />
-              </Field>
-              <Field label="Код" hint="Из приложения или код восстановления">
-                <Input
-                  value={code}
-                  onChange={(event) => setCode(event.target.value)}
-                  required
-                  autoComplete="one-time-code"
-                />
-              </Field>
-              {errorNote}
-              <div className="flex items-center gap-2">
-                <Button type="submit" variant="danger" disabled={busy}>
-                  {busy ? "Отключаем…" : "Отключить"}
-                </Button>
-                {cancel}
-              </div>
-            </form>
-          )}
-        </div>
+    <Card className="p-5">
+      <div className="flex items-start justify-between gap-3">
+        <h2 className="text-[17px] leading-6 font-bold tracking-tight">
+          Двухфакторный вход
+        </h2>
+        {status?.enabled && (
+          <Badge tone="success">
+            <Check size={15} strokeWidth={2.5} />
+            Включён{status.enabledAt ? ` с ${formatDate(status.enabledAt)}` : ""}
+          </Badge>
+        )}
       </div>
-    </div>
+      <p className="text-muted-foreground mt-1 text-sm">
+        При входе, кроме пароля, нужен код из приложения: Google Authenticator, Яндекс
+        Ключ, 1Password. Без него пароли в Доступах не открываются.
+      </p>
+
+      {status && !status.available && (
+        <p className="text-muted-foreground mt-4 text-sm">
+          На сервере не задан ключ шифрования, поэтому подключить 2FA пока нельзя.
+        </p>
+      )}
+
+      {step.name === "idle" && (
+        <>
+          {status?.enabled && (
+            <div className="mt-4 space-y-3">
+              <p className="text-muted-foreground text-sm">
+                Кодов восстановления осталось: {status.recoveryCodesLeft}
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => go({ name: "regenerate" })}
+                  disabled={!status.available}
+                >
+                  Новые коды восстановления
+                </Button>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  onClick={() => go({ name: "disable" })}
+                >
+                  Отключить
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {status && !status.enabled && status.available && (
+            <div className="mt-4">
+              <Button
+                variant={owner ? "secondary" : "primary"}
+                onClick={() => go({ name: "password" })}
+              >
+                Подключить
+              </Button>
+            </div>
+          )}
+
+          {errorNote}
+        </>
+      )}
+
+      {step.name === "password" && (
+        <form onSubmit={startSetup} className="mt-4 max-w-sm">
+          <Field label="Пароль от CRM">
+            <Input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              required
+              autoFocus
+              autoComplete="current-password"
+            />
+          </Field>
+          {errorNote}
+          <div className="mt-4 flex items-center gap-2">
+            <Button type="submit" disabled={busy}>
+              {busy ? "Проверяем…" : "Дальше"}
+            </Button>
+            {cancel}
+          </div>
+        </form>
+      )}
+
+      {step.name === "scan" && (
+        <form onSubmit={confirmSetup} className="mt-4">
+          <p className="text-muted-foreground text-sm">
+            После включения другие входы завершатся, а телеграм надо будет подключить
+            заново.
+          </p>
+          <p className="mt-3 text-sm">Отсканируйте код в приложении:</p>
+          {/* Белая подложка обязательна: на тёмной теме QR не читается. */}
+          <img
+            src={`data:image/svg+xml;base64,${btoa(step.setup.qrSvg)}`}
+            alt="QR-код для приложения"
+            className="mt-3 size-48 rounded-lg bg-white p-2"
+          />
+          <p className="text-muted-foreground mt-3 text-sm">
+            Не сканируется — введите ключ вручную:
+          </p>
+          <code className="bg-muted mt-1.5 block rounded-lg px-3 py-2.5 font-mono text-sm break-all">
+            {step.setup.secret}
+          </code>
+          <div className="mt-4 max-w-sm">
+            <Field label="Код из приложения">
+              <Input
+                value={code}
+                onChange={(event) => setCode(event.target.value)}
+                required
+                autoComplete="one-time-code"
+                inputMode="numeric"
+                pattern="\d{6}"
+                maxLength={6}
+              />
+            </Field>
+          </div>
+          {errorNote}
+          <div className="mt-4 flex items-center gap-2">
+            <Button type="submit" disabled={busy}>
+              {busy ? "Проверяем…" : "Включить"}
+            </Button>
+            <Button type="button" variant="ghost" onClick={cancelSetup}>
+              Отмена
+            </Button>
+          </div>
+        </form>
+      )}
+
+      {step.name === "codes" && (
+        <RecoveryCodes codes={step.codes} onDone={() => go({ name: "idle" })} />
+      )}
+
+      {step.name === "regenerate" && (
+        <form onSubmit={regenerate} className="mt-4 max-w-sm">
+          <Field
+            label="Код из приложения"
+            hint="Старые коды восстановления перестанут работать"
+          >
+            <Input
+              value={code}
+              onChange={(event) => setCode(event.target.value)}
+              required
+              autoFocus
+              autoComplete="one-time-code"
+              inputMode="numeric"
+              pattern="\d{6}"
+              maxLength={6}
+            />
+          </Field>
+          {errorNote}
+          <div className="mt-4 flex items-center gap-2">
+            <Button type="submit" disabled={busy}>
+              {busy ? "Выпускаем…" : "Выпустить"}
+            </Button>
+            {cancel}
+          </div>
+        </form>
+      )}
+
+      {step.name === "disable" && (
+        <form onSubmit={disable} className="mt-4 max-w-sm space-y-4">
+          <Field label="Пароль от CRM">
+            <Input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              required
+              autoFocus
+              autoComplete="current-password"
+            />
+          </Field>
+          <Field label="Код" hint="Из приложения или код восстановления">
+            <Input
+              value={code}
+              onChange={(event) => setCode(event.target.value)}
+              required
+              autoComplete="one-time-code"
+            />
+          </Field>
+          {errorNote}
+          <div className="flex items-center gap-2">
+            <Button type="submit" variant="danger" disabled={busy}>
+              {busy ? "Отключаем…" : "Отключить"}
+            </Button>
+            {cancel}
+          </div>
+        </form>
+      )}
+    </Card>
   );
 }
 
@@ -344,11 +356,11 @@ function RecoveryCodes({ codes, onDone }: { codes: string[]; onDone: () => void 
         ))}
       </ul>
       <div className="mt-4 flex items-center gap-2">
-        <Button type="button" variant="ghost" onClick={() => void copy()}>
+        <Button type="button" variant="secondary" onClick={() => void copy()}>
           {copied ? (
             <Check size={15} strokeWidth={2.5} className="text-success" />
           ) : (
-            <Copy size={15} strokeWidth={2} />
+            <Copy size={15} strokeWidth={2.25} />
           )}
           Скопировать
         </Button>

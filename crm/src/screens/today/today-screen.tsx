@@ -1,4 +1,4 @@
-import { Check, UserRound } from "lucide-react";
+import { Check, Flame } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ApiError } from "@/api/client";
 import { updateCredential, type Credential } from "@/api/credentials";
@@ -6,7 +6,19 @@ import type { Bill, Project } from "@/api/projects";
 import { updateTask, type Task } from "@/api/tasks";
 import { getToday, type TodaySnapshot } from "@/api/today";
 import { useCurrentUser } from "@/auth/auth-context";
-import { Badge, EmptyState, ErrorNote, Select } from "@/components/ui";
+import { PeopleFilter } from "@/components/people-filter";
+import { PersonChips } from "@/components/person-chip";
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  ErrorNote,
+  List,
+  LoadingRows,
+  PageHeader,
+  SectionTitle,
+} from "@/components/ui";
 import { cn } from "@/lib/cn";
 import {
   describeDeadline,
@@ -16,7 +28,6 @@ import {
   periodLabel,
   toDateInputValue,
 } from "@/lib/dates";
-import { DEVELOPERS } from "@/lib/developers";
 import { fee, formatTotals, money, sumByCurrency } from "@/lib/money";
 import { Link } from "react-router";
 
@@ -41,17 +52,55 @@ import { Link } from "react-router";
  * делать», а «кто кому должен».
  */
 
-/** Значение «вся команда» в выборе человека. В запрос оно не уходит. */
-const EVERYONE = "all";
+/**
+ * Адреса блоков для плиток сверху. Одним списком: плитка без своего блока молча
+ * никуда бы не прокручивала.
+ */
+const BLOCK = {
+  overdue: "today-overdue",
+  today: "today-tasks",
+  unassigned: "today-unassigned",
+  urgent: "today-projects-urgent",
+  soon: "today-projects-soon",
+  renewals: "today-renewals",
+  unbilled: "today-unbilled",
+  unpaid: "today-unpaid",
+  nextStages: "today-next-stages",
+} as const;
 
-const PEOPLE = [
-  { value: EVERYONE, label: "Все" },
-  ...DEVELOPERS.map((name) => ({ value: name, label: name })),
-];
+const TITLE = "block truncate text-[15px] font-semibold";
+const SECONDARY = "text-muted-foreground block truncate text-[13px] font-medium";
+const AMOUNT = "text-[15px] font-semibold whitespace-nowrap tabular-nums";
+
+/*
+ * Те же колонки, что у строки задачи в разделе «Задачи», чтобы название, проект и
+ * срок стояли на привычных местах. Колонки включаются с xl, а не с sm: с 768px
+ * появляется боковое меню, и до 1280px фиксированные колонки съедают название.
+ * Две строки на узком экране показывают то же самое и не обрезают его.
+ */
+const WORK_ROW =
+  "grid min-h-14 min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 py-2.5 pr-4 xl:grid-cols-[minmax(0,1fr)_12rem_3.5rem_9.75rem]";
+
+/** На телефоне сумма стоит в правом верхнем углу строки, вторичное уходит вниз. */
+const MONEY_ROW =
+  "grid min-h-14 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 px-4 py-2.5";
+
+const dayInWords = new Intl.DateTimeFormat("ru-RU", {
+  weekday: "long",
+  day: "numeric",
+  month: "long",
+});
+
+/** «Понедельник, 2 ноября». */
+function todayInWords(): string {
+  const text = dayInWords.format(new Date());
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
 
 export function TodayScreen() {
   const user = useCurrentUser();
-  const [person, setPerson] = useState<string>(EVERYONE);
+  /** Пустая строка — вся команда, так считает `PeopleFilter`. В запрос она не уходит. */
+  const [person, setPerson] = useState("");
   const [snapshot, setSnapshot] = useState<TodaySnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** Ответ по прошлому человеку не должен лечь поверх уже выбранного. */
@@ -60,7 +109,7 @@ export function TodayScreen() {
   const load = useCallback(() => {
     setError(null);
     const current = (request.current += 1);
-    getToday(person === EVERYONE ? undefined : person)
+    getToday(person || undefined)
       .then((result) => {
         if (current === request.current) setSnapshot(result);
       })
@@ -125,24 +174,9 @@ export function TodayScreen() {
 
   return (
     <section>
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="text-xl font-bold tracking-tight">{greeting}</h1>
-          <p className="text-muted-foreground mt-1 text-sm">
-            {person === EVERYONE
-              ? "То же, что бот присылает утром. Пусто — значит всё под контролем."
-              : `Срез по человеку: ${person}. Ничьи задачи здесь не показываются.`}
-          </p>
-        </div>
-        <Select
-          value={person}
-          onChange={setPerson}
-          options={PEOPLE}
-          ariaLabel="Чьи дела показать"
-          icon={<UserRound size={14} strokeWidth={2} />}
-          className="w-40"
-        />
-      </header>
+      <PageHeader title={greeting} subtitle={todayInWords()}>
+        <PeopleFilter value={person} onChange={setPerson} />
+      </PageHeader>
 
       {error && (
         <div className="mt-4">
@@ -151,137 +185,238 @@ export function TodayScreen() {
       )}
 
       {snapshot === null ? (
-        <p className="text-muted-foreground mt-6 text-sm">Загружаем…</p>
+        <div className="mt-5">
+          <LoadingRows />
+        </div>
       ) : snapshot.empty ? (
-        <div className="mt-6">
+        <div className="mt-5">
           <EmptyState
             title="Ничего не горит"
             note="Ни просроченных задач, ни денег, которые ждут. Свободны."
           />
         </div>
       ) : (
-        <div className="mt-6 space-y-9 sm:space-y-7">
-          <Block
-            title="Задачи просрочены"
-            items={snapshot.tasks.overdue}
-            tone="danger"
-            render={(task) => (
-              <TaskLine
-                key={task.id}
-                task={task}
-                showDeadline
-                onComplete={() => void completeTask(task)}
-              />
-            )}
-          />
-          <Block
-            title="Задачи на сегодня"
-            items={snapshot.tasks.today}
-            render={(task) => (
-              <TaskLine
-                key={task.id}
-                task={task}
-                onComplete={() => void completeTask(task)}
-              />
-            )}
-          />
-          <Block
-            title="Без исполнителя"
-            items={snapshot.tasks.unassigned}
-            note="В работе или на очереди, но ни на ком не висят"
-            render={(task) => (
-              <TaskLine
-                key={task.id}
-                task={task}
-                showDeadline
-                onComplete={() => void completeTask(task)}
-              />
-            )}
-          />
-          <Block
-            title="Проекты — подходит срок"
-            items={snapshot.projects.urgent}
-            render={(project) => <ProjectLine key={project.id} project={project} />}
-          />
-          <Block
-            title="Проекты — скоро срок"
-            items={snapshot.projects.soon}
-            note="В ближайшие семь дней"
-            render={(project) => <ProjectLine key={project.id} project={project} />}
-          />
-          <Block
-            title="Пора продлевать"
-            items={snapshot.credentials.expiring}
-            note="Домены, хостинг и подписки со сроком в ближайшие две недели"
-            render={(item) => (
-              <CredentialLine key={item.id} item={item} onPaid={() => markPaid(item)} />
-            )}
-          />
+        <>
+          <Tiles snapshot={snapshot} />
 
-          {hasMoney && (
-            <div className="border-border space-y-9 border-t pt-6 sm:space-y-7">
-              <p className="text-muted-foreground text-sm">Деньги</p>
-              <Block
-                title="Не выставлено"
-                items={snapshot.projects.unbilled}
-                tone="danger"
-                note="Проекты в работе с помесячной оплатой, у которых пропущен месяц"
-                render={(project) => <UnbilledLine key={project.id} project={project} />}
-              />
-              <Block
-                title="Не оплачено"
-                items={snapshot.money.unpaid}
-                note={totalsNote(snapshot.money.unpaid, "Старые сверху")}
-                render={(bill) => <BillLine key={bill.id} bill={bill} />}
-              />
-              <Block
-                title="Следующий этап"
-                items={snapshot.money.nextStages}
-                note={totalsNote(
-                  snapshot.money.nextStages,
-                  "Договоры платятся по очереди, поэтому здесь по одному этапу на договор",
-                )}
-                render={(bill) => <BillLine key={bill.id} bill={bill} />}
-              />
-            </div>
-          )}
-        </div>
+          <div className="mt-6 space-y-6">
+            <Block
+              id={BLOCK.overdue}
+              title="Задачи просрочены"
+              items={snapshot.tasks.overdue}
+              tone="danger"
+              render={(task) => (
+                <TaskLine
+                  key={task.id}
+                  task={task}
+                  showDeadline
+                  onComplete={() => void completeTask(task)}
+                />
+              )}
+            />
+            <Block
+              id={BLOCK.today}
+              title="Задачи на сегодня"
+              items={snapshot.tasks.today}
+              render={(task) => (
+                <TaskLine
+                  key={task.id}
+                  task={task}
+                  onComplete={() => void completeTask(task)}
+                />
+              )}
+            />
+            <Block
+              id={BLOCK.unassigned}
+              title="Без исполнителя"
+              items={snapshot.tasks.unassigned}
+              render={(task) => (
+                <TaskLine
+                  key={task.id}
+                  task={task}
+                  showDeadline
+                  onComplete={() => void completeTask(task)}
+                />
+              )}
+            />
+            <Block
+              id={BLOCK.urgent}
+              title="Проекты — подходит срок"
+              items={snapshot.projects.urgent}
+              render={(project) => <ProjectLine key={project.id} project={project} />}
+            />
+            <Block
+              id={BLOCK.soon}
+              title="Проекты — скоро срок"
+              items={snapshot.projects.soon}
+              render={(project) => <ProjectLine key={project.id} project={project} />}
+            />
+            <Block
+              id={BLOCK.renewals}
+              title="Пора продлевать"
+              items={snapshot.credentials.expiring}
+              render={(item) => (
+                <CredentialLine key={item.id} item={item} onPaid={() => markPaid(item)} />
+              )}
+            />
+
+            {hasMoney && (
+              <div className="pt-2">
+                <h2 className="mb-4 px-1 text-xl font-extrabold tracking-tight">
+                  Деньги
+                </h2>
+                <div className="space-y-6">
+                  <Block
+                    id={BLOCK.unbilled}
+                    title="Не выставлено"
+                    items={snapshot.projects.unbilled}
+                    tone="danger"
+                    render={(project) => (
+                      <UnbilledLine key={project.id} project={project} />
+                    )}
+                  />
+                  <Block
+                    id={BLOCK.unpaid}
+                    title="Не оплачено"
+                    items={snapshot.money.unpaid}
+                    total={formatTotals(sumByCurrency(snapshot.money.unpaid))}
+                    render={(bill) => <BillLine key={bill.id} bill={bill} />}
+                  />
+                  <Block
+                    id={BLOCK.nextStages}
+                    title="Следующий этап"
+                    items={snapshot.money.nextStages}
+                    total={formatTotals(sumByCurrency(snapshot.money.nextStages))}
+                    render={(bill) => <BillLine key={bill.id} bill={bill} />}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        </>
       )}
     </section>
   );
 }
 
-/** Итог по каждой валюте отдельно: курса у CRM нет. Пустых сумм в нём нет вовсе. */
-function totalsNote(bills: Bill[], fallback: string): string {
-  const total = formatTotals(sumByCurrency(bills));
-  return total ? `Всего ${total}` : fallback;
+/**
+ * Сводка над списком и заодно его оглавление: экран длинный, а на телефоне деньги
+ * лежат на несколько экранов ниже первой задачи. Без красного на нуле: красный здесь
+ * значит «есть что разбирать», а не название плитки.
+ */
+function Tiles({ snapshot }: { snapshot: TodaySnapshot }) {
+  const { tasks, projects, credentials, money: bills } = snapshot;
+
+  return (
+    <div className="mt-5 grid grid-cols-3 gap-2 sm:gap-2.5 xl:grid-cols-6">
+      <Tile
+        label="Просрочено"
+        count={tasks.overdue.length}
+        target={BLOCK.overdue}
+        danger
+      />
+      <Tile label="На сегодня" count={tasks.today.length} target={BLOCK.today} />
+      <Tile
+        label="Сроки проектов"
+        count={projects.urgent.length + projects.soon.length}
+        target={projects.urgent.length > 0 ? BLOCK.urgent : BLOCK.soon}
+      />
+      <Tile
+        label="Продлить"
+        count={credentials.expiring.length}
+        target={BLOCK.renewals}
+      />
+      <Tile
+        label="Не выставлено"
+        count={projects.unbilled.length}
+        target={BLOCK.unbilled}
+        danger
+      />
+      <Tile
+        label="К оплате"
+        count={bills.unpaid.length + bills.nextStages.length}
+        target={bills.unpaid.length > 0 ? BLOCK.unpaid : BLOCK.nextStages}
+      />
+    </div>
+  );
+}
+
+function Tile({
+  label,
+  count,
+  target,
+  danger,
+}: {
+  label: string;
+  count: number;
+  target: string;
+  danger?: boolean;
+}) {
+  function scrollToBlock() {
+    // Движение по `<main>` длиной в несколько экранов: просившим интерфейс не
+    // двигаться показываем сразу нужное место.
+    const calm = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    document
+      .getElementById(target)
+      ?.scrollIntoView({ behavior: calm ? "auto" : "smooth", block: "start" });
+  }
+
+  return (
+    <Card>
+      {/* На нуле блока нет вовсе, прокручивать не к чему. */}
+      <button
+        type="button"
+        disabled={count === 0}
+        onClick={scrollToBlock}
+        className="enabled:hover:bg-muted/60 h-full w-full rounded-2xl px-3 py-2.5 text-left transition-colors sm:px-4 sm:py-3"
+      >
+        <span
+          className={cn(
+            "block text-2xl leading-8 font-extrabold tracking-tight tabular-nums sm:text-[28px]",
+            count === 0 ? "text-muted-foreground" : danger && "text-danger",
+          )}
+        >
+          {count}
+        </span>
+        <span className="text-muted-foreground mt-0.5 block text-xs leading-tight font-medium sm:text-[13px]">
+          {label}
+        </span>
+      </button>
+    </Card>
+  );
 }
 
 function Block<T>({
+  id,
   title,
   items,
   render,
-  tone = "neutral",
-  note,
+  tone,
+  total,
 }: {
+  id: string;
   title: string;
   items: T[];
   render: (item: T) => ReactNode;
-  tone?: "neutral" | "danger";
-  note?: string;
+  tone?: "danger";
+  /** Итог по каждой валюте отдельно: курса у CRM нет. Пустых сумм в нём нет вовсе. */
+  total?: string;
 }) {
   if (items.length === 0) return null;
 
   return (
-    <div>
-      <div className="flex items-baseline gap-2">
-        <h2 className={cn("text-sm font-semibold", tone === "danger" && "text-danger")}>
-          {title}
-        </h2>
-        <span className="text-muted-foreground text-xs">{items.length}</span>
-      </div>
-      {note && <p className="text-muted-foreground mt-0.5 text-xs">{note}</p>}
-      <ul className="divide-border mt-2 divide-y">{items.map(render)}</ul>
+    <div id={id} className="scroll-mt-3">
+      <SectionTitle title={title} count={items.length} tone={tone}>
+        {total && (
+          /* Занимает остаток ряда и переносится сам: иначе две валюты на телефоне
+             выдавливают на вторую строку заголовок. */
+          <span className={cn(AMOUNT, "min-w-0 flex-1 text-right whitespace-normal")}>
+            <span className="text-muted-foreground font-medium">Всего </span>
+            {total}
+          </span>
+        )}
+      </SectionTitle>
+      <List>{items.map(render)}</List>
     </div>
   );
 }
@@ -298,30 +433,48 @@ function TaskLine({
   const deadline = showDeadline && task.dueAt ? describeDeadline(task.dueAt) : null;
 
   return (
-    <li className="flex items-start gap-3 py-3.5 sm:py-2.5">
+    <li className="hover:bg-muted/60 flex items-stretch transition-colors">
       <button
         type="button"
         onClick={onComplete}
         aria-label="Отметить выполненной"
-        className="border-border hover:border-accent mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-md border transition"
+        className="group flex w-12 shrink-0 items-center justify-center pl-1"
       >
-        <Check size={13} strokeWidth={3} className="opacity-0 hover:opacity-40" />
-      </button>
-      <Link to={`/tasks?focus=${task.id}`} className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium">
-          {task.priority === "high" && "❗ "}
-          {task.title}
+        <span className="ring-foreground/20 group-hover:ring-foreground/50 group-hover:text-muted-foreground flex size-[22px] items-center justify-center rounded-full text-transparent ring-2 transition ring-inset">
+          <Check size={14} strokeWidth={3} />
         </span>
-        <span className="text-muted-foreground mt-0.5 block truncate text-xs">
-          {[
-            task.project?.title,
-            task.developers.length ? task.developers.join(", ") : "ничья",
-          ]
-            .filter(Boolean)
-            .join(" · ")}
+      </button>
+
+      <Link to={`/tasks?focus=${task.id}`} className={cn(WORK_ROW, "flex-1")}>
+        <span className="flex min-w-0 items-center gap-2">
+          {task.priority === "high" && (
+            <Flame
+              size={15}
+              strokeWidth={2.5}
+              aria-label="Срочно"
+              className="text-danger shrink-0"
+            />
+          )}
+          <span className="truncate text-[15px] font-semibold">{task.title}</span>
+        </span>
+
+        <span className={cn(SECONDARY, "hidden xl:block")}>{task.project?.title}</span>
+
+        <span className="row-span-2 flex justify-end xl:row-span-1">
+          {task.developers.length > 0 ? (
+            <PersonChips names={task.developers} />
+          ) : (
+            <span className="text-muted-foreground text-xs">ничья</span>
+          )}
+        </span>
+
+        <span className="col-start-1 mt-0.5 flex min-w-0 items-center gap-2 empty:hidden xl:col-start-auto xl:mt-0 xl:justify-end">
+          {deadline && <Badge tone={deadline.tone}>{deadline.label}</Badge>}
+          {task.project && (
+            <span className={cn(SECONDARY, "xl:hidden")}>{task.project.title}</span>
+          )}
         </span>
       </Link>
-      {deadline && <Badge tone={deadline.tone}>{deadline.label}</Badge>}
     </li>
   );
 }
@@ -335,24 +488,32 @@ function UnbilledLine({ project }: { project: Project }) {
   const first = periodLabel(project.unbilledPeriod ?? "");
 
   return (
-    <li className="flex items-start gap-3 py-3.5 sm:py-2.5">
-      <Link to={`/projects?focus=${project.id}`} className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium">{project.title}</span>
-        <span className="text-muted-foreground mt-0.5 block truncate text-xs">
-          {[
-            project.client?.name,
-            project.unbilledCount > 1 ? `первый пропуск: ${first}` : `за ${first}`,
-          ]
-            .filter(Boolean)
-            .join(" · ")}
+    <li className="hover:bg-muted/60 transition-colors">
+      <Link
+        to={`/projects?focus=${project.id}`}
+        className={cn(MONEY_ROW, "xl:grid-cols-[minmax(0,1fr)_13rem_4.5rem_8rem]")}
+      >
+        <span className="min-w-0">
+          <span className={TITLE}>{project.title}</span>
+          <span className={SECONDARY}>{project.client?.name}</span>
+        </span>
+        <span className={cn(SECONDARY, "max-xl:col-start-1 max-xl:row-start-2")}>
+          {project.unbilledCount > 1 ? `первый пропуск: ${first}` : `за ${first}`}
+        </span>
+        <Badge
+          tone="danger"
+          className="justify-self-end max-xl:col-start-2 max-xl:row-start-2"
+        >{`${project.unbilledCount} мес.`}</Badge>
+        <span
+          className={cn(
+            AMOUNT,
+            "text-right max-xl:col-start-2 max-xl:row-start-1 max-xl:self-start",
+          )}
+        >
+          {project.monthlyAmountMinor !== null &&
+            money(project.monthlyAmountMinor * project.unbilledCount, project.currency)}
         </span>
       </Link>
-      <Badge tone="danger">{`${project.unbilledCount} мес.`}</Badge>
-      {project.monthlyAmountMinor !== null && (
-        <span className="text-sm font-medium">
-          {money(project.monthlyAmountMinor * project.unbilledCount, project.currency)}
-        </span>
-      )}
     </li>
   );
 }
@@ -368,26 +529,34 @@ function BillLine({ bill }: { bill: Bill }) {
     : bill.period && periodLabel(bill.period);
 
   return (
-    <li className="flex items-start gap-3 py-3.5 sm:py-2.5">
-      <Link to={`/projects?open=${bill.project.id}`} className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium">{bill.project.title}</span>
-        <span className="text-muted-foreground mt-0.5 block truncate text-xs">
-          {[
-            bill.project.client,
-            what,
-            bill.issuedAt ? `выставлен ${formatDate(bill.issuedAt)}` : null,
-          ]
-            .filter(Boolean)
-            .join(" · ")}
+    <li className="hover:bg-muted/60 transition-colors">
+      <Link
+        to={`/projects?open=${bill.project.id}`}
+        className={cn(MONEY_ROW, "xl:grid-cols-[minmax(0,1fr)_8rem_9.5rem_8rem]")}
+      >
+        <span className="min-w-0">
+          <span className={TITLE}>{bill.project.title}</span>
+          <span className={SECONDARY}>{bill.project.client}</span>
+        </span>
+        <span className={cn(SECONDARY, "max-xl:col-start-1 max-xl:row-start-2")}>
+          {what}
+        </span>
+        <span
+          className={cn(SECONDARY, "text-right max-xl:col-start-2 max-xl:row-start-2")}
+        >
+          {bill.issuedAt && `выставлен ${formatDate(bill.issuedAt)}`}
+        </span>
+        {/* Здесь, как и в «Счетах», отсутствие суммы — подпись, а не сигнал. */}
+        <span className="text-right max-xl:col-start-2 max-xl:row-start-1 max-xl:self-start">
+          {bill.amountMinor === null ? (
+            <span className="text-muted-foreground text-[13px] font-medium">
+              сумма не указана
+            </span>
+          ) : (
+            <span className={AMOUNT}>{money(bill.amountMinor, bill.currency)}</span>
+          )}
         </span>
       </Link>
-      {bill.amountMinor === null ? (
-        <Badge>сумма не указана</Badge>
-      ) : (
-        <span className="shrink-0 text-sm font-medium whitespace-nowrap">
-          {money(bill.amountMinor, bill.currency)}
-        </span>
-      )}
     </li>
   );
 }
@@ -395,6 +564,10 @@ function BillLine({ bill }: { bill: Bill }) {
 /**
  * Продление показывается как обычный срок: истёкший домен так же ломает работу,
  * как просроченная задача, и выделять его отдельным видом строки незачем.
+ *
+ * Вся строка ведёт к карточке, но кнопка стоит рядом с содержимым, а не внутри
+ * ссылки: кнопка в ссылке — недопустимая разметка. Поэтому ссылка лежит слоем поверх
+ * строки, а кнопка поднята над ней.
  */
 function CredentialLine({
   item,
@@ -408,62 +581,96 @@ function CredentialLine({
   const paidUntil = nextRenewalDate(toDateInputValue(item.renewsAt));
 
   return (
-    <li className="flex flex-col gap-2 py-3.5 sm:py-2.5">
-      <div className="flex items-start gap-3">
-        <Link to={`/credentials?focus=${item.id}`} className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-medium">{item.service}</span>
-          <span className="text-muted-foreground mt-0.5 block truncate text-xs">
-            {[item.login, item.owner ?? "ни на кого не оформлен"]
-              .filter(Boolean)
-              .join(" · ")}
-          </span>
-        </Link>
-        {item.amountMinor != null && (
-          <span className="shrink-0 text-sm font-medium">
-            {fee(item.amountMinor, item.monthlyFee, item.currency)}
-          </span>
-        )}
-        {deadline && <Badge tone={deadline.tone}>{deadline.label}</Badge>}
-      </div>
+    <li className="hover:bg-muted/60 relative grid min-h-14 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 px-4 py-2.5 transition-colors xl:grid-cols-[minmax(0,1fr)_10rem_7rem_9.75rem_minmax(11rem,auto)]">
+      <Link
+        to={`/credentials?focus=${item.id}`}
+        aria-label={item.service}
+        className="absolute inset-0 focus-visible:-outline-offset-2"
+      />
 
-      <div className="flex justify-end">
-        <button
+      <span className="min-w-0">
+        <span className={TITLE}>{item.service}</span>
+        <span className={SECONDARY}>{item.login}</span>
+      </span>
+
+      <span className={cn(SECONDARY, "max-xl:col-start-1 max-xl:row-start-2")}>
+        {item.owner ?? "ни на кого не оформлен"}
+      </span>
+
+      <span
+        className={cn(
+          AMOUNT,
+          "text-right max-xl:col-start-2 max-xl:row-start-1 max-xl:self-start",
+        )}
+      >
+        {item.amountMinor != null &&
+          fee(item.amountMinor, item.monthlyFee, item.currency)}
+      </span>
+
+      {/* Общая обёртка на узком экране: кнопка с длинной датой переносится под срок,
+          а не наезжает на него. С xl обёртки нет, это две обычные колонки. */}
+      <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 max-xl:col-span-2 max-xl:row-start-3 xl:contents">
+        <span className="flex xl:justify-end">
+          {deadline && <Badge tone={deadline.tone}>{deadline.label}</Badge>}
+        </span>
+
+        <Button
           type="button"
+          variant="secondary"
+          size="sm"
           disabled={saving}
           onClick={() => {
             setSaving(true);
             void onPaid().finally(() => setSaving(false));
           }}
-          className="text-muted-foreground hover:bg-accent-soft hover:text-foreground inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium transition disabled:opacity-50"
+          className="relative ml-auto xl:ml-0 xl:w-full"
         >
-          <Check size={13} strokeWidth={2.5} />
+          <Check size={15} strokeWidth={2.25} />
           {saving
             ? "Продлеваем…"
             : `Оплатил до ${formatDate(fromDateInputValue(paidUntil) ?? "")}`}
-        </button>
-      </div>
+        </Button>
+      </span>
     </li>
   );
 }
 
 function ProjectLine({ project }: { project: Project }) {
   const deadline = project.deadline ? describeDeadline(project.deadline) : null;
+  const openTasks = project.openTaskCount > 0 ? project.openTaskCount : null;
 
   return (
-    <li className="flex items-start gap-3 py-3.5 sm:py-2.5">
-      <Link to={`/projects?focus=${project.id}`} className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium">{project.title}</span>
-        <span className="text-muted-foreground mt-0.5 block truncate text-xs">
-          {[
-            project.client?.name,
-            project.developers.length ? project.developers.join(", ") : "никто не ведёт",
-            project.openTaskCount > 0 ? `открытых задач ${project.openTaskCount}` : null,
-          ]
-            .filter(Boolean)
-            .join(" · ")}
+    <li className="hover:bg-muted/60 transition-colors">
+      <Link to={`/projects?focus=${project.id}`} className={cn(WORK_ROW, "pl-4")}>
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="truncate text-[15px] font-semibold">{project.title}</span>
+          {openTasks && (
+            <Badge className="hidden xl:inline-flex">открытых задач {openTasks}</Badge>
+          )}
+        </span>
+
+        <span className={cn(SECONDARY, "hidden xl:block")}>{project.client?.name}</span>
+
+        <span className="row-span-2 flex justify-end xl:row-span-1">
+          {project.developers.length > 0 ? (
+            <PersonChips names={project.developers} />
+          ) : (
+            <span title="Никто не ведёт" className="text-muted-foreground text-xs">
+              никто
+            </span>
+          )}
+        </span>
+
+        <span className="col-start-1 mt-0.5 flex min-w-0 items-center gap-2 empty:hidden xl:col-start-auto xl:mt-0 xl:justify-end">
+          {deadline && <Badge tone={deadline.tone}>{deadline.label}</Badge>}
+          {project.client && (
+            <span className={cn(SECONDARY, "xl:hidden")}>{project.client.name}</span>
+          )}
+          {openTasks && (
+            <span className={cn(SECONDARY, "shrink-0 xl:hidden")}>задач {openTasks}</span>
+          )}
         </span>
       </Link>
-      {deadline && <Badge tone={deadline.tone}>{deadline.label}</Badge>}
     </li>
   );
 }

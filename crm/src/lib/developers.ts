@@ -9,3 +9,13 @@
 export const DEVELOPERS = ["Егор", "Вадим", "Камиль", "Тимур"] as const;
 
 export type Developer = (typeof DEVELOPERS)[number];
+
+/**
+ * Кто из исполнителей вошёл в систему. Первое слово: в учётке бывает «Вадим Валеев», а
+ * исполнитель значится «Вадим». `null` — учётка не связана с исполнителем, и это
+ * нормально: у маркетолога и владельца без задач строки в списке нет.
+ */
+export function developerOf(name: string | null | undefined): Developer | null {
+  const first = name?.trim().split(/\s+/)[0];
+  return DEVELOPERS.find((item) => item === first) ?? null;
+}

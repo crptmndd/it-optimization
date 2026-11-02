@@ -1,13 +1,19 @@
 @import "tailwindcss";
 
 /*
- * Токены повторяют сайт (src/app/globals.css) — CRM должна выглядеть частью
- * того же продукта. Дублирование осознанное: приложения собираются раздельно,
- * и общий файл потребовал бы монорепо-воркспейс ради тридцати строк.
+ * Токены. Цвет бренда и шрифт те же, что у сайта (src/app/globals.css), а раскладка
+ * своя: сайт живёт на белом, а рабочий инструмент — на сером полотне с белыми
+ * карточками. Так сразу видно, что здесь содержимое, а что фон, и рамки вокруг каждой
+ * строки становятся не нужны.
+ *
+ * Дублирование с сайтом осознанное: приложения собираются раздельно, и общий файл
+ * потребовал бы монорепо-воркспейс ради тридцати строк.
  */
 @theme inline {
+  --color-canvas: var(--canvas);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-field: var(--field);
   --color-muted: var(--muted);
   --color-disabled: var(--disabled);
   --color-muted-foreground: var(--muted-foreground);
@@ -15,6 +21,7 @@
   --color-surface: var(--surface);
   --color-surface-foreground: var(--surface-foreground);
   --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
   --color-accent-soft: var(--accent-soft);
   --color-accent-muted: var(--accent-muted);
   --color-accent-border: var(--accent-border);
@@ -33,26 +40,36 @@
   --radius-md: 0.5rem;
   --radius-lg: 0.75rem;
   --radius-xl: 1rem;
-  --radius-2xl: 1.5rem;
+  --radius-2xl: 1.25rem;
+  --radius-3xl: 1.5rem;
   --radius-full: 9999px;
+
+  --shadow-card: 0 1px 2px rgb(17 18 17 / 0.04), 0 0 0 1px rgb(17 18 17 / 0.03);
+  --shadow-float: 0 12px 32px rgb(17 18 17 / 0.14), 0 0 0 1px rgb(17 18 17 / 0.05);
 }
 
 :root {
+  /* Полотно страницы. Всё, что лежит на нём, — белое. */
+  --canvas: #f3f3f0;
   --background: #ffffff;
-  --foreground: #0a0a0a;
-  --muted: #f5f5f5;
+  --foreground: #121311;
+  /* Заливка поля ввода на белой карточке: рамка вокруг каждого поля только шумит. */
+  --field: #f3f3f0;
+  --muted: #f3f3f0;
   /*
    * Заливка недоступного поля. Отдельно от --muted, который занят наведением:
    * будь они одним цветом, заблокированное поле выглядело бы как то, на что
    * навели мышь, — то есть наоборот, приглашающим.
    */
-  --disabled: #ececec;
-  --muted-foreground: #737373;
-  --border: #e5e5e5;
-  --surface: #0a0a0a;
-  --surface-foreground: #fafafa;
+  --disabled: #e6e6e2;
+  /* Темнее серого сайта: на полотне #737373 не добирает контраста 4.5:1. */
+  --muted-foreground: #62635e;
+  --border: #e9e9e5;
+  --surface: #121311;
+  --surface-foreground: #fafaf8;
   --accent: #b4e02d;
-  --accent-soft: rgba(180, 224, 45, 0.16);
+  --accent-hover: #a6d21f;
+  --accent-soft: rgba(180, 224, 45, 0.24);
   /*
    * Тот же акцент каналами — для мест, где нужна своя прозрачность и одного
    * `--accent-soft` мало: подсветка карточки перебирает несколько ступеней
@@ -60,16 +77,18 @@
    * в пяти местах.
    */
   --accent-rgb: 180 224 45;
-  --accent-muted: rgba(180, 224, 45, 0.08);
-  --accent-border: rgba(180, 224, 45, 0.32);
-  --accent-foreground: #0a0a0a;
+  --accent-muted: rgba(180, 224, 45, 0.1);
+  --accent-border: rgba(138, 176, 20, 0.55);
+  --accent-foreground: #121311;
+  /* Рамка фокуса. Лайм на белом не виден, поэтому темнее самого акцента. */
+  --ring: #6f9a00;
 
-  --danger: #dc2626;
-  --danger-soft: rgba(220, 38, 38, 0.1);
-  --warning: #d97706;
-  --warning-soft: rgba(217, 119, 6, 0.12);
-  --success: #16a34a;
-  --success-soft: rgba(22, 163, 74, 0.1);
+  --danger: #c62020;
+  --danger-soft: rgba(198, 32, 32, 0.09);
+  --warning: #a85a06;
+  --warning-soft: rgba(217, 119, 6, 0.13);
+  --success: #15803d;
+  --success-soft: rgba(21, 128, 61, 0.1);
 }
 
 @layer base {
@@ -87,7 +106,7 @@
 
   body {
     margin: 0;
-    background: var(--background);
+    background: var(--canvas);
     color: var(--foreground);
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
@@ -124,7 +143,7 @@
 
   /* Внутренний инструмент открыт весь день — фокус должен быть виден. */
   :focus-visible {
-    outline: 2px solid var(--accent);
+    outline: 2px solid var(--ring);
     outline-offset: 2px;
   }
 }
@@ -164,25 +183,21 @@
 
 @keyframes crm-focus-ring {
   0% {
-    border-color: var(--border);
     box-shadow:
       inset 0 0 0 0 rgb(var(--accent-rgb) / 0),
       inset 0 0 0 0 rgb(var(--accent-rgb) / 0);
   }
   12% {
-    border-color: var(--accent);
     box-shadow:
-      inset 0 0 0 1px rgb(var(--accent-rgb) / 0.55),
-      inset 0 0 18px 0 rgb(var(--accent-rgb) / 0.3);
+      inset 0 0 0 2px rgb(var(--accent-rgb) / 0.9),
+      inset 0 0 24px 0 rgb(var(--accent-rgb) / 0.35);
   }
   55% {
-    border-color: var(--accent);
     box-shadow:
-      inset 0 0 0 1px rgb(var(--accent-rgb) / 0.3),
-      inset 0 0 18px 0 rgb(var(--accent-rgb) / 0.1);
+      inset 0 0 0 2px rgb(var(--accent-rgb) / 0.55),
+      inset 0 0 24px 0 rgb(var(--accent-rgb) / 0.14);
   }
   100% {
-    border-color: var(--border);
     box-shadow:
       inset 0 0 0 0 rgb(var(--accent-rgb) / 0),
       inset 0 0 0 0 rgb(var(--accent-rgb) / 0);
@@ -237,16 +252,8 @@
    * оказывается в списке из полусотни строк и заново ищет ту, на которую только
    * что нажал.
    *
-   * Подсвечивается собственная рамка карточки, а не кольцо вокруг неё, и это
-   * не вкусовщина. Внешнее кольцо рисуется тенью, а тень обрезается любым
-   * предком с `overflow: hidden` — например, обёрткой, которой свёрнуты группы
-   * в «Доступах». По краям кольцо срезалось плоско, и поверх скруглённой
-   * карточки получались прямые углы: выглядело так, будто у подсветки радиус
-   * меньше, чем у карточки. У рамки радиус совпадает по определению, и
-   * обрезать её нечем.
-   *
-   * Свечение внутрь, а не наружу — по той же причине. Оно даёт объём, которого
-   * одной рамке не хватает, и при этом не выходит за карточку.
+   * Подсветка рисуется внутрь строки, а не кольцом вокруг неё: строки стоят в
+   * общей карточке с `overflow: hidden`, и внешнее кольцо обрезалось бы по её краю.
    *
    * Анимацией, а не переходом, и намеренно: на карточках висит утилита
    * `transition` со своими 150 мс, и она перебила бы длительность затухания —
@@ -254,6 +261,15 @@
    */
   .crm-focused {
     animation: crm-focus-ring 3.2s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  /* Полоса прокрутки там, где ряд кнопок шире телефона: сам жест и так понятен. */
+  .crm-no-scrollbar {
+    scrollbar-width: none;
+  }
+
+  .crm-no-scrollbar::-webkit-scrollbar {
+    display: none;
   }
 }
 

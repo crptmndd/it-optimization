@@ -96,17 +96,13 @@ function TwoFactorPrompt({ waiting }: { waiting: Waiting }) {
         <p className="text-muted-foreground max-w-prose text-sm">
           Без него пароли не открываются. Подключение занимает минуту.
         </p>
-        <div className="mt-5 flex items-center gap-2">
-          <Link
-            to="/settings"
-            className="bg-surface text-surface-foreground rounded-lg px-3.5 py-2 text-sm font-semibold transition hover:opacity-90"
-          >
-            Открыть Настройки
-          </Link>
-          <Button type="button" variant="ghost" onClick={cancel}>
-            Отмена
-          </Button>
-        </div>
+        {/* Отказаться можно крестиком, Escape и нажатием мимо окна. */}
+        <Link
+          to="/settings"
+          className="bg-accent text-accent-foreground hover:bg-accent-hover mt-6 flex h-11 items-center justify-center rounded-lg text-sm font-semibold transition active:scale-[0.98]"
+        >
+          Открыть Настройки
+        </Link>
       </Modal>
     );
   }
@@ -140,6 +136,7 @@ function TwoFactorPrompt({ waiting }: { waiting: Waiting }) {
             inputMode="numeric"
             pattern="\d{6}"
             maxLength={6}
+            className="h-12 text-center text-lg font-semibold tracking-[0.3em]"
           />
         </Field>
 
@@ -149,12 +146,9 @@ function TwoFactorPrompt({ waiting }: { waiting: Waiting }) {
           </div>
         )}
 
-        <div className="mt-5 flex items-center gap-2">
-          <Button type="submit" disabled={busy}>
+        <div className="mt-6">
+          <Button type="submit" disabled={busy} className="h-11 w-full">
             {busy ? "Проверяем…" : "Подтвердить"}
-          </Button>
-          <Button type="button" variant="ghost" onClick={cancel}>
-            Отмена
           </Button>
         </div>
       </form>

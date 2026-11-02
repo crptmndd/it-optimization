@@ -1,7 +1,8 @@
 import { Check, ChevronDown } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
+import { panelClass, useDropdown } from "./dropdown";
 
 /**
  * Выпадающий список в стиле остального интерфейса.
@@ -9,11 +10,6 @@ import { cn } from "@/lib/cn";
  * Родной `<select>` рисует список средствами системы: он не подчиняется ни
  * шрифтам, ни цветам, ни скруглениям — и посреди аккуратной формы выглядит
  * чужим. Оформить его нельзя, можно только заменить.
- *
- * Список выводится **порталом в body**, а не рядом с кнопкой. Иначе его
- * обрезало бы модальное окно: у него `overflow-y-auto`, и всё, что вылезает за
- * край, исчезает. Отсюда же закрытие при прокрутке — позиция считается один
- * раз при открытии и за уехавшей кнопкой не следует.
  */
 
 export interface SelectOption {
@@ -39,97 +35,17 @@ export function Select({
   /** Значок слева от подписи — им список отличают от поля ввода на панели. */
   icon?: ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
-  /**
-   * Список живёт чуть дольше, чем открыт: закрытие рисуется затуханием, а
-   * убрать узел из разметки в тот же кадр — значит не показать его вовсе.
-   * Всё остальное по-прежнему смотрит на `open`, поэтому логика не меняется.
-   */
-  const [present, setPresent] = useState(false);
+  const {
+    open,
+    setOpen,
+    present,
+    box,
+    trigger,
+    panel: list,
+  } = useDropdown<HTMLButtonElement>();
   const [active, setActive] = useState(0);
-  /**
-   * Либо `top`, либо `bottom` — смотря куда открывается список.
-   *
-   * Вверх он привязывается низом, а не верхом: высота заранее неизвестна
-   * (её задаёт число пунктов и max-h), и вычисленный «верх» промахивался бы
-   * тем сильнее, чем короче список.
-   */
-  const [box, setBox] = useState<{
-    top?: number;
-    bottom?: number;
-    left: number;
-    width: number;
-  } | null>(null);
-  const trigger = useRef<HTMLButtonElement>(null);
-  const list = useRef<HTMLDivElement>(null);
 
   const selected = options.find((option) => option.value === value);
-
-  function place() {
-    const rect = trigger.current?.getBoundingClientRect();
-    if (!rect) return;
-    // Снизу, если там помещается хоть сколько-то; вверх уходим, только когда
-    // сверху места заметно больше — иначе список прыгал бы при каждом
-    // открытии у нижней трети экрана.
-    const below = window.innerHeight - rect.bottom;
-    const above = rect.top;
-    const flip = below < 160 && above > below;
-
-    setBox(
-      flip
-        ? {
-            bottom: window.innerHeight - rect.top + 4,
-            left: rect.left,
-            width: rect.width,
-          }
-        : { top: rect.bottom + 4, left: rect.left, width: rect.width },
-    );
-  }
-
-  useLayoutEffect(() => {
-    if (open) place();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
-
-  useEffect(() => {
-    if (open) {
-      setPresent(true);
-      return;
-    }
-    const timer = setTimeout(() => setPresent(false), 120);
-    return () => clearTimeout(timer);
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-
-    function onDown(event: MouseEvent) {
-      const target = event.target as Node;
-      if (!trigger.current?.contains(target) && !list.current?.contains(target)) {
-        setOpen(false);
-      }
-    }
-    /**
-     * Закрывать нужно, когда прокручивается страница: кнопка уезжает, а список
-     * остаётся висеть на месте. Но прокрутка **внутри самого списка** — это
-     * ровно то, ради чего он и открыт, и на неё реагировать нельзя. Слушатель
-     * стоит в фазе перехвата и ловит вообще любую прокрутку, поэтому свою
-     * приходится отсеивать явно.
-     */
-    function onScroll(event: Event) {
-      if (list.current?.contains(event.target as Node)) return;
-      setOpen(false);
-    }
-
-    document.addEventListener("mousedown", onDown);
-    window.addEventListener("scroll", onScroll, true);
-    window.addEventListener("resize", onScroll);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      window.removeEventListener("scroll", onScroll, true);
-      window.removeEventListener("resize", onScroll);
-    };
-  }, [open]);
 
   // Выбранный стрелками пункт подтягивается в видимую часть: иначе на длинном
   // списке подсветка уезжает за край и кажется, что клавиши не работают.
@@ -166,7 +82,7 @@ export function Select({
       return;
     }
 
-    if (event.key === "Escape" || event.key === "Tab") {
+    if (event.key === "Tab") {
       setOpen(false);
       return;
     }
@@ -215,7 +131,7 @@ export function Select({
         }}
         onKeyDown={onKeyDown}
         className={cn(
-          "border-border bg-background focus:border-accent disabled:bg-disabled disabled:text-muted-foreground flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition outline-none",
+          "bg-field focus-visible:ring-accent disabled:bg-disabled disabled:text-muted-foreground flex h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-sm font-medium transition outline-none focus-visible:ring-2",
           className,
         )}
       >
@@ -250,9 +166,11 @@ export function Select({
               bottom: box.bottom,
               left: box.left,
               width: box.width,
+              maxHeight: Math.min(256, box.maxHeight),
             }}
             className={cn(
-              "border-border bg-background fixed z-[60] max-h-64 overflow-y-auto overscroll-contain rounded-xl border py-1 shadow-lg",
+              panelClass,
+              "p-1.5",
               open ? "crm-pop-in" : "crm-pop-out pointer-events-none",
             )}
           >
@@ -265,13 +183,13 @@ export function Select({
                 onMouseEnter={() => setActive(index)}
                 onClick={() => choose(index)}
                 className={cn(
-                  "flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition",
+                  "flex min-h-9 w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm font-medium transition",
                   index === active && "bg-muted",
                 )}
               >
                 <span className="min-w-0 flex-1 truncate">{option.label}</span>
                 {option.value === value && (
-                  <Check size={14} strokeWidth={2.5} className="text-accent shrink-0" />
+                  <Check size={15} strokeWidth={2.75} className="shrink-0" />
                 )}
               </button>
             ))}

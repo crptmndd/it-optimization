@@ -1,4 +1,4 @@
-import { Filter, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { ApiError } from "@/api/client";
 import { FilterToolbar } from "@/components/filter-toolbar";
@@ -13,14 +13,18 @@ import {
   type LeadFilters,
 } from "@/api/leads";
 import { listTeam, memberLabel, type TeamMember } from "@/api/team";
+import { PersonChip } from "@/components/person-chip";
 import {
   Badge,
   Button,
   EmptyState,
   ErrorNote,
-  Input,
+  List,
+  LoadingRows,
   Modal,
-  Select,
+  PageHeader,
+  SearchField,
+  Segmented,
 } from "@/components/ui";
 import { useCurrentUser } from "@/auth/auth-context";
 import { NoteHint } from "@/components/note-hint";
@@ -54,6 +58,10 @@ type TabKey = (typeof TABS)[number]["key"];
 const CHANNEL_LABELS = new Map<string, string>(
   LEAD_CHANNELS.map((item) => [item.value, item.label]),
 );
+
+function channelLabel(lead: Lead): string | null {
+  return lead.channel ? (CHANNEL_LABELS.get(lead.channel) ?? lead.channel) : null;
+}
 
 export function LeadsScreen() {
   const currentUser = useCurrentUser();
@@ -93,68 +101,57 @@ export function LeadsScreen() {
       .catch(() => setTeam([]));
   }, []);
 
+  const overdueTab = tab === "overdue";
+
   return (
     <section>
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-bold tracking-tight">Лиды</h1>
+      <PageHeader title="Лиды">
         <Button onClick={() => setCreating(true)}>
-          <Plus size={16} />
+          <Plus size={17} strokeWidth={2.5} />
           Новый лид
         </Button>
-      </header>
+      </PageHeader>
 
-      {/* Вида у лидов нет — только срез и поиск, но панель та же. */}
       <FilterToolbar
-        activeCount={tab === "all" ? 0 : 1}
-        filters={[
-          {
-            label: "Срез",
-            render: (full) => (
-              <Select
-                value={tab}
-                onChange={(value) => setTab(value as TabKey)}
-                ariaLabel="Фильтр лидов"
-                icon={<Filter size={14} strokeWidth={2} />}
-                className={full ? "w-full" : "w-40"}
-                options={TABS.map((item) => ({ value: item.key, label: item.label }))}
-              />
-            ),
-          },
-        ]}
+        filters={
+          <Segmented
+            value={tab}
+            onChange={(value) => setTab(value as TabKey)}
+            ariaLabel="Какие лиды показать"
+            options={TABS.map((item) => ({ value: item.key, label: item.label }))}
+          />
+        }
         search={
-          <Input
+          <SearchField
             value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Поиск по имени, контакту, тексту"
-            className="w-full sm:w-72"
+            onChange={setSearch}
+            placeholder="Имя, контакт, текст"
           />
         }
       />
 
       {error && (
-        <div className="mt-6 sm:mt-5">
+        <div className="mt-4">
           <ErrorNote>{error}</ErrorNote>
         </div>
       )}
 
-      <div className="mt-6 sm:mt-5">
-        {leads === null && !error && (
-          <p className="text-muted-foreground text-sm">Загружаем…</p>
-        )}
+      <div className="mt-5">
+        {leads === null && !error && <LoadingRows />}
 
         {leads?.length === 0 && (
           <EmptyState
             title={
               debouncedSearch
                 ? "Ничего не нашлось"
-                : tab === "overdue"
+                : overdueTab
                   ? "Ничего не горит"
                   : "Пока пусто"
             }
             note={
               debouncedSearch
                 ? "Попробуйте другой запрос."
-                : tab === "overdue"
+                : overdueTab
                   ? "Ни по одному лиду не просрочен следующий шаг."
                   : "Заведите первый лид — кнопка справа сверху."
             }
@@ -162,11 +159,11 @@ export function LeadsScreen() {
         )}
 
         {leads && leads.length > 0 && (
-          <ul className="space-y-3 sm:space-y-2">
+          <List>
             {leads.map((lead) => (
               <LeadRow key={lead.id} lead={lead} onOpen={() => setOpenLeadId(lead.id)} />
             ))}
-          </ul>
+          </List>
         )}
       </div>
 
@@ -194,59 +191,94 @@ export function LeadsScreen() {
   );
 }
 
+/**
+ * Колонки появляются с `lg`, а не с `sm`: на 768 уже стоит боковое меню и ширины меньше,
+ * чем на телефоне с поворотом. Контакт и услуга получают свои колонки с `xl`, а до этого
+ * едут одной строкой под именем: поставить их рядом там просто негде.
+ */
 function LeadRow({ lead, onOpen }: { lead: Lead; onOpen: () => void }) {
   const deadline = lead.nextActionAt ? describeDeadline(lead.nextActionAt) : null;
+  const contact = lead.name ? lead.contact : null;
+  const service = serviceLabel(lead.service) || null;
+  const channel = channelLabel(lead);
+  const details = [contact, service, channel, lead.message].filter(Boolean).join(" · ");
 
   return (
-    <li>
+    <li data-card-id={lead.id} className="hover:bg-muted/60 transition-colors">
       <button
         type="button"
         onClick={onOpen}
-        data-card-id={lead.id}
-        className="border-border bg-background hover:border-accent-border flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border px-3 py-3 text-left transition hover:shadow-sm sm:py-2.5"
+        className="grid min-h-14 w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-4 py-2.5 text-left lg:grid-cols-[minmax(0,1fr)_11rem_6.5rem_5.5rem] xl:grid-cols-[minmax(0,1fr)_10rem_9rem_11rem_6.5rem_5.5rem]"
       >
-        <span className="min-w-0 flex-1">
-          <span className="block truncate font-medium">{lead.name ?? lead.contact}</span>
-          <span className="text-muted-foreground block truncate text-sm">
-            {[
-              lead.name ? lead.contact : null,
-              serviceLabel(lead.service) || null,
-              lead.channel ? (CHANNEL_LABELS.get(lead.channel) ?? lead.channel) : null,
-              lead.message,
-            ]
-              .filter(Boolean)
-              .join(" · ")}
+        <span className="min-w-0">
+          <span className="block truncate text-[15px] font-semibold">
+            {lead.name ?? lead.contact}
+          </span>
+          {details && (
+            <span className="text-muted-foreground block truncate text-[13px] font-medium xl:hidden">
+              {details}
+            </span>
+          )}
+          {lead.message && (
+            <span className="text-muted-foreground hidden truncate text-[13px] font-medium xl:block">
+              {lead.message}
+            </span>
+          )}
+        </span>
+
+        <span className="text-muted-foreground hidden truncate text-[13px] font-medium xl:block">
+          {contact}
+        </span>
+
+        <span className="hidden min-w-0 xl:block">
+          <span className="text-muted-foreground block truncate text-[13px] font-medium">
+            {service}
+          </span>
+          <span className="text-muted-foreground block truncate text-xs font-medium">
+            {channel}
           </span>
         </span>
 
-        <span className="flex shrink-0 items-center gap-2">
+        {/* Действие впереди срока: в потоке взгляд цепляется за «позвонить», а не за
+            «завтра». Без даты шага в строке нет: напоминать не о чем. Пустая ячейка нужна
+            только колонкам: на узком экране она дала бы пустую строку. */}
+        <span className="flex min-w-0 items-center justify-between gap-2 max-lg:order-1 max-lg:col-span-full max-lg:empty:hidden lg:flex-col lg:items-start lg:justify-start lg:gap-0.5">
           {deadline && (
-            // Действие впереди срока: в потоке взгляд цепляется за «позвонить»,
-            // а не за «завтра». Ширина ограничена, иначе длинная подпись
-            // разваливает строку списка.
-            <Badge
-              tone={
-                deadline.tone === "danger"
-                  ? "danger"
-                  : deadline.tone === "warning"
-                    ? "warning"
-                    : "neutral"
-              }
-              className="block max-w-[14rem] truncate"
-            >
-              {lead.nextActionNote
-                ? `${lead.nextActionNote} · ${deadline.label}`
-                : deadline.label}
-            </Badge>
+            <>
+              {lead.nextActionNote && (
+                <span className="max-w-full min-w-0 truncate text-[13px] font-semibold">
+                  {lead.nextActionNote}
+                </span>
+              )}
+              <Badge tone={deadline.tone} className="shrink-0">
+                {deadline.label}
+              </Badge>
+            </>
           )}
-          <Badge tone={lead.status === "won" ? "success" : "neutral"}>
+        </span>
+
+        {/* На узком экране статус и ответственный стоят столбиком справа от имени, а с
+            `lg` через `contents` становятся своими колонками. */}
+        <span className="flex flex-col-reverse items-end gap-1 lg:contents">
+          <Badge
+            tone={lead.status === "won" ? "success" : "neutral"}
+            className="lg:justify-self-start"
+          >
             {LEAD_STATUS_LABELS[lead.status]}
           </Badge>
-          <span className="text-muted-foreground hidden w-24 truncate text-right text-xs sm:block">
-            {lead.owner ? memberLabel(lead.owner) : formatDate(lead.createdAt)}
+
+          <span className="flex justify-end">
+            {lead.owner ? (
+              <PersonChip name={memberLabel(lead.owner)} />
+            ) : (
+              <span className="text-muted-foreground text-xs font-medium whitespace-nowrap">
+                {formatDate(lead.createdAt)}
+              </span>
+            )}
           </span>
         </span>
-        <NoteHint note={lead.note} />
+
+        <NoteHint note={lead.note} className="col-span-full mt-0.5 max-lg:order-1" />
       </button>
     </li>
   );
@@ -293,12 +325,9 @@ function CreateLeadModal({
             <ErrorNote>{error}</ErrorNote>
           </div>
         )}
-        <div className="mt-5 flex items-center gap-2">
-          <Button type="submit" disabled={saving}>
+        <div className="mt-6">
+          <Button type="submit" disabled={saving} className="h-11 w-full">
             {saving ? "Сохраняем…" : "Завести"}
-          </Button>
-          <Button type="button" variant="ghost" onClick={onClose}>
-            Отмена
           </Button>
         </div>
       </form>

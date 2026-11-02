@@ -81,7 +81,7 @@ export function MonthCalendar<T>({
         >
           <ChevronLeft size={16} />
         </button>
-        <span className="text-sm font-semibold first-letter:uppercase">
+        <span className="text-[15px] font-bold first-letter:uppercase">
           {monthTitle.format(cursor)}
         </span>
         <button
@@ -101,11 +101,11 @@ export function MonthCalendar<T>({
         </button>
       </div>
 
-      <div className="border-border mt-3 grid grid-cols-7 overflow-hidden rounded-xl border">
+      <div className="bg-background shadow-card mt-3 grid grid-cols-7 overflow-hidden rounded-2xl">
         {WEEKDAYS.map((day) => (
           <div
             key={day}
-            className="border-border text-muted-foreground border-b px-2 py-1.5 text-center text-xs font-medium"
+            className="border-border text-muted-foreground border-b px-2 py-2 text-center text-xs font-semibold"
           >
             {day}
           </div>
@@ -121,16 +121,16 @@ export function MonthCalendar<T>({
               key={key}
               onDoubleClick={() => onPickDay?.(key)}
               className={cn(
-                "border-border min-h-24 border-r border-b p-1.5 last:border-r-0",
-                outside && "bg-muted/30",
+                "border-border min-h-24 border-r border-b p-1.5 [&:nth-child(7n)]:border-r-0",
+                outside && "bg-muted/50",
                 key === todayKey && "bg-accent-muted",
               )}
             >
               <span
                 className={cn(
-                  "text-xs",
+                  "inline-flex size-6 items-center justify-center rounded-lg text-xs font-semibold",
                   outside ? "text-muted-foreground/60" : "text-muted-foreground",
-                  key === todayKey && "text-foreground font-bold",
+                  key === todayKey && "bg-accent text-accent-foreground font-bold",
                 )}
               >
                 {date.getDate()}

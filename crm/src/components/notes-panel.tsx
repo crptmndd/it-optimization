@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { ApiError } from "@/api/client";
 import type { Note } from "@/api/leads";
-import { Button, ErrorNote, Textarea } from "@/components/ui";
+import { memberLabel } from "@/api/team";
+import { Button, ErrorNote, LoadingRows, Textarea } from "@/components/ui";
 import { formatDateTime } from "@/lib/dates";
+import { PersonChip } from "./person-chip";
 
 /**
  * Заметки к записи — одинаково у лида, проекта, задачи и клиента.
@@ -57,26 +59,73 @@ export function NotesPanel({
   }
 
   return (
-    <div className="border-border border-t pt-4">
-      <span className="text-sm font-medium">Заметки</span>
+    <NotesView
+      notes={notes}
+      draft={draft}
+      onDraftChange={setDraft}
+      onSubmit={() => void submit()}
+      saving={saving}
+      error={error}
+      hint={hint}
+    />
+  );
+}
+
+/**
+ * Вид отдельно от данных: карточка лида получает заметки одним запросом вместе с самим
+ * лидом, и `NotesPanel` с его загрузкой дал бы лишний запрос ради той же картинки.
+ */
+export function NotesView({
+  notes,
+  draft,
+  onDraftChange,
+  onSubmit,
+  saving = false,
+  error,
+  hint = "Пока пусто. Здесь удобно держать то, что не влезает в поля.",
+  placeholder = "Что обсудили, о чём договорились",
+}: {
+  /** `null` — ещё загружаются. */
+  notes: Note[] | null;
+  draft: string;
+  onDraftChange: (draft: string) => void;
+  onSubmit: () => void;
+  saving?: boolean;
+  error?: string | null;
+  hint?: string;
+  placeholder?: string;
+}) {
+  return (
+    <div>
+      <h3 className="text-[15px] font-bold tracking-tight">Заметки</h3>
 
       {notes === null ? (
-        <p className="text-muted-foreground mt-2 text-sm">Загружаем…</p>
+        <div className="mt-2">
+          <LoadingRows rows={2} />
+        </div>
       ) : notes.length === 0 ? (
-        <p className="text-muted-foreground mt-2 text-sm">
-          {hint ?? "Пока пусто. Здесь удобно держать то, что не влезает в поля."}
-        </p>
+        <p className="text-muted-foreground mt-1 text-sm">{hint}</p>
       ) : (
-        <ul className="mt-2 space-y-2">
-          {notes.map((note) => (
-            <li key={note.id} className="bg-muted/50 rounded-lg px-3 py-2">
-              <p className="text-sm whitespace-pre-wrap">{note.body}</p>
-              <p className="text-muted-foreground mt-1 text-xs">
-                {note.author?.name ?? note.author?.email ?? "—"} ·{" "}
-                {formatDateTime(note.createdAt)}
-              </p>
-            </li>
-          ))}
+        <ul className="divide-border mt-1 divide-y">
+          {notes.map((note) => {
+            const author = memberLabel(note.author) || "Кто-то";
+            return (
+              <li key={note.id} className="flex gap-2.5 py-2.5">
+                <PersonChip name={author} />
+                <div className="min-w-0 flex-1">
+                  <p className="flex flex-wrap items-baseline gap-x-2">
+                    <span className="text-[13px] font-semibold">{author}</span>
+                    <span className="text-muted-foreground text-xs font-medium">
+                      {formatDateTime(note.createdAt)}
+                    </span>
+                  </p>
+                  <p className="mt-0.5 text-sm break-words whitespace-pre-wrap">
+                    {note.body}
+                  </p>
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
 
@@ -86,20 +135,25 @@ export function NotesPanel({
         </div>
       )}
 
-      <div className="mt-3 space-y-2">
+      <div className="mt-3">
         <Textarea
           value={draft}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => onDraftChange(event.target.value)}
           rows={2}
-          placeholder="Что обсудили, о чём договорились"
+          placeholder={placeholder}
+          aria-label="Новая заметка"
         />
-        {/* type="button": форма записи снаружи, и submit сохранил бы её целиком. */}
+        {/* type="button": форма записи снаружи, и submit сохранил бы её целиком.
+            Лайм занят главной кнопкой окна. */}
         <Button
           type="button"
-          onClick={() => void submit()}
+          variant="secondary"
+          size="sm"
+          className="mt-2"
+          onClick={onSubmit}
           disabled={saving || !draft.trim()}
         >
-          {saving ? "Сохраняем…" : "Добавить"}
+          {saving ? "Сохраняем…" : "Добавить заметку"}
         </Button>
       </div>
     </div>

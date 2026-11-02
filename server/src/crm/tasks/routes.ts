@@ -133,7 +133,13 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
 
     // Заведённая сразу закрытой задача — запись задним числом, работы в ней нет.
     if (!isClosed(task.status)) {
-      notifyTaskInBackground(task, task.developers, "created", request.log);
+      notifyTaskInBackground(
+        task,
+        task.developers,
+        "created",
+        request.user!.name,
+        request.log,
+      );
     }
 
     return reply.code(201).send({ task: toTaskDto(task) });
@@ -201,7 +207,7 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
     // сравнение с прежним не даёт будить всех исполнителей из-за правки названия.
     const added = task.developers.filter((name) => !existing.developers.includes(name));
     if (added.length > 0 && !isClosed(task.status)) {
-      notifyTaskInBackground(task, added, "assigned", request.log);
+      notifyTaskInBackground(task, added, "assigned", request.user!.name, request.log);
     }
 
     return reply.send({ task: toTaskDto(task) });

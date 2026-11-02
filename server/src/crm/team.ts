@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { audit } from "../audit.js";
-import { requireAuth, requireOwner } from "../auth/guard.js";
+import { requireAuth, requireOwner, requireTeam } from "../auth/guard.js";
 import { hashPassword, validatePasswordStrength } from "../auth/password.js";
 import { confirmOwner, totpCode } from "../auth/two-factor.js";
 import { prisma } from "../db.js";
@@ -231,7 +231,9 @@ export async function teamRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  app.get("/team/handles", { preHandler: requireOwner }, async (_request, reply) => {
+  // Читать может вся команда: форма задачи показывает, кого бот сможет отметить.
+  // Менять — только владелец.
+  app.get("/team/handles", { preHandler: requireTeam }, async (_request, reply) => {
     return reply.send({ handles: await listHandles() });
   });
 

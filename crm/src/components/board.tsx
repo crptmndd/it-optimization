@@ -97,10 +97,10 @@ export function Board<T extends { id: string }>({
     // Колонки влезают целиком: горизонтальная прокрутка на доске означает, что
     // часть работы не видна, а ради неё доску и открывают. Ширина ограничена
     // сверху — на широком мониторе растянутая на 400 пикселей карточка с одной
-    // строкой текста выглядит пустой. На узком экране — по две в ряд, там всё
-    // равно нет перетаскивания и пользуются списком.
+    // строкой текста выглядит пустой. До `lg` — по две в ряд: на планшете рядом
+    // с боковым меню пять колонок сжимались до нечитаемых.
     <div
-      className="grid [grid-template-columns:repeat(2,minmax(0,1fr))] justify-start gap-3 md:[grid-template-columns:repeat(var(--cols),minmax(0,19rem))]"
+      className="grid [grid-template-columns:repeat(2,minmax(0,1fr))] justify-start gap-3 lg:[grid-template-columns:repeat(var(--cols),minmax(0,19rem))]"
       style={{ "--cols": columns.length } as CSSProperties}
     >
       {columns.map((column) => {
@@ -119,29 +119,31 @@ export function Board<T extends { id: string }>({
             }}
             onDrop={(event) => handleDrop(event, column.key)}
             className={cn(
-              "border-border bg-muted/30 flex min-w-0 flex-col rounded-2xl border p-2.5 transition-colors",
-              active && "border-accent-border bg-accent-muted",
+              "flex min-w-0 flex-col rounded-2xl bg-black/[0.035] p-2 transition-colors",
+              active && "bg-accent-soft",
             )}
           >
-            <div className="flex items-center gap-2 px-1.5 py-1">
+            <div className="flex h-9 items-center gap-2 px-2">
               <span
                 className={cn("size-2 rounded-full", DOT[column.tone ?? "neutral"])}
               />
-              <span className="text-sm font-semibold">{column.label}</span>
-              <span className="text-muted-foreground text-xs">{column.items.length}</span>
+              <span className="text-sm font-bold">{column.label}</span>
+              <span className="text-muted-foreground text-[13px] font-semibold">
+                {column.items.length}
+              </span>
               {onAdd && (
                 <button
                   type="button"
                   onClick={() => onAdd(column.key)}
                   aria-label={`Добавить в «${column.label}»`}
-                  className="text-muted-foreground hover:bg-background hover:text-foreground ml-auto rounded-md p-1 transition"
+                  className="text-muted-foreground hover:bg-background hover:text-foreground ml-auto flex size-7 items-center justify-center rounded-lg transition"
                 >
                   <Plus size={15} strokeWidth={2.5} />
                 </button>
               )}
             </div>
 
-            <div className="mt-2 flex flex-col gap-2.5">
+            <div className="mt-1 flex flex-col gap-2">
               {column.items.map((item) => (
                 <div
                   key={item.id}
@@ -152,8 +154,8 @@ export function Board<T extends { id: string }>({
                   className={cn(
                     // Фон задаёт сама карточка: цвет несёт смысл, и у задач с
                     // проектами он разный — доска в него не лезет.
-                    "border-border cursor-grab overflow-hidden rounded-xl border shadow-sm transition active:cursor-grabbing",
-                    "hover:border-accent-border hover:shadow-md",
+                    "bg-background shadow-card cursor-grab overflow-hidden rounded-xl transition active:cursor-grabbing",
+                    "hover:shadow-md",
                     dragging?.id === item.id && "opacity-30",
                     // Черта сверху показывает, куда именно встанет карточка.
                     dragging &&
@@ -174,7 +176,7 @@ export function Board<T extends { id: string }>({
               )}
 
               {column.items.length === 0 && !active && (
-                <p className="text-muted-foreground px-1.5 py-3 text-xs">Пусто</p>
+                <p className="text-muted-foreground px-2 py-3 text-[13px]">Пусто</p>
               )}
             </div>
           </div>

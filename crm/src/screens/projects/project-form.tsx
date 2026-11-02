@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { ChevronDown } from "lucide-react";
+import { useState, type ReactNode } from "react";
 import type { Client } from "@/api/clients";
 import {
   PROJECT_STATUSES,
@@ -8,8 +9,9 @@ import {
   type ProjectInput,
   type ProjectStatus,
 } from "@/api/projects";
+import { DateField } from "@/components/date-field";
 import { DeveloperPicker } from "@/components/developer-picker";
-import { Field, Input, Select, Textarea } from "@/components/ui";
+import { Field, Input, Select, Switch, Textarea } from "@/components/ui";
 import { fromDateInputValue, toDateInputValue } from "@/lib/dates";
 
 export interface ProjectFormValues {
@@ -86,6 +88,16 @@ export function valuesToProjectInput(values: ProjectFormValues): ProjectInput {
   };
 }
 
+/** Блок окна: мелкий заголовок и отступ вместо рамки. */
+function FormBlock({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="space-y-3">
+      <h3 className="text-[15px] font-bold tracking-tight">{title}</h3>
+      {children}
+    </section>
+  );
+}
+
 export function ProjectFields({
   values,
   onChange,
@@ -123,92 +135,138 @@ export function ProjectFields({
   }
 
   const support = values.workType === "support";
-  // Запоминается при открытии: иначе у старого договора галочка исчезала бы прямо
+  // Запоминается при открытии: иначе у старого договора переключатель исчезал бы прямо
   // под курсором, и случайное снятие было бы нечем вернуть.
   const [oldContractFlag] = useState(
     values.workType === "contract" && values.billingMonthly,
   );
+  // На договоре переключатель скрыт, только если не стоит: старый договор со включённым
+  // должен его видеть и иметь возможность снять.
+  const showMonthly =
+    values.workType !== "contract" || values.billingMonthly || oldContractFlag;
+
+  const contractFilled = values.contractNumber !== "" || values.contractDate !== "";
+  // Заполненное показывается сразу. Запоминается при открытии по той же причине: поле
+  // не должно пропадать в момент, когда его стёрли, чтобы вписать другое.
+  const [filledOnOpen] = useState({
+    hosting: values.hosting !== "",
+    description: values.description !== "",
+    contract: contractFilled,
+  });
+  const [expanded, setExpanded] = useState(false);
+
+  const showHosting = expanded || filledOnOpen.hosting;
+  const showDescription = expanded || filledOnOpen.description;
+  // На договоре его номер не редкость. А заполненное не прячется и после смены вида
+  // работы: скрытое значение ушло бы на сервер незаметно для человека.
+  const showContract =
+    expanded || filledOnOpen.contract || contractFilled || values.workType === "contract";
 
   return (
-    <div className="space-y-4">
-      <Field label="Название">
-        <Input
-          value={values.title}
-          onChange={(event) => set("title", event.target.value)}
-          required
-          autoFocus
-          maxLength={200}
-          placeholder="Корпоративный сайт · Интеграция с 1С"
-        />
-      </Field>
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Статус">
-          <Select
-            value={values.status}
-            onChange={(next) => set("status", next as ProjectStatus)}
-            options={PROJECT_STATUSES.map((item) => ({
-              value: item,
-              label: PROJECT_STATUS_LABELS[item],
-            }))}
-          />
-        </Field>
-
-        <Field label="Клиент" hint="Можно оставить пустым — например, для своих">
-          <Select
-            value={values.clientId}
-            onChange={(clientId) => set("clientId", clientId)}
-            options={[
-              { value: "", label: "Без клиента" },
-              ...clients.map((client) => ({ value: client.id, label: client.name })),
-            ]}
-          />
-        </Field>
-      </div>
-
-      <DeveloperPicker
-        value={values.developers}
-        onChange={(next) => set("developers", next)}
-        hint="Попадёт в утреннюю сводку в общий чат"
-      />
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Начали">
+    <div className="space-y-6">
+      <FormBlock title="Основное">
+        <Field label="Название">
           <Input
-            type="date"
-            value={values.startedDate}
-            onChange={(event) => set("startedDate", event.target.value)}
+            value={values.title}
+            onChange={(event) => set("title", event.target.value)}
+            required
+            autoFocus={!saved}
+            maxLength={200}
+            placeholder="Например, корпоративный сайт"
+            className="h-12 text-base font-semibold"
           />
         </Field>
 
-        <Field label="Сдать до" hint="По нему проект попадает в «Просрочено»">
-          <Input
-            type="date"
-            value={values.deadlineDate}
-            onChange={(event) => set("deadlineDate", event.target.value)}
-          />
-        </Field>
-      </div>
-
-      <div className="border-border space-y-4 border-t pt-4">
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Хостинг" hint="Где размещён и на чьём аккаунте">
-            <Input
-              value={values.hosting}
-              onChange={(event) => set("hosting", event.target.value)}
-              maxLength={200}
-              placeholder="reg.ru, аккаунт клиента"
+          <Field label="Статус">
+            <Select
+              value={values.status}
+              onChange={(next) => set("status", next as ProjectStatus)}
+              options={PROJECT_STATUSES.map((item) => ({
+                value: item,
+                label: PROJECT_STATUS_LABELS[item],
+              }))}
             />
           </Field>
 
-          <Field
-            label="Вид работы"
-            hint={
-              values.workType === "contract"
-                ? "Три этапа оплаты: суммы — в карточке проекта"
-                : undefined
-            }
+          <Field label="Клиент">
+            <Select
+              value={values.clientId}
+              onChange={(clientId) => set("clientId", clientId)}
+              options={[
+                { value: "", label: "Без клиента" },
+                ...clients.map((client) => ({ value: client.id, label: client.name })),
+              ]}
+            />
+          </Field>
+
+          {showHosting && (
+            <Field label="Хостинг" className="sm:col-span-2">
+              <Input
+                value={values.hosting}
+                onChange={(event) => set("hosting", event.target.value)}
+                maxLength={200}
+                placeholder="reg.ru, аккаунт клиента"
+              />
+            </Field>
+          )}
+
+          {showDescription && (
+            <Field label="О чём проект" className="sm:col-span-2">
+              <Textarea
+                value={values.description}
+                onChange={(event) => set("description", event.target.value)}
+                rows={3}
+              />
+            </Field>
+          )}
+        </div>
+
+        {!(showHosting && showDescription && showContract) && (
+          <button
+            type="button"
+            onClick={() => setExpanded(true)}
+            className="text-muted-foreground hover:text-foreground flex items-center gap-1.5 text-[13px] font-semibold transition"
           >
+            <ChevronDown size={15} strokeWidth={2.5} />
+            Показать остальное
+          </button>
+        )}
+      </FormBlock>
+
+      <FormBlock title="Кто и когда">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <DeveloperPicker
+              value={values.developers}
+              onChange={(next) => set("developers", next)}
+            />
+          </div>
+
+          <Field label="Начали">
+            <DateField
+              value={values.startedDate}
+              onChange={(next) => set("startedDate", next)}
+              ariaLabel="Начали"
+            />
+          </Field>
+
+          <Field label="Сдать до">
+            <DateField
+              value={values.deadlineDate}
+              onChange={(next) => set("deadlineDate", next)}
+              placeholder="Без срока"
+              clearLabel="Убрать срок"
+              ariaLabel="Сдать до"
+              quick
+            />
+          </Field>
+        </div>
+      </FormBlock>
+
+      <FormBlock title="Оплата">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Вид работы" className={showMonthly ? undefined : "sm:col-span-2"}>
             <Select
               value={values.workType}
               onChange={setWorkType}
@@ -218,57 +276,45 @@ export function ProjectFields({
               ]}
             />
           </Field>
+
+          {showMonthly && (
+            <div className="self-end">
+              <Switch
+                checked={values.billingMonthly || support}
+                disabled={support}
+                onChange={(on) => set("billingMonthly", on)}
+                label="Счёт каждый месяц"
+                hint={
+                  support
+                    ? "Сопровождение всегда помесячно"
+                    : "Счёт и акт появятся в начале месяца"
+                }
+              />
+            </div>
+          )}
+
+          {showContract && (
+            <>
+              <Field label="Договор №">
+                <Input
+                  value={values.contractNumber}
+                  onChange={(event) => set("contractNumber", event.target.value)}
+                  maxLength={60}
+                  placeholder="12/2026"
+                />
+              </Field>
+
+              <Field label="Дата договора">
+                <DateField
+                  value={values.contractDate}
+                  onChange={(next) => set("contractDate", next)}
+                  ariaLabel="Дата договора"
+                />
+              </Field>
+            </>
+          )}
         </div>
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Договор №">
-            <Input
-              value={values.contractNumber}
-              onChange={(event) => set("contractNumber", event.target.value)}
-              maxLength={60}
-              placeholder="12/2026"
-            />
-          </Field>
-
-          <Field label="Дата договора">
-            <Input
-              type="date"
-              value={values.contractDate}
-              onChange={(event) => set("contractDate", event.target.value)}
-            />
-          </Field>
-        </div>
-
-        {/* На договоре галочка скрыта, только если не стоит: старый договор с
-            галочкой должен её видеть и иметь возможность снять. */}
-        {(values.workType !== "contract" || values.billingMonthly || oldContractFlag) && (
-          <label className="flex cursor-pointer items-start gap-2.5">
-            <input
-              type="checkbox"
-              checked={values.billingMonthly || support}
-              disabled={support}
-              onChange={(event) => set("billingMonthly", event.target.checked)}
-              className="accent-accent mt-0.5 size-4 shrink-0"
-            />
-            <span className="text-sm">
-              Счёт каждый месяц
-              <span className="text-muted-foreground mt-0.5 block text-sm">
-                {support
-                  ? "Сопровождение всегда помесячно"
-                  : "В начале месяца счёт и акт появятся сами. Сумма — в карточке проекта"}
-              </span>
-            </span>
-          </label>
-        )}
-      </div>
-
-      <Field label="О чём проект">
-        <Textarea
-          value={values.description}
-          onChange={(event) => set("description", event.target.value)}
-          rows={3}
-        />
-      </Field>
+      </FormBlock>
     </div>
   );
 }

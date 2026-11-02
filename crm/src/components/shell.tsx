@@ -2,6 +2,7 @@ import {
   Briefcase,
   Building2,
   CheckSquare,
+  ChevronRight,
   ExternalLink,
   KeyRound,
   Receipt,
@@ -11,7 +12,6 @@ import {
   LogOut,
   Menu,
   Search,
-  Settings,
   ShieldAlert,
   Sun,
   Trash2,
@@ -21,8 +21,10 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router";
 import { useAuth, useCurrentUser } from "@/auth/auth-context";
 import { GlobalSearch } from "@/components/global-search";
+import { PersonChip } from "@/components/person-chip";
 import { ScreenBoundary } from "@/components/screen-boundary";
 import { cn } from "@/lib/cn";
+import logoMark from "@/assets/logo-mark.svg";
 
 /**
  * `leadsOnly` — пункты, доступные маркетологу. Остальные он не увидит, но
@@ -50,17 +52,17 @@ const NAV = [
     marketingOnly: true,
   },
   {
-    to: "/projects",
-    label: "Проекты",
-    icon: Briefcase,
+    to: "/tasks",
+    label: "Задачи",
+    icon: CheckSquare,
     end: false,
     leadsOnly: false,
     marketingOnly: false,
   },
   {
-    to: "/tasks",
-    label: "Задачи",
-    icon: CheckSquare,
+    to: "/projects",
+    label: "Проекты",
+    icon: Briefcase,
     end: false,
     leadsOnly: false,
     marketingOnly: false,
@@ -89,16 +91,10 @@ const NAV = [
     leadsOnly: false,
     marketingOnly: false,
   },
-  // Корзина последняя: заходят туда редко и по конкретному поводу.
-  {
-    to: "/trash",
-    label: "Корзина",
-    icon: Trash2,
-    end: false,
-    leadsOnly: false,
-    marketingOnly: false,
-  },
 ] as const;
+
+/** Нижняя панель телефона: то, что открывают каждый день. Остальное в «Ещё». */
+const TAB_BAR = ["/", "/tasks", "/projects", "/invoices"] as const;
 
 /**
  * Адрес сайта настраиваемый: локально удобно уводить на localhost:3000, а не
@@ -121,18 +117,21 @@ const EXTERNAL = [
 ] as const;
 
 /** Одна раскладка пункта на оба места: боковую колонку и выдвижную панель. */
-const itemClass = "flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium";
-const idleClass = "text-muted-foreground hover:bg-muted hover:text-foreground";
-const activeClass = "bg-accent-soft text-foreground";
+const itemClass = "flex h-10 items-center gap-3 rounded-xl px-3 text-sm font-semibold";
+const idleClass = "text-muted-foreground hover:bg-black/[0.05] hover:text-foreground";
+/* Чёрная плашка с лаймом — фирменное сочетание сайта и единственный тёмный акцент. */
+const activeClass = "bg-surface text-surface-foreground [&>svg]:text-accent";
+const smallItemClass =
+  "flex h-8 items-center gap-2.5 rounded-lg px-3 text-[13px] font-medium";
 
 /**
- * Разделы и внешние ссылки. Вынесены из `Shell`, потому что рисуются дважды —
- * в боковой колонке и в выдвижной панели, — а разъехавшийся между ними список
- * это ровно тот баг, который замечают последним.
+ * Разделы. Вынесены из `Shell`, потому что рисуются дважды — в боковой колонке и в
+ * выдвижной панели, — а разъехавшийся между ними список это ровно тот баг, который
+ * замечают последним.
  */
 function NavItems({ leadsOnly }: { leadsOnly: boolean }) {
   return (
-    <>
+    <div className="flex flex-col gap-0.5">
       {NAV.filter((item) => (leadsOnly ? item.leadsOnly : !item.marketingOnly)).map(
         ({ to, label, icon: Icon, end }) => (
           <NavLink
@@ -143,14 +142,39 @@ function NavItems({ leadsOnly }: { leadsOnly: boolean }) {
               cn(itemClass, "transition", isActive ? activeClass : idleClass)
             }
           >
-            <Icon size={16} strokeWidth={2} />
+            <Icon size={18} strokeWidth={2.25} />
             {label}
           </NavLink>
         ),
       )}
+    </div>
+  );
+}
 
-      <div className="border-border mt-4 border-t pt-4" />
-
+/**
+ * Редкое: корзина и ссылки наружу. Мельче и ниже разделов, иначе семь рабочих пунктов
+ * тонули среди тех, куда заходят раз в месяц.
+ */
+function SecondaryItems({ leadsOnly }: { leadsOnly: boolean }) {
+  return (
+    <div className="flex flex-col">
+      {!leadsOnly && (
+        <NavLink
+          to="/trash"
+          className={({ isActive }) =>
+            cn(
+              smallItemClass,
+              "transition",
+              isActive
+                ? "text-foreground bg-black/[0.05]"
+                : "text-muted-foreground hover:text-foreground",
+            )
+          }
+        >
+          <Trash2 size={15} strokeWidth={2.25} />
+          Корзина
+        </NavLink>
+      )}
       {EXTERNAL.filter((item) => !leadsOnly || item.leadsOnly).map(
         ({ href, label, icon: Icon }) => (
           <a
@@ -158,64 +182,61 @@ function NavItems({ leadsOnly }: { leadsOnly: boolean }) {
             href={href}
             target="_blank"
             rel="noreferrer"
-            className={cn(itemClass, idleClass, "group transition")}
+            className={cn(
+              smallItemClass,
+              "text-muted-foreground hover:text-foreground group transition",
+            )}
           >
-            <Icon size={16} strokeWidth={2} />
+            <Icon size={15} strokeWidth={2.25} />
             {label}
             <ExternalLink
-              size={13}
-              strokeWidth={2}
+              size={12}
+              strokeWidth={2.25}
               className="ml-auto opacity-0 transition-opacity group-hover:opacity-60"
             />
           </a>
         ),
       )}
-    </>
+    </div>
   );
 }
 
-/** Низ панели: свои настройки и выход. Тоже общий для двух раскладок. */
+/** Низ панели: своя строка ведёт в настройки, рядом выход. Общая для двух раскладок. */
 function AccountItems({ name, onLogout }: { name: string; onLogout: () => void }) {
   return (
-    <>
+    <div className="flex items-center gap-1">
       <NavLink
         to="/settings"
         className={({ isActive }) =>
-          cn(itemClass, "transition", isActive ? activeClass : idleClass)
+          cn(
+            "flex h-11 min-w-0 flex-1 items-center gap-2.5 rounded-xl px-2 text-sm font-semibold transition",
+            isActive ? "bg-black/[0.05]" : "hover:bg-black/[0.05]",
+          )
         }
       >
-        <Settings size={16} strokeWidth={2} />
+        <PersonChip name={name} className="size-7 text-xs" />
         <span className="truncate">{name}</span>
       </NavLink>
       <button
         type="button"
         onClick={onLogout}
-        className={cn(itemClass, idleClass, "w-full transition")}
+        aria-label="Выйти"
+        title="Выйти"
+        className="text-muted-foreground hover:text-foreground flex size-10 shrink-0 items-center justify-center rounded-xl transition hover:bg-black/[0.05]"
       >
-        <LogOut size={16} strokeWidth={2} />
-        Выйти
+        <LogOut size={17} strokeWidth={2.25} />
       </button>
-    </>
+    </div>
   );
 }
 
 function Wordmark() {
   return (
-    <span className="flex items-center gap-2">
-      <span className="bg-accent h-2 w-2 rounded-full" />
-      <span className="text-sm font-bold tracking-tight">CRM</span>
+    <span className="flex items-center gap-2.5">
+      <img src={logoMark} alt="" className="h-[22px] w-auto" />
+      <span className="text-[15px] font-extrabold tracking-tight">Айти-Оптимизация</span>
     </span>
   );
-}
-
-/** Заголовок верхней полосы — чтобы на телефоне было видно, где ты стоишь. */
-function useSectionTitle(): string {
-  const { pathname } = useLocation();
-  if (pathname === "/settings") return "Настройки";
-  const match = NAV.filter((item) => item.to !== "/").find((item) =>
-    pathname.startsWith(item.to),
-  );
-  return match?.label ?? NAV[0].label;
 }
 
 export function Shell() {
@@ -223,17 +244,17 @@ export function Shell() {
   const { logout } = useAuth();
   const leadsOnly = user.role === "marketing";
   const { pathname } = useLocation();
-  const title = useSectionTitle();
   /*
-   * Не закрывается: 2FA не принудительная, чтобы никого не запереть, и это
-   * единственное, что о ней напоминает. Маркетологу Доступы закрыты, текст был бы
-   * неправдой, а на самих Настройках он только мешал бы.
+   * Только там, где без 2FA что-то не работает или откуда начинают день: на каждом
+   * экране полоса съедала место над списком и переставала читаться. Не закрывается,
+   * потому что 2FA не принудительная, чтобы никого не запереть, и это единственное,
+   * что о ней напоминает. Маркетологу Доступы закрыты, текст был бы неправдой.
    */
   const suggestTwoFactor =
     user.twoFactorAvailable &&
     !user.twoFactorEnabled &&
     !leadsOnly &&
-    pathname !== "/settings";
+    (pathname === "/" || pathname === "/credentials");
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -285,14 +306,14 @@ export function Shell() {
        содержимым, и до разделов приходилось бы возвращаться скроллом. */
     <div className="flex h-full flex-col overflow-hidden md:flex-row">
       {/* Боковая колонка — только с планшета. На телефоне она съедала бы
-          половину ширины, поэтому там её заменяет выдвижная панель. */}
-      <aside className="border-border hidden shrink-0 border-r md:flex md:h-full md:w-56 md:flex-col md:px-3 md:py-5">
-        <div className="px-2 pb-5">
+          половину ширины, поэтому там её заменяет нижняя панель. */}
+      <aside className="hidden shrink-0 md:flex md:h-full md:w-60 md:flex-col md:px-3 md:py-5">
+        <div className="px-2.5 pb-5">
           <Wordmark />
         </div>
 
         {!leadsOnly && (
-          <div className="mb-3">
+          <div className="mb-4">
             <GlobalSearch />
           </div>
         )}
@@ -303,42 +324,45 @@ export function Shell() {
           <NavItems leadsOnly={leadsOnly} />
         </nav>
 
-        <div className="border-border mt-4 flex flex-col border-t pt-4">
+        <SecondaryItems leadsOnly={leadsOnly} />
+        <div className="border-border mt-3 border-t pt-3">
           <AccountItems name={user.name ?? user.email} onLogout={() => void logout()} />
         </div>
       </aside>
 
-      {/* Верхняя полоса телефона: кнопка меню, название раздела и поиск. */}
-      <header className="border-border shrink-0 border-b md:hidden">
-        <div className="flex items-center gap-1 px-2 py-2">
-          <button
-            ref={burger}
-            type="button"
-            onClick={() => setMenuOpen(true)}
-            aria-label="Открыть меню разделов"
-            aria-expanded={menuOpen}
-            aria-controls="crm-menu"
-            className="text-muted-foreground hover:bg-muted hover:text-foreground rounded-lg p-2 transition"
-          >
-            <Menu size={20} strokeWidth={2} />
-          </button>
+      {/* Верхняя полоса телефона: логотип и поиск. Название раздела здесь не нужно,
+          оно крупно стоит в начале самого экрана и в нижней панели. */}
+      <header className="shrink-0 md:hidden">
+        <div className="flex h-13 items-center justify-between pr-2 pl-4">
+          <Wordmark />
 
-          <span className="truncate px-1 text-sm font-bold tracking-tight">{title}</span>
-
-          {!leadsOnly && (
+          {leadsOnly ? (
+            // Нижней панели у маркетолога нет, а настройки и выход нужны и ему.
+            <button
+              ref={burger}
+              type="button"
+              onClick={() => setMenuOpen(true)}
+              aria-label="Открыть меню разделов"
+              aria-expanded={menuOpen}
+              aria-controls="crm-menu"
+              className="text-muted-foreground hover:text-foreground flex size-10 items-center justify-center rounded-xl transition"
+            >
+              <Menu size={20} strokeWidth={2.25} />
+            </button>
+          ) : (
             <button
               type="button"
               onClick={() => setSearchOpen((value) => !value)}
               aria-label={searchOpen ? "Скрыть поиск" : "Искать"}
               aria-expanded={searchOpen}
               className={cn(
-                "ml-auto rounded-lg p-2 transition",
+                "flex size-10 items-center justify-center rounded-xl transition",
                 searchOpen
-                  ? "bg-accent-soft text-foreground"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                  ? "text-foreground bg-black/[0.06]"
+                  : "text-muted-foreground hover:text-foreground",
               )}
             >
-              <Search size={18} strokeWidth={2} />
+              <Search size={19} strokeWidth={2.25} />
             </button>
           )}
         </div>
@@ -371,9 +395,10 @@ export function Shell() {
         inert={!menuOpen}
         aria-label="Разделы"
         className={cn(
-          "border-border bg-background fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw] flex-col border-r px-3 py-4 shadow-xl",
+          "bg-canvas fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw] flex-col px-3 py-4",
           "transition-transform duration-300 ease-out will-change-transform motion-reduce:transition-none md:hidden",
-          menuOpen ? "translate-x-0" : "-translate-x-full",
+          // Тень только у открытой: у спрятанной она лежала полосой вдоль левого края.
+          menuOpen ? "translate-x-0 shadow-xl" : "-translate-x-full",
         )}
       >
         <div className="flex items-center justify-between px-2 pb-4">
@@ -383,9 +408,9 @@ export function Shell() {
             type="button"
             onClick={() => setMenuOpen(false)}
             aria-label="Закрыть меню"
-            className="text-muted-foreground hover:bg-muted hover:text-foreground -mr-1 rounded-lg p-1.5 transition"
+            className="text-muted-foreground hover:text-foreground -mr-1 flex size-9 items-center justify-center rounded-lg transition hover:bg-black/[0.05]"
           >
-            <X size={18} strokeWidth={2} />
+            <X size={18} strokeWidth={2.25} />
           </button>
         </div>
 
@@ -393,34 +418,95 @@ export function Shell() {
           <NavItems leadsOnly={leadsOnly} />
         </div>
 
-        <div className="border-border mt-4 flex flex-col border-t pt-4">
+        <SecondaryItems leadsOnly={leadsOnly} />
+        <div className="border-border mt-3 border-t pt-3">
           <AccountItems name={user.name ?? user.email} onLogout={() => void logout()} />
         </div>
       </nav>
 
+      {/* Ширина ограничена: дата на другом краю большого монитора от названия задачи
+          уже не читается как одна строка. */}
       <main
         ref={main}
-        className="min-w-0 flex-1 overflow-y-auto px-4 py-5 sm:px-5 sm:py-6 md:px-8 md:py-8"
+        className="min-w-0 flex-1 overflow-y-auto px-4 pt-2 pb-24 sm:px-5 md:px-8 md:py-7"
       >
-        {suggestTwoFactor && (
-          <Link
-            to="/settings"
-            className="bg-warning-soft text-warning mb-5 flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition hover:opacity-80"
-          >
-            <ShieldAlert size={16} strokeWidth={2} className="shrink-0" />
-            Включите двухфакторный вход: без него пароли в Доступах не открываются
-          </Link>
-        )}
+        <div className="mx-auto w-full max-w-[1120px]">
+          {suggestTwoFactor && (
+            <Link
+              to="/settings"
+              className="bg-warning-soft text-warning mb-5 flex items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-sm font-semibold transition hover:opacity-80"
+            >
+              <ShieldAlert size={17} strokeWidth={2.25} className="shrink-0" />
+              <span className="min-w-0 flex-1">
+                Включите двухфакторный вход: без него пароли в Доступах не открываются
+              </span>
+              <ChevronRight size={16} strokeWidth={2.5} className="shrink-0" />
+            </Link>
+          )}
 
-        {/* key по пути, а не по всему адресу: `?open=<id>` из «Сегодня» и поиска
+          {/* key по пути, а не по всему адресу: `?open=<id>` из «Сегодня» и поиска
             меняет только параметр, и перемонтирование сбросило бы уже
             загруженный список ровно тогда, когда в нём надо открыть карточку. */}
-        <div key={pathname} className="crm-rise-in">
-          <ScreenBoundary>
-            <Outlet />
-          </ScreenBoundary>
+          <div key={pathname} className="crm-rise-in">
+            <ScreenBoundary>
+              <Outlet />
+            </ScreenBoundary>
+          </div>
         </div>
       </main>
+
+      {/* Нижняя панель телефона: большой палец дотягивается сюда, а до кнопки меню в
+          верхнем углу нет. У маркетолога раздел один, ему панель не нужна. */}
+      {!leadsOnly && (
+        <nav
+          aria-label="Основные разделы"
+          className="bg-background shadow-card fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 pb-[env(safe-area-inset-bottom)] md:hidden"
+        >
+          {NAV.filter((item) => (TAB_BAR as readonly string[]).includes(item.to)).map(
+            ({ to, label, icon: Icon, end }) => (
+              <NavLink
+                key={to}
+                to={to}
+                end={end}
+                className={({ isActive }) =>
+                  cn(
+                    "flex h-14 flex-col items-center justify-center gap-0.5 text-[11px] font-semibold",
+                    isActive ? "text-foreground" : "text-muted-foreground",
+                  )
+                }
+              >
+                {({ isActive }) => (
+                  <>
+                    <span
+                      className={cn(
+                        "flex h-7 w-11 items-center justify-center rounded-full transition-colors",
+                        isActive && "bg-accent",
+                      )}
+                    >
+                      <Icon size={18} strokeWidth={2.25} />
+                    </span>
+                    {label}
+                  </>
+                )}
+              </NavLink>
+            ),
+          )}
+          <button
+            ref={burger}
+            type="button"
+            onClick={() => setMenuOpen(true)}
+            aria-label="Открыть меню разделов"
+            aria-expanded={menuOpen}
+            aria-controls="crm-menu"
+            className="text-muted-foreground flex h-14 flex-col items-center justify-center gap-0.5 text-[11px] font-semibold"
+          >
+            <span className="flex h-7 w-11 items-center justify-center">
+              <Menu size={18} strokeWidth={2.25} />
+            </span>
+            Ещё
+          </button>
+        </nav>
+      )}
     </div>
   );
 }

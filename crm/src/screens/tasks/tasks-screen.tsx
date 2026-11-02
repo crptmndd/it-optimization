@@ -1,13 +1,20 @@
 import {
-  AlignLeft,
   CalendarDays,
   Check,
-  Filter,
+  Columns3,
   Flame,
-  FolderOpen,
+  List as ListIcon,
   Plus,
+  X,
 } from "lucide-react";
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+} from "react";
 import { ApiError } from "@/api/client";
 import { FilterToolbar } from "@/components/filter-toolbar";
 import { useFocusFromLink } from "@/lib/focus-card";
@@ -29,6 +36,7 @@ import {
 } from "@/api/tasks";
 import { Board, type BoardColumn, type ColumnTone } from "@/components/board";
 import { NotesPanel } from "@/components/notes-panel";
+import { PeopleFilter } from "@/components/people-filter";
 import { PersonChip, PersonChips } from "@/components/person-chip";
 import { MonthCalendar } from "@/components/month-calendar";
 import {
@@ -36,14 +44,17 @@ import {
   Button,
   EmptyState,
   ErrorNote,
-  Input,
+  List,
+  LoadingRows,
   Modal,
-  Select,
+  PageHeader,
+  SearchField,
+  SectionTitle,
+  Segmented,
 } from "@/components/ui";
-import { describeDeadline, formatDate } from "@/lib/dates";
+import { daysFromToday, describeDeadline, formatDate } from "@/lib/dates";
 import { cn } from "@/lib/cn";
 import { NoteHint } from "@/components/note-hint";
-import { DEVELOPERS } from "@/lib/developers";
 import {
   emptyTaskValues,
   TaskFields,
@@ -52,19 +63,51 @@ import {
   type TaskFormValues,
 } from "./task-form";
 
-/**
- * Срезы списка. Вкладки «Мои» нет намеренно: исполнители значатся именами, а не
- * учётными записями, поэтому связать вошедшего с именем нельзя. Вместо неё —
- * выбор исполнителя рядом с поиском.
- */
-const TABS = [
-  { key: "all", label: "Все", filters: { scope: "all" } },
-  { key: "overdue", label: "Просрочено", filters: { overdue: true } },
-  { key: "open", label: "Открытые", filters: { scope: "open" } },
-  { key: "done", label: "Готово", filters: { scope: "closed" } },
-] as const satisfies readonly { key: string; label: string; filters: TaskFilters }[];
+type TabKey = "open" | "overdue" | "done";
 
-type TabKey = (typeof TABS)[number]["key"];
+function isClosed(task: Task): boolean {
+  return task.status === "done" || task.status === "cancelled";
+}
+
+function isOverdue(task: Task): boolean {
+  return !isClosed(task) && task.dueAt !== null && daysFromToday(task.dueAt) < 0;
+}
+
+/**
+ * Группы по сроку: список отвечает на «что делать сейчас», а не показывает задачи в
+ * порядке колонок доски. Просроченное наверху, бессрочное внизу.
+ */
+const GROUPS = [
+  { key: "overdue", title: "Просрочено", tone: "danger" },
+  { key: "today", title: "Сегодня" },
+  { key: "week", title: "Ближайшие 7 дней" },
+  { key: "later", title: "Позже" },
+  { key: "none", title: "Без срока" },
+  // Только при поиске: найденная закрытая задача не должна выглядеть пропавшей.
+  { key: "closed", title: "Закрытые" },
+] as const;
+
+type GroupKey = (typeof GROUPS)[number]["key"];
+
+function groupOf(task: Task): GroupKey {
+  if (isClosed(task)) return "closed";
+  if (task.dueAt === null) return "none";
+  const days = daysFromToday(task.dueAt);
+  if (days < 0) return "overdue";
+  if (days === 0) return "today";
+  return days <= 7 ? "week" : "later";
+}
+
+/** Раньше срок, потом срочное: две задачи на один день различает важность. */
+function byUrgency(left: Task, right: Task): number {
+  const leftDue = left.dueAt ? new Date(left.dueAt).getTime() : Infinity;
+  const rightDue = right.dueAt ? new Date(right.dueAt).getTime() : Infinity;
+  if (leftDue !== rightDue) return leftDue - rightDue;
+  return (
+    Number(right.priority === "high") - Number(left.priority === "high") ||
+    left.position - right.position
+  );
+}
 
 /** Цвет колонки — по смыслу: что ждёт, что в работе, что закрыто. */
 const COLUMN_TONE: Record<string, ColumnTone> = {
@@ -74,69 +117,23 @@ const COLUMN_TONE: Record<string, ColumnTone> = {
   done: "success",
 };
 
-/**
- * Карточка задачи на доске.
- *
- * Заливка всей карточки, а не полоска сбоку: в колонке из десятка карточек
- * взгляд цепляется за пятно, а не за четыре пикселя у края. Цвет означает
- * срочность и берётся по худшему из условий — просрочено важнее «сегодня»,
- * «сегодня» важнее высокого приоритета.
- */
-/**
- * Заливка всей карточки, а не полоска сбоку: в колонке из десятка карточек
- * взгляд цепляется за пятно. Цвет означает срочность и берётся по худшему из
- * условий — просрочено важнее «сегодня», «сегодня» важнее приоритета.
- */
-function taskTone(task: Task): { card: string; pill: string } {
-  const done = task.status === "done" || task.status === "cancelled";
-  if (done) return { card: "bg-muted/60", pill: "bg-background text-muted-foreground" };
-
-  const deadline = task.dueAt ? describeDeadline(task.dueAt) : null;
-  if (deadline?.tone === "danger") {
-    return { card: "bg-danger-soft", pill: "bg-danger text-white" };
-  }
-  if (deadline?.tone === "warning") {
-    return { card: "bg-warning-soft", pill: "bg-warning text-white" };
-  }
-  if (task.priority === "high") {
-    return { card: "bg-accent-soft", pill: "bg-background text-foreground" };
-  }
-  return { card: "bg-background", pill: "bg-muted text-muted-foreground" };
-}
-
+/** Карточка задачи на доске: название, проект, срок и люди. Остальное — внутри. */
 function TaskCard({ task, onOpen }: { task: Task; onOpen: () => void }) {
-  const done = task.status === "done" || task.status === "cancelled";
+  const done = isClosed(task);
   const deadline = task.dueAt && !done ? describeDeadline(task.dueAt) : null;
-  const tone = taskTone(task);
+  const closedOn = done && task.completedAt ? formatDate(task.completedAt) : null;
 
   return (
     <button
       type="button"
       onClick={onOpen}
-      className={cn("flex w-full flex-col gap-2 p-3.5 text-left", tone.card)}
+      className="flex w-full flex-col gap-1.5 p-3 text-left"
     >
-      <span className="flex flex-wrap items-center gap-1.5">
-        {task.dueAt && (
-          <span
-            className={cn(
-              "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium",
-              tone.pill,
-            )}
-          >
-            <CalendarDays size={11} strokeWidth={2.5} />
-            {deadline ? deadline.label : formatDate(task.dueAt)}
-          </span>
-        )}
-        {task.priority === "high" && !done && (
-          <span className="bg-danger inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium text-white">
-            <Flame size={11} strokeWidth={2.5} />
-            срочно
-          </span>
-        )}
-        {task.priority === "low" && !done && (
-          <span className="text-muted-foreground/70 text-[11px]">не срочно</span>
-        )}
-      </span>
+      {task.project && (
+        <span className="text-muted-foreground truncate text-xs font-medium">
+          {task.project.title}
+        </span>
+      )}
 
       {/* Заголовок не обрезается: на доске карточка — единственное место, где
           видно, что за задача, и «Сверстать главную стр…» здесь бесполезно. */}
@@ -146,64 +143,43 @@ function TaskCard({ task, onOpen }: { task: Task; onOpen: () => void }) {
           done && "text-muted-foreground line-through",
         )}
       >
+        {task.priority === "high" && !done && (
+          <Flame
+            size={13}
+            strokeWidth={2.5}
+            aria-label="Срочно"
+            className="text-danger mr-1 inline align-[-1px]"
+          />
+        )}
         {task.title}
       </span>
 
-      <span className="flex flex-col gap-1">
-        <Meta icon={FolderOpen} muted={!task.project}>
-          {task.project?.title ?? "без проекта"}
-        </Meta>
-        {task.description && (
-          // Одна строка описания: часто в ней и лежит суть, а открывать
-          // карточку ради неё — лишний клик.
-          <Meta icon={AlignLeft}>{task.description}</Meta>
-        )}
-      </span>
-
-      <span className="border-foreground/10 mt-0.5 flex min-h-6 items-center justify-between gap-2 border-t pt-2.5">
-        {task.developers.length > 0 ? (
-          <PersonChips names={task.developers} />
-        ) : (
-          <span className="text-muted-foreground/60 text-[11px]">ничья</span>
-        )}
-        {done && task.completedAt && (
-          <span className="text-muted-foreground/70 text-[11px]">
-            {formatDate(task.completedAt)}
-          </span>
-        )}
-      </span>
-      <NoteHint note={task.note} />
-    </button>
-  );
-}
-
-/** Строка сведений с иконкой; пустое значение показывается серым, а не прячется. */
-function Meta({
-  icon: Icon,
-  children,
-  muted,
-}: {
-  icon: typeof FolderOpen;
-  children: ReactNode;
-  muted?: boolean;
-}) {
-  return (
-    <span
-      className={cn(
-        "flex items-center gap-1.5 text-xs",
-        muted ? "text-muted-foreground/60" : "text-muted-foreground",
+      {/* Одна строка описания: часто в ней и лежит суть. */}
+      {task.description && (
+        <span className="text-muted-foreground truncate text-xs">{task.description}</span>
       )}
-    >
-      <Icon size={12} strokeWidth={2} className="shrink-0" />
-      <span className="truncate">{children}</span>
-    </span>
+
+      <NoteHint note={task.note} className="mt-0" />
+
+      {(deadline || closedOn || task.developers.length > 0) && (
+        <span className="mt-1 flex min-h-6 items-center justify-between gap-2">
+          {deadline ? (
+            <Badge tone={deadline.tone}>{deadline.label}</Badge>
+          ) : closedOn ? (
+            <span className="text-muted-foreground text-xs">{closedOn}</span>
+          ) : (
+            <span />
+          )}
+          <PersonChips names={task.developers} />
+        </span>
+      )}
+    </button>
   );
 }
 
 export function TasksScreen() {
   const [view, setView] = useState<"list" | "board" | "calendar">("list");
-  const [tab, setTab] = useState<TabKey>("all");
-  /** Фильтр по исполнителю: «мои» без учётных записей не выразить. */
+  const [tab, setTab] = useState<TabKey>("open");
   const [developer, setDeveloper] = useState("");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -222,24 +198,28 @@ export function TasksScreen() {
     return () => clearTimeout(timer);
   }, [search]);
 
+  /*
+   * Загружаются все задачи, а срез считается здесь. Задач сотни, а не тысячи, зато
+   * вкладки переключаются мгновенно и рядом с ними можно показать числа.
+   */
   const load = useCallback(() => {
-    const active = TABS.find((item) => item.key === tab) ?? TABS[0];
-    // Доске нужны все колонки разом, поэтому срез вкладки на ней не применяется.
-    // Доске и календарю нужны все задачи разом, поэтому срез вкладки на них
-    // не применяется: колонка «Готово» и прошлые сроки должны быть видны.
-    const filters: TaskFilters =
-      view === "list" ? { ...active.filters } : { scope: "all" };
+    const filters: TaskFilters = {};
     if (developer) filters.developer = developer;
     if (debouncedSearch) filters.search = debouncedSearch;
 
+    // Двумя запросами: у сервера потолок в 1000 строк, и общим списком он срезал бы
+    // свежие закрытые, потому что они идут в конце.
     setError(null);
-    listTasks(filters)
-      .then(setTasks)
+    Promise.all([
+      listTasks({ ...filters, scope: "open" }),
+      listTasks({ ...filters, scope: "closed" }),
+    ])
+      .then(([open, closed]) => setTasks([...open, ...closed]))
       .catch((cause: unknown) => {
         setError(cause instanceof ApiError ? cause.message : "Не удалось загрузить");
         setTasks([]);
       });
-  }, [tab, view, developer, debouncedSearch]);
+  }, [developer, debouncedSearch]);
 
   useEffect(load, [load]); // Переход из глобального поиска: ?open=<id> открывает нужную карточку.
   useOpenFromSearch(tasks, setEditing);
@@ -282,14 +262,16 @@ export function TasksScreen() {
       await reorderTasks(status, ids);
       load();
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Не удалось перенести");
-      // Откат: перечитываем, чтобы на экране осталось то, что реально в базе.
+      // Откат: на экране должно остаться то, что в базе. Именно в таком порядке:
+      // `load` сбрасывает ошибку, и наоборот она бы исчезла, не показавшись.
       load();
+      setError(cause instanceof ApiError ? cause.message : "Не удалось перенести");
     }
   }
 
   async function toggleDone(task: Task) {
-    const next = task.status === "done" ? "todo" : "done";
+    // Отменённая возвращается в работу, а не становится выполненной: кнопка обещает это.
+    const next = isClosed(task) ? "todo" : "done";
     // Меняем сразу на месте: галочка должна отзываться мгновенно, иначе список
     // «моргает» на каждый клик.
     setTasks((current) =>
@@ -301,74 +283,84 @@ export function TasksScreen() {
       await updateTask(task.id, { status: next });
       load();
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Не удалось сохранить");
       load();
+      setError(cause instanceof ApiError ? cause.message : "Не удалось сохранить");
     }
   }
 
+  const counts = useMemo(
+    () => ({
+      open: tasks?.filter((task) => !isClosed(task)).length ?? 0,
+      overdue: tasks?.filter(isOverdue).length ?? 0,
+    }),
+    [tasks],
+  );
+
+  const shown = useMemo(() => {
+    if (!tasks) return [];
+    if (tab === "overdue") return tasks.filter(isOverdue);
+    if (tab === "open") {
+      // Поиск идёт по всему: закрытая задача иначе ответила бы «Ничего не нашлось», и
+      // человек завёл бы её второй раз.
+      return debouncedSearch ? tasks : tasks.filter((task) => !isClosed(task));
+    }
+    return tasks
+      .filter(isClosed)
+      .sort((left, right) =>
+        (right.completedAt ?? "").localeCompare(left.completedAt ?? ""),
+      );
+  }, [tasks, tab, debouncedSearch]);
+
+  const groups = useMemo(
+    () =>
+      GROUPS.map((group) => ({
+        ...group,
+        items: shown.filter((task) => groupOf(task) === group.key).sort(byUrgency),
+      })).filter((group) => group.items.length > 0),
+    [shown],
+  );
+
+  // На доске и в календаре видно всё сразу, срез там ничего бы не значил.
+  const nothing = view === "list" ? shown.length === 0 : tasks?.length === 0;
+
   return (
     <section>
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-bold tracking-tight">Задачи</h1>
+      <PageHeader title="Задачи">
         <Button onClick={() => setCreating(true)}>
-          <Plus size={16} strokeWidth={2.5} />
+          <Plus size={17} strokeWidth={2.5} />
           Новая задача
         </Button>
-      </header>
+      </PageHeader>
 
-      {/* Срезы и исполнитель — фильтры, а не разделы, поэтому выпадающими
-          списками: ряд кнопок занимал целую строку и на телефоне переносился на
-          две, оставляя переключатель вида где-то посередине. */}
       <FilterToolbar
-        activeCount={(tab === "all" ? 0 : 1) + (developer ? 1 : 0)}
+        filters={
+          <>
+            {view === "list" && (
+              <Segmented
+                value={tab}
+                onChange={(value) => setTab(value as TabKey)}
+                ariaLabel="Какие задачи показать"
+                options={[
+                  { value: "open", label: "Открытые", count: counts.open },
+                  { value: "overdue", label: "Просрочено", count: counts.overdue },
+                  { value: "done", label: "Готово" },
+                ]}
+              />
+            )}
+            <PeopleFilter value={developer} onChange={setDeveloper} />
+          </>
+        }
+        search={<SearchField value={search} onChange={setSearch} />}
         view={{
           value: view,
           onChange: (value) => setView(value as "list" | "board" | "calendar"),
           ariaLabel: "Вид списка задач",
           options: [
-            { value: "list", label: "Список" },
-            { value: "board", label: "Доска" },
-            { value: "calendar", label: "Календарь" },
+            { value: "list", label: "Список", icon: ListIcon },
+            { value: "board", label: "Доска", icon: Columns3 },
+            { value: "calendar", label: "Календарь", icon: CalendarDays },
           ],
         }}
-        filters={[
-          {
-            label: "Срез",
-            render: (full) => (
-              <Select
-                value={tab}
-                onChange={(value) => setTab(value as TabKey)}
-                ariaLabel="Фильтр задач"
-                icon={<Filter size={14} strokeWidth={2} />}
-                className={full ? "w-full" : "w-40"}
-                options={TABS.map((item) => ({ value: item.key, label: item.label }))}
-              />
-            ),
-          },
-          {
-            label: "Исполнитель",
-            render: (full) => (
-              <Select
-                value={developer}
-                onChange={setDeveloper}
-                ariaLabel="Исполнитель"
-                className={full ? "w-full" : "w-44"}
-                options={[
-                  { value: "", label: "Все исполнители" },
-                  ...DEVELOPERS.map((name) => ({ value: name, label: name })),
-                ]}
-              />
-            ),
-          },
-        ]}
-        search={
-          <Input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Поиск"
-            className="w-full sm:w-56"
-          />
-        }
       />
 
       {error && (
@@ -377,22 +369,22 @@ export function TasksScreen() {
         </div>
       )}
 
-      <div className="mt-6 sm:mt-5">
+      <div className="mt-5">
         {tasks === null ? (
-          <p className="text-muted-foreground text-sm">Загружаем…</p>
-        ) : tasks.length === 0 ? (
+          <LoadingRows />
+        ) : nothing ? (
           <EmptyState
             title={
               debouncedSearch || developer
                 ? "Ничего не нашлось"
-                : tab === "overdue"
+                : tab === "overdue" && view === "list"
                   ? "Ничего не горит"
                   : "Пока пусто"
             }
             note={
               debouncedSearch || developer
                 ? "Попробуйте другой запрос или человека."
-                : tab === "overdue"
+                : tab === "overdue" && view === "list"
                   ? "Задач с истёкшим сроком нет."
                   : "Заведите первую задачу — кнопка справа сверху."
             }
@@ -455,9 +447,9 @@ export function TasksScreen() {
               <TaskCard task={task} onOpen={() => setEditing(task)} />
             )}
           />
-        ) : (
-          <ul className="space-y-3 sm:space-y-2">
-            {tasks.map((task) => (
+        ) : tab === "done" ? (
+          <List>
+            {shown.map((task) => (
               <TaskRow
                 key={task.id}
                 task={task}
@@ -465,16 +457,40 @@ export function TasksScreen() {
                 onOpen={() => setEditing(task)}
               />
             ))}
-          </ul>
+          </List>
+        ) : (
+          <div className="space-y-6">
+            {groups.map((group) => (
+              <div key={group.key}>
+                <SectionTitle
+                  title={group.title}
+                  count={group.items.length}
+                  tone={"tone" in group ? group.tone : undefined}
+                />
+                <List>
+                  {group.items.map((task) => (
+                    <TaskRow
+                      key={task.id}
+                      task={task}
+                      onToggle={() => void toggleDone(task)}
+                      onOpen={() => setEditing(task)}
+                    />
+                  ))}
+                </List>
+              </div>
+            ))}
+          </div>
         )}
       </div>
 
       {creating && (
         <TaskModal
           title="Новая задача"
+          submitLabel="Создать задачу"
           projects={projects}
           initial={{
-            ...emptyTaskValues({}),
+            // Открыт срез по человеку: задачу почти наверняка заводят на него.
+            ...emptyTaskValues({ developers: developer ? [developer] : [] }),
             dueDate: prefillDate,
             ...(prefillStatus ? { status: prefillStatus } : {}),
           }}
@@ -499,6 +515,7 @@ export function TasksScreen() {
           projects={projects}
           current={editing.project}
           taskId={editing.id}
+          editing
           initial={taskToValues(editing)}
           onClose={() => setEditing(null)}
           onSubmit={async (values) => {
@@ -517,6 +534,17 @@ export function TasksScreen() {
   );
 }
 
+/** Статус в строке только когда он что-то добавляет: «К работе» — обычное состояние. */
+function statusTone(task: Task): "accent" | "neutral" | null {
+  if (task.status === "in_progress") return "accent";
+  if (task.status === "backlog") return "neutral";
+  return null;
+}
+
+/**
+ * Колонки появляются с `xl`, а не с `sm`: с 768 рядом уже стоит боковое меню, и на
+ * планшете название сжималось до нуля. Ниже срок и проект идут второй строкой.
+ */
 function TaskRow({
   task,
   onToggle,
@@ -526,74 +554,122 @@ function TaskRow({
   onToggle: () => void;
   onOpen: () => void;
 }) {
-  const done = task.status === "done" || task.status === "cancelled";
+  const done = isClosed(task);
   const deadline = task.dueAt && !done ? describeDeadline(task.dueAt) : null;
+  const tone = statusTone(task);
 
   return (
     <li
       data-card-id={task.id}
-      className="border-border bg-background hover:border-accent-border flex items-start gap-3 rounded-xl border px-3 py-3 transition hover:shadow-sm sm:py-2.5"
+      className="hover:bg-muted/60 flex items-stretch transition-colors"
     >
       <button
         type="button"
         onClick={onToggle}
         aria-label={done ? "Вернуть в работу" : "Отметить выполненной"}
-        className={cn(
-          "mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-md border transition",
-          done
-            ? "border-success bg-success text-white"
-            : "border-border hover:border-accent",
-        )}
+        className="group flex w-12 shrink-0 items-center justify-center pl-1"
       >
-        {done && <Check size={13} strokeWidth={3} />}
-      </button>
-
-      <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
         <span
           className={cn(
-            "block truncate text-sm font-medium",
-            done && "text-muted-foreground line-through",
+            "flex size-[22px] items-center justify-center rounded-full transition",
+            task.status === "done"
+              ? "bg-accent text-accent-foreground"
+              : task.status === "cancelled"
+                ? "bg-disabled text-muted-foreground"
+                : "ring-foreground/20 group-hover:ring-foreground/50 group-hover:text-muted-foreground text-transparent ring-2 ring-inset",
           )}
         >
-          {task.priority === "high" && !done && "❗ "}
-          {task.title}
-        </span>
-        <span className="text-muted-foreground mt-0.5 block truncate text-xs">
-          {[
-            task.project?.title,
-            task.developers.length ? task.developers.join(", ") : "ничья",
-            done ? TASK_STATUS_LABELS[task.status] : null,
-          ]
-            .filter(Boolean)
-            .join(" · ")}
+          {task.status === "cancelled" ? (
+            <X size={14} strokeWidth={3} />
+          ) : (
+            <Check size={14} strokeWidth={3} />
+          )}
         </span>
       </button>
 
-      {deadline && (
-        <Badge tone={deadline.tone} className="mt-0.5 max-w-56 truncate">
-          {deadline.label}
-        </Badge>
-      )}
+      <button
+        type="button"
+        onClick={onOpen}
+        className="grid min-h-14 min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 py-2.5 pr-4 text-left xl:grid-cols-[minmax(0,1fr)_12rem_3.5rem_9.75rem]"
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          {task.priority === "high" && !done && (
+            <Flame
+              size={15}
+              strokeWidth={2.5}
+              aria-label="Срочно"
+              className="text-danger shrink-0"
+            />
+          )}
+          <span
+            className={cn(
+              "truncate text-[15px] font-semibold",
+              done && "text-muted-foreground line-through",
+            )}
+          >
+            {task.title}
+          </span>
+          {tone && !done && (
+            <Badge tone={tone} className="hidden xl:inline-flex">
+              {TASK_STATUS_LABELS[task.status]}
+            </Badge>
+          )}
+          {task.status === "cancelled" && (
+            <Badge>{TASK_STATUS_LABELS[task.status]}</Badge>
+          )}
+        </span>
+
+        <span className="text-muted-foreground hidden truncate text-[13px] font-medium xl:block">
+          {task.project?.title}
+        </span>
+
+        <span className="row-span-2 flex justify-end xl:row-span-1">
+          {task.developers.length > 0 ? (
+            <PersonChips names={task.developers} />
+          ) : (
+            <span className="text-muted-foreground text-xs">ничья</span>
+          )}
+        </span>
+
+        <span className="col-start-1 mt-0.5 flex min-w-0 items-center gap-2 empty:hidden xl:col-start-auto xl:mt-0 xl:justify-end">
+          {deadline ? (
+            <Badge tone={deadline.tone}>{deadline.label}</Badge>
+          ) : done && task.completedAt ? (
+            <span className="text-muted-foreground text-xs">
+              {formatDate(task.completedAt)}
+            </span>
+          ) : null}
+          {task.project && (
+            <span className="text-muted-foreground truncate text-xs font-medium xl:hidden">
+              {task.project.title}
+            </span>
+          )}
+        </span>
+      </button>
     </li>
   );
 }
 
 function TaskModal({
   title,
+  submitLabel = "Сохранить",
   initial,
   projects,
   current,
   taskId,
+  editing,
   onClose,
   onSubmit,
   onDelete,
 }: {
   title: string;
+  submitLabel?: string;
   initial: TaskFormValues;
   projects: Project[];
   current?: { id: string; title: string } | null;
   /** Есть только у сохранённой задачи — заметки вешать не на что, пока её нет. */
   taskId?: string;
+  editing?: boolean;
   onClose: () => void;
   onSubmit: (values: TaskFormValues) => Promise<void>;
   onDelete?: () => Promise<void>;
@@ -627,18 +703,27 @@ function TaskModal({
     }
   }
 
+  // Из поля подробностей Enter переносит строку, поэтому отправка там по ⌘Enter.
+  function onKeyDown(event: KeyboardEvent<HTMLFormElement>) {
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      event.currentTarget.requestSubmit();
+    }
+  }
+
   return (
     <Modal title={title} onClose={onClose}>
-      <form onSubmit={handleSubmit}>
+      <form onSubmit={handleSubmit} onKeyDown={onKeyDown}>
         <TaskFields
           values={values}
           onChange={setValues}
           projects={projects}
           current={current}
+          editing={editing}
         />
 
         {taskId && (
-          <div className="mt-4">
+          <div className="mt-5">
             <NotesPanel
               load={async () => (await getTask(taskId)).notes}
               add={(body) => addTaskNote(taskId, body)}
@@ -653,18 +738,15 @@ function TaskModal({
           </div>
         )}
 
-        <div className="mt-5 flex items-center gap-2">
-          <Button type="submit" disabled={saving}>
-            {saving ? "Сохраняем…" : "Сохранить"}
-          </Button>
-          <Button type="button" variant="ghost" onClick={onClose}>
-            Отмена
+        <div className="mt-6 flex items-center gap-2">
+          <Button type="submit" disabled={saving} className="h-11 flex-1">
+            {saving ? "Сохраняем…" : submitLabel}
           </Button>
           {onDelete && (
             <Button
               type="button"
               variant="danger"
-              className="ml-auto"
+              className="h-11"
               onClick={() => void handleDelete()}
               disabled={saving}
             >

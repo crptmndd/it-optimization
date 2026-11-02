@@ -1,4 +1,4 @@
-import { Wallet } from "lucide-react";
+import { Check, Wallet } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import { ApiError } from "@/api/client";
@@ -11,7 +11,18 @@ import {
   type Project,
 } from "@/api/projects";
 import { getToday } from "@/api/today";
-import { Badge, Button, EmptyState, ErrorNote } from "@/components/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  ErrorNote,
+  List,
+  LoadingRows,
+  PageHeader,
+  SectionTitle,
+  Segmented,
+} from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { formatDate, periodLabel } from "@/lib/dates";
 import { formatTotals, money, sumByCurrency, type Currency } from "@/lib/money";
@@ -52,13 +63,21 @@ function unbilledSince(project: Project): string {
   return project.unbilledCount > 1 ? `первый пропуск: ${first}` : `за ${first}`;
 }
 
-function dates(bill: Bill): string {
-  const parts = [
-    bill.issuedAt ? `выставлен ${formatDate(bill.issuedAt)}` : "не выставлен",
-    bill.paidAt ? `оплачен ${formatDate(bill.paidAt)}` : null,
-  ];
-  return parts.filter(Boolean).join(" · ");
+function issued(bill: Bill): string {
+  return bill.issuedAt ? `выставлен ${formatDate(bill.issuedAt)}` : "не выставлен";
 }
+
+const TITLE = "block truncate text-[15px] font-semibold";
+const SECONDARY = "text-muted-foreground block truncate text-[13px] font-medium";
+const AMOUNT = "text-[15px] font-semibold whitespace-nowrap tabular-nums";
+
+/*
+ * Колонки включаются с xl, а не с sm: с 768px появляется боковое меню, и до 1280px
+ * четырём колонкам тесно. Раньше строка в две колонки: слева кто и за что, справа
+ * сумма сверху и то, что с ней делать, снизу.
+ */
+const ROW =
+  "grid min-h-14 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 px-4 py-2.5";
 
 export function InvoicesScreen() {
   const [scope, setScope] = useState<BillScope>("due");
@@ -126,10 +145,7 @@ export function InvoicesScreen() {
 
   return (
     <section>
-      <header>
-        <h1 className="text-xl font-bold tracking-tight">Счета</h1>
-        <p className="text-muted-foreground mt-1 text-sm">Кто, когда и за что платит.</p>
-      </header>
+      <PageHeader title="Счета" />
 
       {error && (
         <div className="mt-4">
@@ -137,108 +153,107 @@ export function InvoicesScreen() {
         </div>
       )}
 
-      <div className="mt-6 space-y-8">
+      <div className="mt-5 space-y-6">
         <div>
-          <div className="flex items-baseline gap-2">
-            <h2 className="text-danger text-sm font-semibold">Не выставлено</h2>
-            <span className="text-muted-foreground text-xs">{unbilled.length}</span>
+          <SectionTitle
+            title="Не выставлено"
+            count={unbilled.length}
+            tone={unbilled.length > 0 ? "danger" : undefined}
+          >
             {formatTotals(expected) && (
-              <span className="text-muted-foreground ml-auto text-sm">
+              /* Занимает остаток ряда и переносится сам: иначе две валюты на телефоне
+                 выдавливают на вторую строку заголовок. */
+              <span
+                className={cn(
+                  AMOUNT,
+                  "text-muted-foreground min-w-0 flex-1 text-right whitespace-normal",
+                )}
+              >
                 примерно {formatTotals(expected)}
               </span>
             )}
-          </div>
+          </SectionTitle>
 
           {unbilled.length === 0 ? (
-            <p className="text-muted-foreground mt-2 text-sm">
+            <Card className="text-muted-foreground px-4 py-3.5 text-sm font-medium">
               Все помесячные проекты выставлены.
-            </p>
+            </Card>
           ) : (
-            <ul className="mt-2 space-y-3 sm:space-y-2">
+            <List>
               {unbilled.map((project) => (
-                <li
-                  key={project.id}
-                  className="border-border bg-danger-soft flex items-center gap-3 rounded-xl border px-3 py-3 sm:py-2.5"
-                >
-                  <Link to={`/projects?open=${project.id}`} className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium">
-                      {project.title}
+                <li key={project.id} className="hover:bg-muted/60 transition-colors">
+                  <Link
+                    to={`/projects?open=${project.id}`}
+                    className={cn(ROW, "xl:grid-cols-[minmax(0,1fr)_13rem_4.5rem_8rem]")}
+                  >
+                    <span className="min-w-0">
+                      <span className={TITLE}>{project.title}</span>
+                      <span className={SECONDARY}>{project.client?.name}</span>
                     </span>
-                    <span className="text-muted-foreground mt-0.5 block truncate text-xs">
-                      {[project.client?.name, unbilledSince(project)]
-                        .filter(Boolean)
-                        .join(" · ")}
+                    <span
+                      className={cn(SECONDARY, "max-xl:col-start-1 max-xl:row-start-2")}
+                    >
+                      {unbilledSince(project)}
+                    </span>
+                    <Badge
+                      tone="danger"
+                      className="justify-self-end max-xl:col-start-2 max-xl:row-start-2"
+                    >{`${project.unbilledCount} мес.`}</Badge>
+                    <span
+                      className={cn(
+                        AMOUNT,
+                        "text-right max-xl:col-start-2 max-xl:row-start-1 max-xl:self-start",
+                      )}
+                    >
+                      {project.monthlyAmountMinor !== null &&
+                        money(
+                          project.monthlyAmountMinor * project.unbilledCount,
+                          project.currency,
+                        )}
                     </span>
                   </Link>
-                  <Badge tone="danger">
-                    {project.unbilledCount > 1
-                      ? `${project.unbilledCount} мес.`
-                      : "1 мес."}
-                  </Badge>
-                  {project.monthlyAmountMinor !== null && (
-                    <span className="text-sm font-medium">
-                      {money(
-                        project.monthlyAmountMinor * project.unbilledCount,
-                        project.currency,
-                      )}
-                    </span>
-                  )}
                 </li>
               ))}
-            </ul>
+            </List>
           )}
         </div>
 
         <div>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-            <div
-              role="group"
-              aria-label="Срез счетов"
-              className="border-border flex shrink-0 overflow-hidden rounded-lg border"
-            >
-              {SCOPES.map((item) => (
-                <button
-                  key={item.value}
-                  type="button"
-                  aria-pressed={scope === item.value}
-                  onClick={() => setScope(item.value)}
-                  className={cn(
-                    "px-3 py-1.5 text-sm font-medium transition",
-                    scope === item.value
-                      ? "bg-accent-soft text-foreground"
-                      : "text-muted-foreground hover:bg-muted",
-                  )}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
-            <span className="text-muted-foreground text-xs">{bills?.length ?? 0}</span>
+          <div className="mb-2.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+            {/* Число только у открытого среза: остальные сервер не считает, а лишний
+                запрос ради подписи на кнопке того не стоит. */}
+            <Segmented
+              value={scope}
+              onChange={(value) => setScope(value as BillScope)}
+              ariaLabel="Срез счетов"
+              options={SCOPES.map((item) =>
+                item.value === scope && bills ? { ...item, count: bills.length } : item,
+              )}
+            />
             {formatTotals(totals) && (
-              <span className="ml-auto flex items-center gap-1.5 text-sm font-medium">
-                <Wallet size={14} strokeWidth={2.5} />
+              <span className={cn(AMOUNT, "flex items-center gap-1.5 px-1")}>
+                <Wallet size={16} strokeWidth={2.25} />
                 {formatTotals(totals)}
               </span>
             )}
           </div>
 
           {bills === null ? (
-            <p className="text-muted-foreground mt-3 text-sm">Загружаем…</p>
+            <LoadingRows />
           ) : bills.length === 0 ? (
-            <div className="mt-3">
-              <EmptyState {...EMPTY[scope]} />
-            </div>
+            <EmptyState {...EMPTY[scope]} />
           ) : (
-            <ul className="mt-3 space-y-3 sm:space-y-2">
+            <List>
               {bills.map((bill) => (
                 <BillRow
                   key={`${bill.source}:${bill.id}`}
                   bill={bill}
+                  showStatus={scope !== "due"}
                   pending={pending === bill.id}
                   onToggle={() => void togglePaid(bill)}
                 />
               ))}
-            </ul>
+            </List>
           )}
         </div>
       </div>
@@ -246,12 +261,21 @@ export function InvoicesScreen() {
   );
 }
 
+/**
+ * Вся строка ведёт в карточку проекта, но кнопка оплаты стоит рядом с содержимым, а не
+ * внутри ссылки: кнопка в ссылке — недопустимая разметка. Поэтому ссылка лежит слоем
+ * поверх строки, а кнопка поднята над ней. Иначе сумма и кнопка на телефоне не встанут
+ * в свою колонку справа.
+ */
 function BillRow({
   bill,
+  showStatus,
   pending,
   onToggle,
 }: {
   bill: Bill;
+  /** В срезе «К оплате» все строки не оплачены, и такая плашка ничего не сообщает. */
+  showStatus: boolean;
   pending: boolean;
   onToggle: () => void;
 }) {
@@ -263,47 +287,60 @@ function BillRow({
     : bill.paidAt
       ? "Снять оплату"
       : "Оплачено";
+  const client = bill.project.client ?? "без клиента";
 
   return (
-    <li className="border-border bg-background flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border px-3 py-3 sm:py-2.5">
-      <Link to={`/projects?open=${bill.project.id}`} className="min-w-0 flex-1 basis-56">
-        <span
-          className={cn(
-            "block truncate text-sm font-medium",
-            !bill.project.client && "text-muted-foreground",
-          )}
-        >
-          {bill.project.client ?? "без клиента"}
-        </span>
-        <span className="text-muted-foreground mt-0.5 block truncate text-xs">
-          {bill.project.title} · {subject(bill)}
-        </span>
-        <span className="text-muted-foreground mt-0.5 block truncate text-xs">
-          {dates(bill)}
-        </span>
-      </Link>
+    <li
+      className={cn(
+        ROW,
+        "hover:bg-muted/60 relative transition-colors xl:grid-cols-[minmax(0,1fr)_10.5rem_10.5rem_9rem]",
+      )}
+    >
+      <Link
+        to={`/projects?open=${bill.project.id}`}
+        aria-label={`${client}, ${bill.project.title}`}
+        className="absolute inset-0 focus-visible:-outline-offset-2"
+      />
 
-      <span className="flex flex-wrap items-center gap-2">
+      <span className="min-w-0">
+        <span className={cn(TITLE, !bill.project.client && "text-muted-foreground")}>
+          {client}
+        </span>
+        <span className="flex min-w-0 items-center gap-2">
+          <span className={SECONDARY}>{bill.project.title}</span>
+          {bill.project.archived && <Badge>архив</Badge>}
+        </span>
+      </span>
+
+      <span className="min-w-0 max-xl:col-start-1 max-xl:row-start-2">
+        <span className="block truncate text-[13px] font-semibold">{subject(bill)}</span>
+        <span className={cn(SECONDARY, "max-xl:whitespace-normal")}>{issued(bill)}</span>
+      </span>
+
+      <span className="flex flex-col items-end gap-1 max-xl:col-start-2 max-xl:row-start-1 max-xl:self-start">
         {bill.amountMinor === null ? (
-          <Badge>сумма не указана</Badge>
-        ) : (
-          <span className="text-sm font-medium whitespace-nowrap">
-            {money(bill.amountMinor, bill.currency)}
+          <span className="text-muted-foreground text-[13px] font-medium whitespace-nowrap">
+            сумма не указана
           </span>
+        ) : (
+          <span className={AMOUNT}>{money(bill.amountMinor, bill.currency)}</span>
         )}
-        <Badge tone={bill.paidAt ? "success" : "warning"}>
-          {bill.paidAt ? "оплачен" : "не оплачен"}
-        </Badge>
-        {bill.project.archived && <Badge>архив</Badge>}
+        {showStatus && (
+          <Badge tone={bill.paidAt ? "success" : "warning"}>
+            {bill.paidAt ? `оплачен ${formatDate(bill.paidAt)}` : "не оплачен"}
+          </Badge>
+        )}
       </span>
 
       <Button
         type="button"
-        variant={bill.paidAt ? "ghost" : "primary"}
-        className={cn("sm:w-36", bill.paidAt && "border-border border")}
+        variant={bill.paidAt ? "ghost" : "secondary"}
+        size="sm"
+        className="relative max-xl:col-start-2 max-xl:row-start-2 max-xl:self-end xl:w-full"
         onClick={onToggle}
         disabled={pending || !allowed}
       >
+        {allowed && !bill.paidAt && <Check size={15} strokeWidth={2.25} />}
         {label}
       </Button>
     </li>

@@ -1,4 +1,11 @@
-import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
+import {
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type ReactNode,
+  type Ref,
+} from "react";
 import { ApiError } from "@/api/client";
 import {
   getStages,
@@ -10,8 +17,10 @@ import {
   type StagesResult,
 } from "@/api/projects";
 import { CurrencySelect } from "@/components/currency-select";
+import { DateField } from "@/components/date-field";
 import { Badge, Button, ErrorNote, Field, Input } from "@/components/ui";
 import type { PaymentBlock } from "./project-billing";
+import { cn } from "@/lib/cn";
 import { formatDate, fromDateInputValue, toDateInputValue } from "@/lib/dates";
 import {
   amountToInput,
@@ -32,6 +41,10 @@ import {
 
 const AMOUNTS_DISAGREE =
   "Общая сумма не сходится с суммами этапов: поправьте одно из двух или нажмите «Разделить поровну»";
+
+/** Колонки шапки и строк одни: подписи стоят над полями только при этом условии. */
+const STAGE_COLUMNS =
+  "grid grid-cols-2 items-center gap-2 sm:grid-cols-[minmax(0,1fr)_9.5rem_8rem_8.5rem]";
 
 function failure(cause: unknown): string {
   return cause instanceof ApiError ? cause.message : "Не удалось сохранить";
@@ -206,8 +219,7 @@ export function ProjectStages({
     }
   }
 
-  function commitDate(stage: Stage, index: number) {
-    const value = dates[index] ?? "";
+  function commitDate(stage: Stage, value: string) {
     if (value === toDateInputValue(stage.issuedAt)) return;
     void changeStage(() => patch(stage, { issuedAt: fromDateInputValue(value) }));
   }
@@ -254,13 +266,17 @@ export function ProjectStages({
   }
 
   return (
-    <div ref={root} className="border-border mt-4 scroll-mt-4 border-t pt-4">
+    <div ref={root} className="mt-5 scroll-mt-4">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <span className="text-sm font-medium">Этапы договора</span>
+        <span className="text-sm font-bold">Этапы договора</span>
         {formatTotals(totals) && (
-          <span className="text-muted-foreground text-xs">
-            Итого {formatTotals(totals)}
-            {formatTotals(paidTotals) && ` · оплачено ${formatTotals(paidTotals)}`}
+          <span className="flex flex-wrap gap-x-3 text-[13px] font-semibold tabular-nums">
+            <span>Итого {formatTotals(totals)}</span>
+            {formatTotals(paidTotals) && (
+              <span className="text-muted-foreground">
+                оплачено {formatTotals(paidTotals)}
+              </span>
+            )}
           </span>
         )}
       </div>
@@ -287,8 +303,7 @@ export function ProjectStages({
           <CurrencySelect value={currency} onChange={setCurrency} disabled={anyPaid} />
           <Button
             type="button"
-            variant="ghost"
-            className="border-border border"
+            variant="secondary"
             onClick={() => run(() => writeAmounts({ totalMinor: parseAmount(total) }))}
             disabled={busy || allPaid}
           >
@@ -302,81 +317,83 @@ export function ProjectStages({
         </p>
       )}
 
-      <ul className="mt-3 space-y-2">
-        {stages.map((stage, index) => (
-          <li key={stage.id} className="border-border rounded-lg border p-3">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm font-medium">Этап {stage.position}</span>
-              <span className="flex items-center gap-2">
-                {stage.paidAt && (
-                  <span className="text-muted-foreground text-xs">
-                    {formatDate(stage.paidAt)}
-                  </span>
-                )}
-                <Badge tone={stage.paidAt ? "success" : "warning"}>
-                  {stage.paidAt ? "оплачено" : "не оплачено"}
-                </Badge>
-              </span>
-            </div>
+      <div
+        aria-hidden="true"
+        className={cn(
+          STAGE_COLUMNS,
+          "text-muted-foreground mt-4 hidden text-[13px] font-semibold sm:grid",
+        )}
+      >
+        <span />
+        <span>Выставлен</span>
+        <span className="text-right">Сумма</span>
+      </div>
 
-            <div className="mt-2 grid items-end gap-2 sm:grid-cols-[1fr_1fr_9.5rem]">
-              <Field label="Сумма">
-                <Input
-                  value={amounts[index] ?? ""}
-                  onChange={(event) => {
-                    const value = sanitizeAmount(event.target.value);
-                    setAmounts((current) =>
-                      current.map((item, at) => (at === index ? value : item)),
-                    );
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") event.preventDefault();
-                  }}
-                  // Заполненная сумма оплаченного этапа не меняется, а пустую
-                  // вписать можно: оплатить этап без суммы разрешено.
-                  disabled={!editable || (!!stage.paidAt && stage.amountMinor !== null)}
-                  inputMode="numeric"
-                  placeholder="Не указана"
-                />
-              </Field>
-              <Field label="Выставлен">
-                <Input
-                  type="date"
-                  value={dates[index] ?? ""}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    setDates((current) =>
-                      current.map((item, at) => (at === index ? value : item)),
-                    );
-                  }}
-                  onBlur={() => commitDate(stage, index)}
-                  onKeyDown={(event) => {
-                    // Enter здесь значит «эта дата», а не «сохранить проект».
-                    if (event.key !== "Enter") return;
-                    event.preventDefault();
-                    commitDate(stage, index);
-                  }}
-                  disabled={busy || !editable}
-                />
-              </Field>
-              <StageButton
-                stage={stage}
-                next={stages[index + 1]}
-                editable={editable}
-                busy={busy}
-                onToggle={() => togglePaid(stage, index)}
+      <ul className="divide-border divide-y">
+        {stages.map((stage, index) => (
+          <li key={stage.id} className={cn(STAGE_COLUMNS, "py-2")}>
+            <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="text-sm font-semibold">Этап {stage.position}</span>
+              <Badge tone={stage.paidAt ? "success" : "warning"}>
+                {stage.paidAt ? `оплачено ${formatDate(stage.paidAt)}` : "не оплачено"}
+              </Badge>
+            </span>
+
+            <StageField label="Выставлен">
+              <DateField
+                value={dates[index] ?? ""}
+                onChange={(value) => {
+                  setDates((current) =>
+                    current.map((item, at) => (at === index ? value : item)),
+                  );
+                  // Выбор в календаре законченный: ждать ухода из поля тут не от чего.
+                  commitDate(stage, value);
+                }}
+                disabled={busy || !editable}
+                ariaLabel={`Выставлен этап ${stage.position}`}
               />
-            </div>
+            </StageField>
+
+            <StageField label="Сумма">
+              <Input
+                value={amounts[index] ?? ""}
+                onChange={(event) => {
+                  const value = sanitizeAmount(event.target.value);
+                  setAmounts((current) =>
+                    current.map((item, at) => (at === index ? value : item)),
+                  );
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") event.preventDefault();
+                }}
+                // Заполненная сумма оплаченного этапа не меняется, а пустую
+                // вписать можно: оплатить этап без суммы разрешено.
+                disabled={!editable || (!!stage.paidAt && stage.amountMinor !== null)}
+                inputMode="numeric"
+                placeholder="Не указана"
+                aria-label={`Сумма этапа ${stage.position}`}
+                className="text-right tabular-nums"
+              />
+            </StageField>
+
+            <StageButton
+              stage={stage}
+              next={stages[index + 1]}
+              editable={editable}
+              busy={busy}
+              onToggle={() => togglePaid(stage, index)}
+            />
           </li>
         ))}
       </ul>
 
-      {/* Общая сумма здесь тоже применяется: кнопка самая заметная в блоке, и набранное
-          в верхнем поле не должно пропадать при ответе 200. */}
+      {/* Общая сумма здесь тоже применяется: набранное в верхнем поле не должно
+          пропадать при ответе 200. */}
       {editable && amountsOpen && (
-        <div className="mt-3">
+        <div className="mt-2 flex justify-end">
           <Button
             type="button"
+            variant="secondary"
             onClick={() => run(writeEntered)}
             disabled={busy || enteredAmounts() === null}
           >
@@ -393,6 +410,21 @@ export function ProjectStages({
     </div>
   );
 }
+
+/** На компьютере подпись одна на столбец, в шапке; на телефоне столбцов нет. */
+function StageField({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label className="block min-w-0">
+      <span className="text-muted-foreground mb-1 block text-[13px] font-semibold sm:hidden">
+        {label}
+      </span>
+      {children}
+    </label>
+  );
+}
+
+/** На телефоне кнопка уходит вверх, к названию этапа: поля занимают ряд целиком. */
+const BUTTON_PLACE = "justify-self-end max-sm:col-start-2 max-sm:row-start-1 sm:w-full";
 
 /** Запрещённая кнопка сама называет причину: подсказка в title на телефоне не видна. */
 function StageButton({
@@ -413,7 +445,8 @@ function StageButton({
       <Button
         type="button"
         variant="ghost"
-        className="border-border border"
+        size="sm"
+        className={BUTTON_PLACE}
         onClick={onToggle}
         disabled={busy || !stage.unpayable}
       >
@@ -422,7 +455,14 @@ function StageButton({
     );
   }
   return (
-    <Button type="button" onClick={onToggle} disabled={busy || !stage.payable}>
+    <Button
+      type="button"
+      variant="secondary"
+      size="sm"
+      className={BUTTON_PLACE}
+      onClick={onToggle}
+      disabled={busy || !stage.payable}
+    >
       {stage.payable || !editable ? "Оплачено" : `Сначала этап ${stage.position - 1}`}
     </Button>
   );

@@ -1,4 +1,4 @@
-import { Users } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { ApiError } from "@/api/client";
 import {
@@ -13,9 +13,21 @@ import {
   type TeamHandle,
 } from "@/api/team";
 import { useCurrentUser, type UserRole } from "@/auth/auth-context";
+import { PersonChip } from "@/components/person-chip";
 import { useSecondFactor } from "@/components/two-factor-prompt";
-import { Badge, Button, ErrorNote, Field, Input, Modal, Select } from "@/components/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  ErrorNote,
+  Field,
+  Input,
+  LoadingRows,
+  Modal,
+  Select,
+} from "@/components/ui";
 import { formatDate } from "@/lib/dates";
+import { forgetHandles } from "@/lib/handles";
 
 /**
  * Команда: учётки и Telegram-ники. Только у владельца, и запрет стоит на сервере.
@@ -54,6 +66,8 @@ export function TeamPanel() {
   const { withCode, prompt } = useSecondFactor();
   const [accounts, setAccounts] = useState<Account[] | null>(null);
   const [form, setForm] = useState<AccountInput>(emptyAccount);
+  /** Учётки заводят редко, поэтому форма свёрнута и не отодвигает список. */
+  const [adding, setAdding] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -88,6 +102,7 @@ export function TeamPanel() {
         );
         if (!created) return;
         setForm(emptyAccount());
+        setAdding(false);
         setPendingAction(null);
         load();
       },
@@ -113,74 +128,55 @@ export function TeamPanel() {
     });
   }
 
+  const errorNote = error && (
+    <div className="mt-4">
+      <ErrorNote>{error}</ErrorNote>
+    </div>
+  );
+
   return (
-    <div className="border-border mt-6 rounded-xl border p-5">
-      <div className="flex items-start gap-3">
-        <Users size={18} className="mt-0.5 shrink-0" strokeWidth={2} />
-        <div className="min-w-0 flex-1">
-          <h2 className="text-sm font-semibold">Команда</h2>
-          <p className="text-muted-foreground mt-1 text-sm">
-            Отключение закрывает вход, но не убирает человека из телеграм-чата команды:
-            это делается руками.
-          </p>
+    <>
+      {/* Ники раньше учёток: владелец заполняет их первым делом, а учётки меняются редко. */}
+      <HandlesForm />
 
-          {error && (
-            <div className="mt-4">
-              <ErrorNote>{error}</ErrorNote>
-            </div>
-          )}
+      <Card className="p-5">
+        <h2 className="text-[17px] leading-6 font-bold tracking-tight">Команда</h2>
+        <p className="text-muted-foreground mt-1 text-sm">
+          Отключение закрывает вход, но не убирает человека из телеграм-чата команды: это
+          делается руками.
+        </p>
 
-          <ul className="mt-4 space-y-2">
-            {accounts?.map((account) => (
-              <li
+        {!adding && errorNote}
+
+        {accounts === null && !error && (
+          <div className="mt-3">
+            <LoadingRows rows={2} />
+          </div>
+        )}
+
+        {accounts && (
+          <ul className="divide-border mt-2 divide-y">
+            {accounts.map((account) => (
+              <AccountRow
                 key={account.id}
-                className="border-border flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-3 py-2"
-              >
-                <span className="min-w-0 flex-1 basis-48">
-                  <span className="block truncate text-sm font-medium">
-                    {account.name ?? account.email}
-                  </span>
-                  <span className="text-muted-foreground block truncate text-xs">
-                    {[
-                      account.name && account.email,
-                      ROLE_LABELS[account.role],
-                      account.lastLoginAt
-                        ? `вход ${formatDate(account.lastLoginAt)}`
-                        : "не входил",
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </span>
-                </span>
-                <Badge tone={account.twoFactorEnabled ? "success" : "neutral"}>
-                  {account.twoFactorEnabled ? "2FA" : "без 2FA"}
-                </Badge>
-                {account.disabledAt && <Badge tone="danger">отключена</Badge>}
-                <Button
-                  type="button"
-                  variant={account.disabledAt ? "ghost" : "danger"}
-                  onClick={() => askToggle(account)}
-                  disabled={account.id === currentUser.id}
-                  title={
-                    account.id === currentUser.id
-                      ? "Свою учётку отключить нельзя"
-                      : undefined
-                  }
-                >
-                  {account.disabledAt ? "Включить" : "Отключить"}
-                </Button>
-              </li>
+                account={account}
+                self={account.id === currentUser.id}
+                onToggle={() => askToggle(account)}
+              />
             ))}
           </ul>
+        )}
 
-          <form onSubmit={askCreate} className="mt-6">
-            <h3 className="text-sm font-semibold">Новая учётка</h3>
+        {adding ? (
+          <form onSubmit={askCreate} className="mt-5">
+            <h3 className="text-[15px] font-bold tracking-tight">Новая учётка</h3>
             <div className="mt-3 grid gap-4 sm:grid-cols-2">
               <Field label="Имя">
                 <Input
                   value={form.name}
                   onChange={(event) => setField("name", event.target.value)}
                   required
+                  autoFocus
                   maxLength={120}
                   autoComplete="off"
                 />
@@ -199,6 +195,7 @@ export function TeamPanel() {
                   value={form.role}
                   onChange={(role) => setField("role", role as UserRole)}
                   options={ROLE_OPTIONS}
+                  ariaLabel="Роль"
                 />
               </Field>
               <Field
@@ -215,20 +212,99 @@ export function TeamPanel() {
                 />
               </Field>
             </div>
-            <div className="mt-4">
-              <Button type="submit">Создать учётку</Button>
+            {errorNote}
+            <div className="mt-4 flex items-center gap-2">
+              <Button type="submit" variant="secondary">
+                Создать учётку
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => {
+                  setAdding(false);
+                  setError(null);
+                }}
+              >
+                Отмена
+              </Button>
             </div>
           </form>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setAdding(true)}
+            className="text-muted-foreground hover:text-foreground mt-3 flex items-center gap-1.5 text-[13px] font-semibold transition"
+          >
+            <Plus size={15} strokeWidth={2.5} />
+            Новая учётка
+          </button>
+        )}
 
-          <HandlesForm />
-        </div>
-      </div>
+        {pendingAction && (
+          <ConfirmDialog action={pendingAction} onClose={() => setPendingAction(null)} />
+        )}
+        {prompt}
+      </Card>
+    </>
+  );
+}
 
-      {pendingAction && (
-        <ConfirmDialog action={pendingAction} onClose={() => setPendingAction(null)} />
-      )}
-      {prompt}
-    </div>
+/**
+ * На телефоне значки уходят второй строкой под имя, а на широком экране через `contents`
+ * становятся колонками общей сетки: так роли и даты стоят друг под другом.
+ */
+function AccountRow({
+  account,
+  self,
+  onToggle,
+}: {
+  account: Account;
+  self: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <li className="grid min-h-14 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 py-2.5 sm:grid-cols-[auto_minmax(0,1fr)_5.75rem_4rem_6.25rem_5.75rem]">
+      <PersonChip name={account.name ?? account.email} className="size-8 text-[13px]" />
+
+      <span className="min-w-0">
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="truncate text-[15px] font-semibold">
+            {account.name ?? account.email}
+          </span>
+          {account.disabledAt && <Badge tone="danger">отключена</Badge>}
+        </span>
+        {account.name && (
+          <span className="text-muted-foreground block truncate text-[13px] font-medium">
+            {account.email}
+          </span>
+        )}
+      </span>
+
+      <span className="col-start-2 row-start-2 flex flex-wrap items-center gap-1.5 sm:contents">
+        <Badge className="justify-self-start">{ROLE_LABELS[account.role]}</Badge>
+        <Badge
+          tone={account.twoFactorEnabled ? "success" : "neutral"}
+          className="justify-self-start"
+        >
+          {account.twoFactorEnabled ? "2FA" : "без 2FA"}
+        </Badge>
+        <span className="text-muted-foreground text-[13px] font-medium whitespace-nowrap">
+          {account.lastLoginAt ? `вход ${formatDate(account.lastLoginAt)}` : "не входил"}
+        </span>
+      </span>
+
+      <Button
+        type="button"
+        size="sm"
+        variant={account.disabledAt ? "secondary" : "danger"}
+        onClick={onToggle}
+        disabled={self}
+        title={self ? "Свою учётку отключить нельзя" : undefined}
+        className="col-start-3 row-span-2 row-start-1 justify-self-end sm:col-start-auto sm:row-span-1 sm:row-start-auto"
+      >
+        {account.disabledAt ? "Включить" : "Отключить"}
+      </Button>
+    </li>
   );
 }
 
@@ -279,12 +355,9 @@ function ConfirmDialog({
           </div>
         )}
 
-        <div className="mt-5 flex items-center gap-2">
-          <Button type="submit" disabled={busy}>
+        <div className="mt-6">
+          <Button type="submit" disabled={busy} className="h-11 w-full">
             {busy ? "Проверяем…" : "Подтвердить"}
-          </Button>
-          <Button type="button" variant="ghost" onClick={onClose}>
-            Отмена
           </Button>
         </div>
       </form>
@@ -342,6 +415,7 @@ function HandlesForm() {
     setBusy(true);
     try {
       setHandles(await saveHandles(handles));
+      forgetHandles();
       setSaved(true);
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Не удалось сохранить");
@@ -351,38 +425,54 @@ function HandlesForm() {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="mt-6">
-      <h3 className="text-sm font-semibold">Telegram-ники</h3>
-      <p className="text-muted-foreground mt-1 text-sm">
-        Бот тэгает исполнителя в общем чате. Нет ника — напишет имя жирным.
-      </p>
+    <Card className="p-5">
+      <form onSubmit={handleSubmit}>
+        <h2 className="text-[17px] leading-6 font-bold tracking-tight">Telegram-ники</h2>
+        <p className="text-muted-foreground mt-1 text-sm">
+          Без ника бот не сможет отметить человека в общем чате: напишет только имя.
+        </p>
 
-      <div className="mt-3 grid gap-3 sm:grid-cols-2">
-        {handles?.map((item) => (
-          <Field key={item.name} label={item.name}>
-            <Input
-              value={item.telegramUsername ?? ""}
-              onChange={(event) => change(item.name, event.target.value)}
-              placeholder="@nickname"
-              maxLength={33}
-              autoComplete="off"
-            />
-          </Field>
-        ))}
-      </div>
+        {handles === null && !error && (
+          <div className="mt-3">
+            <LoadingRows rows={4} />
+          </div>
+        )}
 
-      {error && (
-        <div className="mt-4">
-          <ErrorNote>{error}</ErrorNote>
+        {handles && (
+          <ul className="divide-border mt-2 divide-y">
+            {handles.map((item) => (
+              <li key={item.name} className="flex items-center gap-3 py-2">
+                <PersonChip name={item.name} className="size-8 text-[13px]" />
+                <span className="min-w-0 flex-1 truncate text-[15px] font-semibold">
+                  {item.name}
+                </span>
+                <Input
+                  value={item.telegramUsername ?? ""}
+                  onChange={(event) => change(item.name, event.target.value)}
+                  placeholder="@nickname"
+                  aria-label={`Ник: ${item.name}`}
+                  maxLength={33}
+                  autoComplete="off"
+                  className="w-40 sm:w-64"
+                />
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {error && (
+          <div className="mt-4">
+            <ErrorNote>{error}</ErrorNote>
+          </div>
+        )}
+
+        <div className="mt-4 flex items-center gap-3">
+          <Button type="submit" disabled={busy || !handles}>
+            {busy ? "Сохраняем…" : "Сохранить ники"}
+          </Button>
+          {saved && <span className="text-success text-sm font-medium">Сохранено</span>}
         </div>
-      )}
-
-      <div className="mt-4 flex items-center gap-3">
-        <Button type="submit" variant="ghost" disabled={busy || !handles}>
-          {busy ? "Сохраняем…" : "Сохранить ники"}
-        </Button>
-        {saved && <span className="text-success text-sm font-medium">Сохранено</span>}
-      </div>
-    </form>
+      </form>
+    </Card>
   );
 }

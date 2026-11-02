@@ -142,8 +142,8 @@ function MigrationDialog({
                 Нерасшифрованные пароли остались на месте. Введите их заново в карточках.
               </p>
             )}
-            <div className="mt-5">
-              <Button type="button" onClick={onClose}>
+            <div className="mt-6 flex">
+              <Button type="button" onClick={onClose} className="h-11 flex-1">
                 Готово
               </Button>
             </div>
@@ -177,12 +177,9 @@ function MigrationDialog({
               </div>
             )}
 
-            <div className="mt-5 flex items-center gap-2">
-              <Button type="submit" disabled={busy}>
+            <div className="mt-6 flex">
+              <Button type="submit" disabled={busy} className="h-11 flex-1">
                 {busy ? "Переносим…" : "Перенести"}
-              </Button>
-              <Button type="button" variant="ghost" onClick={onClose}>
-                Отмена
               </Button>
             </div>
           </form>

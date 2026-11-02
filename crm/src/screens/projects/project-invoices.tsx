@@ -11,7 +11,7 @@ import {
   type InvoiceKind,
   type ProjectPayment,
 } from "@/api/projects";
-import { Badge, Button, ErrorNote, Input, Select } from "@/components/ui";
+import { Badge, Button, ErrorNote, Input, LoadingRows, Select } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { CurrencySelect } from "@/components/currency-select";
 import { formatDate, periodLabel } from "@/lib/dates";
@@ -165,17 +165,22 @@ export function ProjectInvoices({
   }
 
   return (
-    <div className="border-border border-t pt-4">
+    <div>
       <div className="flex items-center justify-between gap-3">
-        <span className="text-sm font-medium">Счета и акты</span>
-        <Button type="button" variant="ghost" onClick={() => setAdding((it) => !it)}>
+        <span className="text-sm font-bold">Счета и акты</span>
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          onClick={() => setAdding((it) => !it)}
+        >
           <Plus size={15} strokeWidth={2.5} />
           Добавить
         </Button>
       </div>
 
       {adding && (
-        <div className="bg-muted/50 mt-3 flex flex-wrap items-end gap-2 rounded-lg p-2.5">
+        <div className="bg-muted/50 mt-3 flex flex-wrap items-end gap-2 rounded-xl p-2.5">
           <Select
             value={kind}
             onChange={(next) => setKind(next as InvoiceKind)}
@@ -203,7 +208,12 @@ export function ProjectInvoices({
           />
           <CurrencySelect value={currency} onChange={setCurrency} />
           {/* type="button": форма проекта снаружи, и submit сохранил бы её. */}
-          <Button type="button" onClick={() => void add()} disabled={saving}>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => void add()}
+            disabled={saving}
+          >
             {saving ? "…" : "Готово"}
           </Button>
           {byStages && (
@@ -220,11 +230,11 @@ export function ProjectInvoices({
         </div>
       )}
 
-      <div className="mt-3">
+      <div className="mt-2">
         {items === null ? (
-          <p className="text-muted-foreground text-sm">Загружаем…</p>
+          <LoadingRows rows={2} />
         ) : items.length === 0 ? (
-          <p className="text-muted-foreground text-sm">
+          <p className="text-muted-foreground py-1 text-sm">
             {mode === "monthly"
               ? "Пока ничего. Счёт и акт появятся сами в начале месяца, если проект в работе."
               : "Пока ничего."}
@@ -233,50 +243,77 @@ export function ProjectInvoices({
           <ul className="divide-border divide-y">
             {items.map((invoice) => (
               <li key={invoice.id} className="py-2">
-                <div className="flex items-center gap-3">
-                  {invoice.kind === "act" ? (
-                    <>
-                      <span className="min-w-0 flex-1">
-                        <RecordTitle invoice={invoice} />
-                      </span>
-                      <span className="text-muted-foreground shrink-0 text-xs">
+                {/* Позиции заданы явно: на телефоне сумма стоит в ряду с названием, а
+                    на компьютере порядок другой, и столбцы не должны зависеть от него. */}
+                <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 sm:grid-cols-[minmax(0,1fr)_7rem_7rem_9rem]">
+                  <span className="min-w-0 truncate text-sm font-semibold">
+                    <span
+                      className={cn(invoice.kind === "act" && "text-muted-foreground")}
+                    >
+                      {INVOICE_KIND_LABELS[invoice.kind]}
+                    </span>{" "}
+                    <span className="font-medium">за {periodLabel(invoice.period)}</span>
+                  </span>
+
+                  {amountOf === invoice.id ? (
+                    <span />
+                  ) : invoice.amountMinor === null ? (
+                    <button
+                      type="button"
+                      onClick={() => openAmount(invoice)}
+                      className="text-muted-foreground hover:text-foreground text-right text-[13px] font-semibold underline underline-offset-2 transition sm:col-start-3 sm:row-start-1"
+                    >
+                      Указать сумму
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => openAmount(invoice)}
+                      aria-label={`Изменить сумму: ${formatAmount(invoice.amountMinor, invoice.currency)}`}
+                      title="Изменить сумму"
+                      className="decoration-muted-foreground/50 hover:decoration-foreground text-right text-sm font-semibold whitespace-nowrap tabular-nums underline decoration-dotted underline-offset-4 transition sm:col-start-3 sm:row-start-1"
+                    >
+                      {formatAmount(invoice.amountMinor, invoice.currency)}
+                    </button>
+                  )}
+
+                  <span className="min-w-0 sm:col-start-2 sm:row-start-1">
+                    {invoice.kind === "act" ? (
+                      <span className="text-muted-foreground block text-xs font-medium">
                         {invoice.issuedAt
                           ? `выставлен ${formatDate(invoice.issuedAt)}`
                           : "не выставлен"}
                       </span>
-                    </>
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => void togglePaid(invoice)}
-                        className="min-w-0 flex-1 text-left"
-                        title={
-                          invoice.paidAt
-                            ? "Снять отметку об оплате"
-                            : "Отметить оплаченным"
-                        }
-                      >
-                        <RecordTitle invoice={invoice} />
-                      </button>
-
+                    ) : (
                       <Badge tone={invoice.paidAt ? "success" : "warning"}>
                         {invoice.paidAt ? "оплачен" : "не оплачен"}
                       </Badge>
-                    </>
-                  )}
+                    )}
+                  </span>
 
-                  <button
-                    type="button"
-                    onClick={() => void remove(invoice)}
-                    aria-label="Удалить"
-                    className="text-muted-foreground hover:bg-muted hover:text-danger shrink-0 rounded-lg p-1.5 transition"
-                  >
-                    <X size={15} />
-                  </button>
+                  <span className="flex items-center justify-end gap-1 sm:col-start-4 sm:row-start-1">
+                    {invoice.kind === "invoice" && (
+                      <Button
+                        type="button"
+                        variant={invoice.paidAt ? "ghost" : "secondary"}
+                        size="sm"
+                        onClick={() => void togglePaid(invoice)}
+                      >
+                        {invoice.paidAt ? "Снять оплату" : "Оплачено"}
+                      </Button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => void remove(invoice)}
+                      aria-label="Удалить"
+                      className="text-muted-foreground hover:bg-muted hover:text-danger flex size-8 shrink-0 items-center justify-center rounded-lg transition"
+                    >
+                      <X size={15} strokeWidth={2.25} />
+                    </button>
+                  </span>
                 </div>
 
-                {amountOf === invoice.id ? (
+                {amountOf === invoice.id && (
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <Input
                       value={draft}
@@ -296,6 +333,7 @@ export function ProjectInvoices({
                     <CurrencySelect value={draftCurrency} onChange={setDraftCurrency} />
                     <Button
                       type="button"
+                      variant="secondary"
                       onClick={() => void saveAmount(invoice)}
                       disabled={saving}
                     >
@@ -309,17 +347,6 @@ export function ProjectInvoices({
                       Отмена
                     </Button>
                   </div>
-                ) : (
-                  <div className="mt-1 flex items-center gap-2">
-                    {invoice.amountMinor === null && <Badge>сумма не указана</Badge>}
-                    <button
-                      type="button"
-                      onClick={() => openAmount(invoice)}
-                      className="text-muted-foreground hover:text-foreground text-xs underline underline-offset-2 transition"
-                    >
-                      {invoice.amountMinor === null ? "Указать сумму" : "Изменить сумму"}
-                    </button>
-                  </div>
                 )}
               </li>
             ))}
@@ -327,20 +354,5 @@ export function ProjectInvoices({
         )}
       </div>
     </div>
-  );
-}
-
-function RecordTitle({ invoice }: { invoice: Invoice }) {
-  return (
-    <span className="block text-sm">
-      <span
-        className={cn("font-medium", invoice.kind === "act" && "text-muted-foreground")}
-      >
-        {INVOICE_KIND_LABELS[invoice.kind]}
-      </span>{" "}
-      за {periodLabel(invoice.period)}
-      {invoice.amountMinor !== null &&
-        ` — ${formatAmount(invoice.amountMinor, invoice.currency)}`}
-    </span>
   );
 }

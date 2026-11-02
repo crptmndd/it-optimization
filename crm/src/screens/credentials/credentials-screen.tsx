@@ -9,7 +9,14 @@ import {
   Lock,
   Plus,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { ApiError } from "@/api/client";
 import { useFocusFromLink } from "@/lib/focus-card";
 import { useOpenFromSearch } from "@/lib/open-from-search";
@@ -28,10 +35,17 @@ import {
   ErrorNote,
   Field,
   Input,
+  List,
+  LoadingRows,
   Modal,
+  PageHeader,
+  SearchField,
+  SectionTitle,
   Select,
+  Switch,
   Textarea,
 } from "@/components/ui";
+import { DateField } from "@/components/date-field";
 import { cn } from "@/lib/cn";
 import {
   describeDeadline,
@@ -245,46 +259,44 @@ export function CredentialsScreen() {
 
   return (
     <section>
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-bold tracking-tight">Доступы</h1>
+      <PageHeader
+        title="Доступы"
+        subtitle="Пароли открываются кодом 2FA, каждый просмотр в журнале"
+      >
         <div className="flex flex-wrap items-center gap-2">
           <LegacyMigration watch={items} onDone={load} />
           <Button onClick={() => setCreating(true)}>
-            <Plus size={16} strokeWidth={2.5} />
+            <Plus size={17} strokeWidth={2.5} />
             Новая запись
           </Button>
         </div>
-      </header>
+      </PageHeader>
 
-      <p className="text-muted-foreground mt-1 max-w-prose text-sm">
-        Что за сервис, на кого оформлен, когда продлевать и под каким паролем заходят.
-        Пароли шифруются <b className="text-foreground">на сервере</b>, посмотреть их
-        можно только с двухфакторным входом, и каждый просмотр остаётся в журнале.
-      </p>
-
-      <div className="mt-6 sm:mt-5">
-        <div className="flex flex-wrap gap-2">
-          <Input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Поиск по сервису, логину или заметкам"
-            className="w-full sm:w-80"
-          />
-          <Select
-            value={projectFilter}
-            onChange={setProjectFilter}
-            ariaLabel="Проект"
-            className="w-full sm:w-56"
-            options={[
-              { value: "", label: "Все проекты" },
-              { value: NO_PROJECT, label: "Без проекта" },
-              ...projects.map((project) => ({
-                value: project.id,
-                label: project.title,
-              })),
-            ]}
-          />
-        </div>
+      {/* flex-1 вместо w-full: на телефоне поиск свёрнут в значок, и список занимает
+          остаток ряда. Развёрнутый поиск забирает ширину целиком, список уходит ниже.
+          С боковой колонкой на 768px обе ширины целиком не помещаются, поэтому поиск
+          сжимается, иначе ряд распался бы надвое. */}
+      <div className="mt-5 flex flex-wrap items-center gap-2">
+        <SearchField
+          value={search}
+          onChange={setSearch}
+          placeholder="Поиск по сервису, логину или заметкам"
+          className="sm:max-w-80 sm:flex-1"
+        />
+        <Select
+          value={projectFilter}
+          onChange={setProjectFilter}
+          ariaLabel="Проект"
+          className="bg-background shadow-card min-w-0 flex-1 rounded-xl sm:w-56 sm:flex-none"
+          options={[
+            { value: "", label: "Все проекты" },
+            { value: NO_PROJECT, label: "Без проекта" },
+            ...projects.map((project) => ({
+              value: project.id,
+              label: project.title,
+            })),
+          ]}
+        />
       </div>
 
       {error && (
@@ -293,9 +305,9 @@ export function CredentialsScreen() {
         </div>
       )}
 
-      <div className="mt-6 sm:mt-5">
+      <div className="mt-5">
         {visible === undefined ? (
-          <p className="text-muted-foreground text-sm">Загружаем…</p>
+          <LoadingRows />
         ) : visible.length === 0 ? (
           <EmptyState
             title={projectFilter || debouncedSearch ? "Ничего не нашлось" : "Пока пусто"}
@@ -318,40 +330,46 @@ export function CredentialsScreen() {
               return (
                 <div key={group.key}>
                   {!plain && (
-                    <button
-                      type="button"
-                      onClick={() => toggle(group.key)}
-                      aria-expanded={!hidden}
-                      className="hover:text-accent-foreground mb-2 flex w-full items-center gap-1.5 text-left"
-                    >
-                      <ChevronRight
-                        size={15}
-                        strokeWidth={2.5}
-                        className={cn("transition-transform", !hidden && "rotate-90")}
-                      />
-                      <span className="text-sm font-semibold">{group.title}</span>
-                      <span className="text-muted-foreground text-xs">
-                        {group.items.length}
-                      </span>
-                    </button>
+                    // Кнопка растянута на весь ряд через after, а не обёрнута вокруг
+                    // заголовка: h2 внутри <button> недопустим по разметке, а
+                    // сворачивать должно нажатие в любом месте ряда.
+                    <div className="group relative">
+                      <SectionTitle title={group.title} count={group.items.length}>
+                        <button
+                          type="button"
+                          onClick={() => toggle(group.key)}
+                          aria-expanded={!hidden}
+                          aria-label={group.title}
+                          className="text-muted-foreground group-hover:text-foreground flex size-6 shrink-0 items-center justify-center transition-colors after:absolute after:inset-0"
+                        >
+                          <ChevronRight
+                            size={17}
+                            strokeWidth={2.25}
+                            className={cn("transition-transform", !hidden && "rotate-90")}
+                          />
+                        </button>
+                      </SectionTitle>
+                    </div>
                   )}
                   {/* Плавность через grid-template-rows: от 0fr к 1fr. Это
                       единственный способ анимировать высоту, которая заранее
                       неизвестна, — max-height требует угадать её и на длинных
                       группах рвёт плавность. Список остаётся в разметке, но
-                      обрезается обёрткой, поэтому строки не прыгают. */}
+                      обрезается своим overflow-hidden, поэтому строки не прыгают.
+                      opacity гасит и тень карточки: у сжатого в ноль списка от неё
+                      осталась бы линия. */}
                   <div
+                    aria-hidden={hidden}
                     className={cn(
                       "grid transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none",
                       hidden ? "grid-rows-[0fr]" : "grid-rows-[1fr]",
                     )}
                   >
-                    <ul
+                    <List
                       className={cn(
-                        "space-y-3 overflow-hidden transition-opacity duration-200 motion-reduce:transition-none sm:space-y-2",
+                        "transition-opacity duration-200 motion-reduce:transition-none",
                         hidden && "opacity-0",
                       )}
-                      aria-hidden={hidden}
                     >
                       {group.items.map((item) => (
                         <Row
@@ -362,7 +380,7 @@ export function CredentialsScreen() {
                           reveal={reveal}
                         />
                       ))}
-                    </ul>
+                    </List>
                   </div>
                 </div>
               );
@@ -444,6 +462,10 @@ function groupByProject(items: Credential[]) {
   });
 }
 
+/** Значок-действие в строке: показать пароль, открыть сайт. */
+const iconActionClass =
+  "text-muted-foreground hover:bg-disabled hover:text-foreground flex size-8 shrink-0 items-center justify-center rounded-lg transition disabled:opacity-50";
+
 function Row({
   item,
   onOpen,
@@ -470,101 +492,130 @@ function Row({
    */
   const payable = item.renewsAt !== null || item.amountMinor != null;
   const paidUntil = nextRenewalDate(toDateInputValue(item.renewsAt));
+  const actions = item.hasPassword || item.legacyPending || item.url || payable;
 
   return (
-    <li
-      data-card-id={item.id}
-      className="border-border bg-background hover:border-accent-border flex flex-col gap-1.5 rounded-xl border px-3 py-3 transition hover:shadow-sm sm:py-2.5"
-    >
-      {/* На телефоне название отдельной строкой: иначе бейджи сжимают его до буквы. */}
-      <div className="flex flex-wrap items-start gap-x-3 gap-y-1.5 sm:flex-nowrap">
+    <li data-card-id={item.id} className="hover:bg-muted/60 transition-colors">
+      {/* В одну линию только с xl: на всё нужно около 800px, а боковая колонка
+          оставляет столько лишь с этой ширины. Ниже действия идут второй строкой,
+          иначе название сжимается до пары букв. Карточку открывает нажатие в любом
+          месте ряда: кнопка растянута через after, действия лежат поверх неё. */}
+      <div className="relative flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 xl:flex-nowrap">
         <button
           type="button"
           onClick={onOpen}
-          className="w-full min-w-0 text-left sm:w-auto sm:flex-1"
+          className="grid min-h-9 w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 text-left after:absolute after:inset-0 xl:w-auto xl:flex-1 xl:grid-cols-[minmax(0,1fr)_7rem_9.75rem]"
         >
-          <span className="block truncate text-sm font-medium">{item.service}</span>
-          <span className="text-muted-foreground mt-0.5 block truncate text-xs">
-            {[item.login, item.owner && `на ${item.owner}`].filter(Boolean).join(" · ") ||
-              "подробности не заполнены"}
+          <span className="min-w-0">
+            <span className="block truncate text-[15px] font-semibold">
+              {item.service}
+            </span>
+            <span className="text-muted-foreground mt-0.5 flex gap-2 text-[13px] font-medium">
+              {item.login && <span className="min-w-0 truncate">{item.login}</span>}
+              {item.owner && (
+                <span className="max-w-[50%] shrink-0 truncate">на {item.owner}</span>
+              )}
+              {!item.login && !item.owner && "подробности не заполнены"}
+            </span>
+            <NoteHint text={item.notes} />
           </span>
-          <NoteHint text={item.notes} />
+
+          {/* Узкий экран: сумма над сроком справа от названия. На xl обёртка
+              растворяется, и оба становятся колонками: пустая ячейка держит
+              столбец, чтобы суммы и сроки стояли друг под другом. */}
+          <span className="flex flex-col items-end gap-0.5 xl:contents">
+            <span className="text-right text-sm font-semibold whitespace-nowrap tabular-nums max-xl:empty:hidden">
+              {item.amountMinor != null &&
+                fee(item.amountMinor, item.monthlyFee, item.currency)}
+            </span>
+            <span className="flex justify-end max-xl:empty:hidden">
+              {renews && <Badge tone={renews.tone}>{renews.label}</Badge>}
+            </span>
+          </span>
         </button>
 
-        {item.hasPassword && (
-          <button
-            type="button"
-            onClick={() => (secret.shown === null ? void secret.show() : secret.hide())}
-            disabled={secret.loading}
-            aria-label={secret.shown === null ? "Показать пароль" : "Скрыть пароль"}
-            title={secret.shown === null ? "Показать пароль" : "Скрыть пароль"}
-            className="text-muted-foreground hover:bg-muted hover:text-foreground mt-0.5 shrink-0 rounded-lg p-1.5 transition disabled:opacity-50"
-          >
-            {secret.shown === null ? (
-              <Eye size={15} strokeWidth={2} />
-            ) : (
-              <EyeOff size={15} strokeWidth={2} />
+        <div
+          className={cn(
+            "relative flex w-full items-center gap-0.5 xl:w-auto",
+            !actions && "hidden xl:flex",
+          )}
+        >
+          {item.hasPassword && (
+            <button
+              type="button"
+              onClick={() => (secret.shown === null ? void secret.show() : secret.hide())}
+              disabled={secret.loading}
+              aria-label={secret.shown === null ? "Показать пароль" : "Скрыть пароль"}
+              title={secret.shown === null ? "Показать пароль" : "Скрыть пароль"}
+              className={iconActionClass}
+            >
+              {secret.shown === null ? (
+                <Eye size={17} strokeWidth={2.25} />
+              ) : (
+                <EyeOff size={17} strokeWidth={2.25} />
+              )}
+            </button>
+          )}
+
+          {item.legacyPending && (
+            <span
+              title="Старый пароль ещё не перенесён: нажмите «Перенести пароли»"
+              className="text-muted-foreground flex size-8 shrink-0 items-center justify-center opacity-50"
+            >
+              <Lock size={17} strokeWidth={2.25} />
+            </span>
+          )}
+
+          {/* Без пароля значка нет, но на xl место за ним держится: иначе значки
+              соседних строк стояли бы вразнобой. */}
+          {!item.hasPassword && !item.legacyPending && (
+            <span className="hidden size-8 shrink-0 xl:block" />
+          )}
+
+          {item.url ? (
+            <a
+              href={item.url.startsWith("http") ? item.url : `https://${item.url}`}
+              target="_blank"
+              rel="noreferrer"
+              aria-label="Открыть сервис"
+              className={iconActionClass}
+            >
+              <ExternalLink size={17} strokeWidth={2.25} />
+            </a>
+          ) : (
+            <span className="hidden size-8 shrink-0 xl:block" />
+          )}
+
+          {/* Продление прямо из списка: открывать карточку ради одной даты — три
+              лишних движения на записи, которых у команды десятки. Дата стоит на
+              самой кнопке, поэтому нажатие не вслепую; подтверждения нет намеренно
+              — промах виден сразу по сроку рядом и правится в карточке. */}
+          <div className="ml-auto flex justify-end pl-2 xl:ml-0 xl:w-[14.5rem]">
+            {payable && (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={saving}
+                onClick={() => {
+                  setSaving(true);
+                  void onPaid().finally(() => setSaving(false));
+                }}
+              >
+                <Check size={15} strokeWidth={2.5} />
+                {saving
+                  ? "Продлеваем…"
+                  : `Оплатил до ${formatDate(fromDateInputValue(paidUntil) ?? "")}`}
+              </Button>
             )}
-          </button>
-        )}
-
-        {item.legacyPending && (
-          <span
-            title="Старый пароль ещё не перенесён: нажмите «Перенести пароли»"
-            className="text-muted-foreground mt-0.5 shrink-0 p-1.5 opacity-50"
-          >
-            <Lock size={15} strokeWidth={2} />
-          </span>
-        )}
-
-        {item.amountMinor != null && (
-          <span className="mt-0.5 shrink-0 text-sm font-medium">
-            {fee(item.amountMinor, item.monthlyFee, item.currency)}
-          </span>
-        )}
-
-        {renews && (
-          <Badge tone={renews.tone} className="mt-0.5">
-            {renews.label}
-          </Badge>
-        )}
-
-        {item.url && (
-          <a
-            href={item.url.startsWith("http") ? item.url : `https://${item.url}`}
-            target="_blank"
-            rel="noreferrer"
-            aria-label="Открыть сервис"
-            className="text-muted-foreground hover:bg-muted hover:text-foreground mt-0.5 shrink-0 rounded-lg p-1.5 transition"
-          >
-            <ExternalLink size={15} strokeWidth={2} />
-          </a>
-        )}
+          </div>
+        </div>
       </div>
 
-      {secret.shown !== null && <ShownPassword password={secret.shown} />}
-      {secret.error && <p className="text-danger text-xs">{secret.error}</p>}
-
-      {/* Продление прямо из списка: открывать карточку ради одной даты — три
-          лишних движения на записи, которых у команды десятки. Дата стоит на
-          самой кнопке, поэтому нажатие не вслепую; подтверждения нет намеренно
-          — промах виден сразу по сроку рядом и правится в карточке. */}
-      {payable && (
-        <div className="flex justify-end">
-          <button
-            type="button"
-            disabled={saving}
-            onClick={() => {
-              setSaving(true);
-              void onPaid().finally(() => setSaving(false));
-            }}
-            className="text-muted-foreground hover:bg-accent-soft hover:text-foreground inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium transition disabled:opacity-50"
-          >
-            <Check size={13} strokeWidth={2.5} />
-            {saving
-              ? "Продлеваем…"
-              : `Оплатил до ${formatDate(fromDateInputValue(paidUntil) ?? "")}`}
-          </button>
+      {(secret.shown !== null || secret.error) && (
+        <div className="space-y-1.5 px-4 pb-2.5">
+          {secret.shown !== null && <ShownPassword password={secret.shown} />}
+          {secret.error && <p className="text-danger text-xs">{secret.error}</p>}
         </div>
       )}
     </li>
@@ -647,7 +698,7 @@ function ShownPassword({ password }: { password: string }) {
         {copied ? (
           <Check size={15} strokeWidth={2.5} className="text-success" />
         ) : (
-          <Copy size={15} strokeWidth={2} />
+          <Copy size={15} strokeWidth={2.25} />
         )}
       </button>
     </div>
@@ -659,29 +710,56 @@ function CurrentPassword({ id, reveal }: { id: string; reveal: RevealPassword })
   const secret = useShownPassword(id, reveal);
 
   return (
-    <div>
-      <span className="mb-1.5 block text-sm font-medium">Текущий пароль</span>
+    <div className="min-w-0">
+      <span className="text-muted-foreground mb-1.5 block text-[13px] font-semibold">
+        Текущий пароль
+      </span>
       {secret.shown !== null ? (
         <ShownPassword password={secret.shown} />
       ) : (
-        <p className="text-muted-foreground text-sm">••••••••</p>
+        <p className="bg-field text-muted-foreground flex h-10 items-center rounded-lg px-3 text-sm">
+          ••••••••
+        </p>
       )}
       {secret.error && <p className="text-danger mt-1 text-xs">{secret.error}</p>}
-      <div className="mt-1.5">
+      <div className="mt-2">
         <Button
           type="button"
-          variant="ghost"
+          variant="secondary"
+          size="sm"
           onClick={() => (secret.shown === null ? void secret.show() : secret.hide())}
           disabled={secret.loading}
         >
           {secret.shown === null ? (
-            <Eye size={15} strokeWidth={2} />
+            <Eye size={15} strokeWidth={2.25} />
           ) : (
-            <EyeOff size={15} strokeWidth={2} />
+            <EyeOff size={15} strokeWidth={2.25} />
           )}
           {secret.shown === null ? "Показать" : "Скрыть"}
         </Button>
       </div>
+    </div>
+  );
+}
+
+/** Блок формы: мелкий заголовок вместо рамки, справа действие над его полями. */
+function FormBlock({
+  title,
+  action,
+  children,
+}: {
+  title: string;
+  action?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <div>
+      {/* min-h под кнопку: она появляется, пока вводят сумму, и поля не должны прыгать. */}
+      <div className="mb-2 flex min-h-8 items-center justify-between gap-3">
+        <h3 className="text-[15px] font-bold tracking-tight">{title}</h3>
+        {action}
+      </div>
+      {children}
     </div>
   );
 }
@@ -711,6 +789,8 @@ function CredentialModal({
   const [saving, setSaving] = useState(false);
   // Сбрасывается вместе с окном: закрыли карточку — введённый пароль снова скрыт.
   const [revealed, setRevealed] = useState(false);
+  // Заметки нужны не каждой записи: пустое поле только удлиняло окно.
+  const [notesOpen, setNotesOpen] = useState(initial.notes !== "");
   const canClear = Boolean(item?.hasPassword || item?.legacyPending);
 
   /**
@@ -753,180 +833,229 @@ function CredentialModal({
   return (
     <Modal title={title} onClose={onClose}>
       <form onSubmit={handleSubmit}>
-        <div className="space-y-4">
-          <Field label="Сервис">
-            <Input
-              value={values.service}
-              onChange={(event) => set("service", event.target.value)}
-              required
-              autoFocus
-              maxLength={120}
-              placeholder="reg.ru · Яндекс Метрика · Cloudflare"
-            />
-          </Field>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Логин">
+        <div className="space-y-5">
+          <div className="space-y-4">
+            <Field label="Сервис">
               <Input
-                value={values.login}
-                onChange={(event) => set("login", event.target.value)}
-                maxLength={200}
-              />
-            </Field>
-
-            <Field label="На кого оформлен" hint="Чья почта или карта привязана">
-              <Input
-                value={values.owner}
-                onChange={(event) => set("owner", event.target.value)}
+                value={values.service}
+                onChange={(event) => set("service", event.target.value)}
+                required
+                autoFocus
                 maxLength={120}
-                placeholder="Камиль"
+                placeholder="reg.ru · Яндекс Метрика · Cloudflare"
+                className="h-12 text-base font-semibold"
               />
             </Field>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Проект">
+                <Select
+                  value={values.projectId}
+                  onChange={(projectId) => set("projectId", projectId)}
+                  options={[
+                    { value: "", label: "Без проекта" },
+                    ...projects.map((project) => ({
+                      value: project.id,
+                      label: project.title,
+                    })),
+                  ]}
+                />
+              </Field>
+
+              <Field label="На кого оформлен">
+                <Input
+                  value={values.owner}
+                  onChange={(event) => set("owner", event.target.value)}
+                  maxLength={120}
+                  placeholder="Камиль"
+                />
+              </Field>
+            </div>
           </div>
 
-          <Field label="Проект" hint="Пусто — общий доступ: почта, GitHub, хостинг">
-            <Select
-              value={values.projectId}
-              onChange={(projectId) => set("projectId", projectId)}
-              options={[
-                { value: "", label: "Без проекта" },
-                ...projects.map((project) => ({
-                  value: project.id,
-                  label: project.title,
-                })),
-              ]}
-            />
-          </Field>
+          <FormBlock title="Вход">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Ссылка">
+                <Input
+                  value={values.url}
+                  onChange={(event) => set("url", event.target.value)}
+                  maxLength={300}
+                  placeholder="https://reg.ru"
+                />
+              </Field>
 
-          <Field label="Ссылка">
-            <Input
-              value={values.url}
-              onChange={(event) => set("url", event.target.value)}
-              maxLength={300}
-              placeholder="https://reg.ru"
-            />
-          </Field>
+              <Field label="Логин">
+                <Input
+                  value={values.login}
+                  onChange={(event) => set("login", event.target.value)}
+                  maxLength={200}
+                />
+              </Field>
 
-          {item?.hasPassword && <CurrentPassword id={item.id} reveal={reveal} />}
+              {item?.hasPassword && <CurrentPassword id={item.id} reveal={reveal} />}
 
-          <Field
-            label={item?.hasPassword ? "Новый пароль" : "Пароль"}
-            hint={
-              item?.legacyPending
-                ? "Старый пароль ещё не перенесён. Новый заменит его"
-                : item?.hasPassword
-                  ? "Пусто — не менять"
-                  : "Шифруется на сервере. Пусто — пароль не хранится"
+              <Field
+                label={item?.hasPassword ? "Новый пароль" : "Пароль"}
+                hint={
+                  item?.legacyPending
+                    ? "Старый пароль ещё не перенесён. Новый заменит его"
+                    : item?.hasPassword
+                      ? "Пусто — не менять"
+                      : "Шифруется на сервере. Пусто — пароль не хранится"
+                }
+                className={cn(!item?.hasPassword && "sm:col-span-2")}
+              >
+                {/*
+                 * autoComplete обязателен: иначе браузер подставит пароль от CRM, и
+                 * «Сохранить» молча заменит им пароль сервиса.
+                 */}
+                <div className="relative">
+                  <Input
+                    type={revealed ? "text" : "password"}
+                    value={values.password}
+                    onChange={(event) => set("password", event.target.value)}
+                    disabled={values.clearPassword}
+                    autoComplete="new-password"
+                    maxLength={500}
+                    className={cn(values.password && "pr-10", revealed && "font-mono")}
+                  />
+                  {values.password !== "" && (
+                    <button
+                      type="button"
+                      onClick={() => setRevealed((shown) => !shown)}
+                      aria-label={revealed ? "Скрыть пароль" : "Показать пароль"}
+                      title={revealed ? "Скрыть" : "Показать"}
+                      className="text-muted-foreground hover:text-foreground absolute top-1/2 right-1.5 -translate-y-1/2 rounded-md p-1.5 transition"
+                    >
+                      {revealed ? (
+                        <EyeOff size={15} strokeWidth={2.25} />
+                      ) : (
+                        <Eye size={15} strokeWidth={2.25} />
+                      )}
+                    </button>
+                  )}
+                </div>
+              </Field>
+            </div>
+
+            {canClear && (
+              <div className="mt-2">
+                {values.clearPassword ? (
+                  <p className="text-muted-foreground flex flex-wrap items-center gap-2 text-sm">
+                    Пароль будет стёрт при сохранении.
+                    <button
+                      type="button"
+                      onClick={() => set("clearPassword", false)}
+                      className="text-foreground underline underline-offset-2"
+                    >
+                      Отменить
+                    </button>
+                  </p>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="danger"
+                    size="sm"
+                    className="-ml-3"
+                    onClick={() => {
+                      set("password", "");
+                      set("clearPassword", true);
+                    }}
+                  >
+                    Стереть пароль
+                  </Button>
+                )}
+              </div>
+            )}
+          </FormBlock>
+
+          {/* «Оплатил» стоит в заголовке блока, рядом с полем, которое меняет: это не
+              способ закрыть форму, и в ряду с «Сохранить» и «Удалить» оно читалось бы
+              как третий способ выйти из окна.
+
+              Отдельной отметки «оплачено» у записи нет намеренно: оплата домена
+              или подписки означает ровно одно — срок сдвинулся вперёд. Кнопка
+              только подставляет дату в форму; записывается она обычным
+              «Сохранить», поэтому промах отменяется закрытием окна. */}
+          <FormBlock
+            title="Оплата"
+            action={
+              payable && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => set("renewsDate", paidUntil)}
+                  disabled={saving || values.renewsDate === paidUntil}
+                  title={`Продлить срок до ${formatDate(fromDateInputValue(paidUntil) ?? "")}`}
+                >
+                  <Check size={15} strokeWidth={2.5} />
+                  Оплатил до {formatDate(fromDateInputValue(paidUntil) ?? "")}
+                </Button>
+              )
             }
           >
-            {/*
-             * autoComplete обязателен: иначе браузер подставит пароль от CRM, и
-             * «Сохранить» молча заменит им пароль сервиса.
-             */}
-            <div className="relative">
-              <Input
-                type={revealed ? "text" : "password"}
-                value={values.password}
-                onChange={(event) => set("password", event.target.value)}
-                disabled={values.clearPassword}
-                autoComplete="new-password"
-                maxLength={500}
-                className={cn(values.password && "pr-10", revealed && "font-mono")}
-              />
-              {values.password !== "" && (
-                <button
-                  type="button"
-                  onClick={() => setRevealed((shown) => !shown)}
-                  aria-label={revealed ? "Скрыть пароль" : "Показать пароль"}
-                  title={revealed ? "Скрыть" : "Показать"}
-                  className="text-muted-foreground hover:text-foreground absolute top-1/2 right-1.5 -translate-y-1/2 rounded-md p-1.5 transition"
-                >
-                  {revealed ? (
-                    <EyeOff size={15} strokeWidth={2} />
-                  ) : (
-                    <Eye size={15} strokeWidth={2} />
-                  )}
-                </button>
-              )}
-            </div>
-          </Field>
+            <div className="space-y-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Продлить до">
+                  <DateField
+                    value={values.renewsDate}
+                    onChange={(next) => set("renewsDate", next)}
+                    placeholder="Без срока"
+                    clearLabel="Убрать срок"
+                    ariaLabel="Продлить до"
+                  />
+                </Field>
 
-          {canClear &&
-            (values.clearPassword ? (
-              <p className="text-muted-foreground flex flex-wrap items-center gap-2 text-sm">
-                Пароль будет стёрт при сохранении.
-                <button
-                  type="button"
-                  onClick={() => set("clearPassword", false)}
-                  className="text-foreground underline underline-offset-2"
-                >
-                  Отменить
-                </button>
-              </p>
-            ) : (
-              <Button
-                type="button"
-                variant="danger"
-                onClick={() => {
-                  set("password", "");
-                  set("clearPassword", true);
-                }}
-              >
-                Стереть пароль
-              </Button>
-            ))}
-
-          <Field label="Продлить до" hint="Попадёт наверх списка, когда срок подойдёт">
-            <Input
-              type="date"
-              value={values.renewsDate}
-              onChange={(event) => set("renewsDate", event.target.value)}
-            />
-          </Field>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field
-              label="Сумма"
-              hint="Можно с копейками: 1200 или 5,19. Пустое — не задано"
-            >
-              <div className="flex gap-2">
-                <Input
-                  value={values.amount}
-                  onChange={(event) => set("amount", sanitizeAmount(event.target.value))}
-                  inputMode="numeric"
-                  placeholder="1200"
-                />
-                <CurrencySelect
-                  value={values.currency}
-                  onChange={(currency) => set("currency", currency)}
-                />
+                <Field label="Сумма">
+                  <div className="flex gap-2">
+                    <Input
+                      value={values.amount}
+                      onChange={(event) =>
+                        set("amount", sanitizeAmount(event.target.value))
+                      }
+                      inputMode="numeric"
+                      placeholder="1200"
+                    />
+                    <CurrencySelect
+                      value={values.currency}
+                      onChange={(currency) => set("currency", currency)}
+                    />
+                  </div>
+                </Field>
               </div>
-            </Field>
 
-            <label className="flex cursor-pointer items-start gap-2.5 sm:mt-7">
-              <input
-                type="checkbox"
+              <Switch
                 checked={values.monthlyFee}
-                onChange={(event) => set("monthlyFee", event.target.checked)}
-                className="accent-accent mt-0.5 size-4 shrink-0"
+                onChange={(monthlyFee) => set("monthlyFee", monthlyFee)}
+                label="Списывается каждый месяц"
+                hint="Иначе сумма считается платой за период продления"
               />
-              <span className="text-sm">
-                Списывается каждый месяц
-                <span className="text-muted-foreground mt-0.5 block text-sm">
-                  Иначе сумма считается платой за период продления
-                </span>
-              </span>
-            </label>
-          </div>
+            </div>
+          </FormBlock>
 
-          <Field label="Заметки">
-            <Textarea
-              value={values.notes}
-              onChange={(event) => set("notes", event.target.value)}
-              rows={3}
-              placeholder="Тариф, что именно там лежит, к кому идти за доступом"
-            />
-          </Field>
+          {notesOpen ? (
+            <Field label="Заметки">
+              {/* Пустое поле открыли нажатием, и печатать будут сразу. У записи с
+                  заметками оно открыто с начала, и фокус остаётся на «Сервисе». */}
+              <Textarea
+                value={values.notes}
+                onChange={(event) => set("notes", event.target.value)}
+                rows={3}
+                autoFocus={values.notes === ""}
+                placeholder="Тариф, что именно там лежит, к кому идти за доступом"
+              />
+            </Field>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setNotesOpen(true)}
+              className="text-muted-foreground hover:text-foreground flex items-center gap-1.5 text-[13px] font-semibold transition"
+            >
+              <Plus size={15} strokeWidth={2.5} />
+              Добавить заметку
+            </button>
+          )}
         </div>
 
         {error && (
@@ -935,18 +1064,15 @@ function CredentialModal({
           </div>
         )}
 
-        <div className="mt-5 flex flex-wrap items-center gap-2">
-          <Button type="submit" disabled={saving}>
+        <div className="mt-6 flex items-center gap-2">
+          <Button type="submit" disabled={saving} className="h-11 flex-1">
             {saving ? "Сохраняем…" : "Сохранить"}
-          </Button>
-          <Button type="button" variant="ghost" onClick={onClose}>
-            Отмена
           </Button>
           {onDelete && (
             <Button
               type="button"
               variant="danger"
-              className="ml-auto"
+              className="h-11"
               onClick={() => void handleDelete()}
               disabled={saving}
             >
@@ -954,29 +1080,6 @@ function CredentialModal({
             </Button>
           )}
         </div>
-
-        {/* Продление стоит отдельной строкой под всеми кнопками: это не способ
-            закрыть форму, а действие над одним полем, и в ряду с «Сохранить» и
-            «Удалить» оно читалось бы как третий способ выйти из окна.
-
-            Отдельной отметки «оплачено» у записи нет намеренно: оплата домена
-            или подписки означает ровно одно — срок сдвинулся вперёд. Кнопка
-            только подставляет дату в форму; записывается она обычным
-            «Сохранить», поэтому промах отменяется закрытием окна. */}
-        {payable && (
-          <div className="mt-3 flex justify-center">
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => set("renewsDate", paidUntil)}
-              disabled={saving || values.renewsDate === paidUntil}
-              title={`Продлить срок до ${formatDate(fromDateInputValue(paidUntil) ?? "")}`}
-            >
-              <Check size={15} strokeWidth={2.5} />
-              Оплатил до {formatDate(fromDateInputValue(paidUntil) ?? "")}
-            </Button>
-          </div>
-        )}
       </form>
     </Modal>
   );

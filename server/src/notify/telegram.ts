@@ -105,13 +105,24 @@ export function fitMessage(lines: string[], tail: (dropped: number) => string): 
   return [...kept, tail(lines.length - kept.length)].join("\n");
 }
 
-export async function sendMessage(chatId: string, text: string): Promise<void> {
+/** Кнопка-ссылка под сообщением. */
+export interface LinkButton {
+  text: string;
+  url: string;
+}
+
+export async function sendMessage(
+  chatId: string,
+  text: string,
+  button?: LinkButton,
+): Promise<void> {
   await callBotApi("sendMessage", {
     chat_id: chatId,
     text,
     parse_mode: "HTML",
     // Ссылки на CRM разворачивать не во что — она за логином.
     link_preview_options: { is_disabled: true },
+    ...(button && { reply_markup: { inline_keyboard: [[button]] } }),
   });
 }
 
@@ -127,10 +138,11 @@ export async function trySendMessage(
   text: string,
   log: { warn: (obj: unknown, msg: string) => void },
   attempts = 3,
+  button?: LinkButton,
 ): Promise<boolean> {
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      await sendMessage(chatId, text);
+      await sendMessage(chatId, text, button);
       return true;
     } catch (cause) {
       // Заблокировал бота или удалил чат — повторять бессмысленно, ответ не

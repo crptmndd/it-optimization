@@ -68,15 +68,15 @@ export function GlobalSearch() {
       <Search
         size={15}
         strokeWidth={2}
-        className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2"
+        className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 -translate-y-1/2"
       />
       <input
         value={query}
         onChange={(event) => setQuery(event.target.value)}
         onKeyDown={(event) => event.key === "Escape" && setHits(null)}
-        placeholder="Поиск по всей CRM"
+        placeholder="Поиск по CRM"
         aria-label="Поиск по всей CRM"
-        className="border-border bg-background focus:border-accent w-full rounded-lg border py-1.5 pr-7 pl-8 text-sm transition outline-none"
+        className="bg-background shadow-card placeholder:text-muted-foreground focus:ring-accent h-10 w-full rounded-xl pr-8 pl-9 text-sm font-medium transition outline-none placeholder:font-normal focus:ring-2"
       />
       {query && (
         <button
@@ -90,7 +90,7 @@ export function GlobalSearch() {
       )}
 
       {hits !== null && (
-        <div className="border-border bg-background absolute top-full right-0 left-0 z-50 mt-1 max-h-80 overflow-y-auto rounded-xl border py-1 shadow-lg md:w-72">
+        <div className="bg-background shadow-float absolute top-full right-0 left-0 z-50 mt-1.5 max-h-80 overflow-y-auto rounded-2xl p-1.5 md:w-80">
           {hits.length === 0 ? (
             <p className="text-muted-foreground px-3 py-2 text-sm">
               {busy ? "Ищем…" : "Ничего не нашлось"}
@@ -102,11 +102,13 @@ export function GlobalSearch() {
                 type="button"
                 onClick={() => go(hit)}
                 className={cn(
-                  "hover:bg-muted flex w-full items-start gap-2 px-3 py-2 text-left transition",
+                  "hover:bg-muted flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition",
                 )}
               >
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium">{hit.title}</span>
+                  <span className="block truncate text-sm font-semibold">
+                    {hit.title}
+                  </span>
                   <span className="text-muted-foreground block truncate text-xs">
                     {hit.label}
                     {hit.hint && ` · ${hit.hint}`}

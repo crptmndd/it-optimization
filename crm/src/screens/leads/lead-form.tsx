@@ -8,6 +8,7 @@ import {
   type LeadStatus,
 } from "@/api/leads";
 import { memberLabel, type TeamMember } from "@/api/team";
+import { DateField } from "@/components/date-field";
 import { Field, Input, Select, Textarea } from "@/components/ui";
 import { fromDateInputValue, toDateInputValue } from "@/lib/dates";
 import { SERVICES } from "@/lib/services";
@@ -92,12 +93,22 @@ export function LeadFields({
 
   return (
     <div className="space-y-4">
-      <Field label="Контакт" hint="Телефон, почта или ник — как с ним связаться">
+      <Field label="Контакт">
         <Input
           value={values.contact}
           onChange={(event) => set("contact", event.target.value)}
           required
           placeholder="@ivanov или +7 999 123-45-67"
+          className="h-12 text-base font-semibold"
+        />
+      </Field>
+
+      <Field label="Что нужно">
+        <Textarea
+          value={values.message}
+          onChange={(event) => set("message", event.target.value)}
+          rows={3}
+          placeholder="Своими словами: что просит, какой бюджет, когда надо"
         />
       </Field>
 
@@ -114,40 +125,23 @@ export function LeadFields({
           <Select
             value={values.channel}
             onChange={(channel) => set("channel", channel)}
+            ariaLabel="Откуда пришёл"
             options={[{ value: "", label: "Не указано" }, ...LEAD_CHANNELS]}
           />
         </Field>
-      </div>
 
-      <Field label="Услуга" hint="Отвечает на вопрос, какие услуги приносят обращения">
-        <Select
-          value={values.service}
-          onChange={(service) => set("service", service)}
-          options={[
-            { value: "", label: "Не определились" },
-            ...SERVICES.map((service) => ({ value: service.key, label: service.label })),
-          ]}
-        />
-      </Field>
-
-      <Field label="Что нужно">
-        <Textarea
-          value={values.message}
-          onChange={(event) => set("message", event.target.value)}
-          rows={3}
-          placeholder="Своими словами: что просит, какой бюджет, когда надо"
-        />
-      </Field>
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Статус">
+        <Field label="Услуга">
           <Select
-            value={values.status}
-            onChange={(status) => set("status", status as LeadStatus)}
-            options={LEAD_STATUSES.map((status) => ({
-              value: status,
-              label: LEAD_STATUS_LABELS[status],
-            }))}
+            value={values.service}
+            onChange={(service) => set("service", service)}
+            ariaLabel="Услуга"
+            options={[
+              { value: "", label: "Не определились" },
+              ...SERVICES.map((service) => ({
+                value: service.key,
+                label: service.label,
+              })),
+            ]}
           />
         </Field>
 
@@ -155,50 +149,62 @@ export function LeadFields({
           <Select
             value={values.ownerId}
             onChange={(ownerId) => set("ownerId", ownerId)}
+            ariaLabel="Кто ведёт"
             options={[
               { value: "", label: "Никто" },
               ...team.map((member) => ({ value: member.id, label: memberLabel(member) })),
             ]}
           />
         </Field>
-      </div>
 
-      {/* У закрытого лида следующего шага нет — сервер всё равно снимет дату,
-          и показывать поле значит обещать то, чего не будет. */}
-      {closed ? (
-        values.status === "lost" && (
-          <Field
-            label="Почему отказ"
-            hint="Через полгода это единственное, что вспомнится"
-          >
+        <Field label="Статус">
+          <Select
+            value={values.status}
+            onChange={(status) => set("status", status as LeadStatus)}
+            ariaLabel="Статус"
+            options={LEAD_STATUSES.map((status) => ({
+              value: status,
+              label: LEAD_STATUS_LABELS[status],
+            }))}
+          />
+        </Field>
+
+        {/* Закрытому лиду дата не нужна — сервер всё равно снимет следующий шаг, —
+            поэтому рядом со статусом стоит либо она, либо причина отказа. */}
+        {!closed && (
+          <Field label="Следующий шаг">
+            <DateField
+              value={values.nextActionDate}
+              onChange={(next) => set("nextActionDate", next)}
+              placeholder="Без напоминания"
+              ariaLabel="Следующий шаг"
+              quick
+            />
+          </Field>
+        )}
+
+        {values.status === "lost" && (
+          <Field label="Почему отказ">
             <Input
               value={values.lostReason}
               onChange={(event) => set("lostReason", event.target.value)}
               placeholder="Дорого / нашли других / пропал"
             />
           </Field>
-        )
-      ) : (
-        <div className="grid gap-4 sm:grid-cols-[9rem_1fr]">
-          <Field label="Следующий шаг" hint="Пусто — напоминания не будет">
-            <Input
-              type="date"
-              value={values.nextActionDate}
-              onChange={(event) => set("nextActionDate", event.target.value)}
-            />
-          </Field>
+        )}
+      </div>
 
-          {/* Без описания напоминание сообщает только срок, и всё равно
-              приходится открывать карточку, чтобы вспомнить, о чём речь. */}
-          <Field label="Что сделать" hint="Попадёт в напоминание вместе с датой">
-            <Input
-              value={values.nextActionNote}
-              onChange={(event) => set("nextActionNote", event.target.value)}
-              maxLength={200}
-              placeholder="Позвонить · отправить смету · напомнить про счёт"
-            />
-          </Field>
-        </div>
+      {/* Без описания напоминание сообщает только срок, и всё равно приходится
+          открывать карточку, чтобы вспомнить, о чём речь. */}
+      {!closed && (
+        <Field label="Что сделать">
+          <Input
+            value={values.nextActionNote}
+            onChange={(event) => set("nextActionNote", event.target.value)}
+            maxLength={200}
+            placeholder="Например, позвонить и отправить смету"
+          />
+        </Field>
       )}
     </div>
   );

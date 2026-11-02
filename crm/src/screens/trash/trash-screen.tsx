@@ -8,7 +8,15 @@ import {
   restoreItem,
   type TrashItem,
 } from "@/api/trash";
-import { Badge, Button, EmptyState, ErrorNote } from "@/components/ui";
+import {
+  Badge,
+  Button,
+  EmptyState,
+  ErrorNote,
+  List,
+  LoadingRows,
+  PageHeader,
+} from "@/components/ui";
 import { daysFromToday, formatDate } from "@/lib/dates";
 
 /**
@@ -84,23 +92,19 @@ export function TrashScreen() {
 
   return (
     <section>
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight">Корзина</h1>
-          <p className="text-muted-foreground mt-1 max-w-prose text-sm">
-            Удалённое хранится {retention} дней, потом исчезает насовсем. Проект
-            возвращается вместе со своими задачами и заметками.
-          </p>
-        </div>
+      <PageHeader
+        title="Корзина"
+        subtitle={`Удалённое хранится ${retention} дней. Проект возвращается вместе с задачами и заметками`}
+      >
         <Button
           variant="danger"
           onClick={() => void empty()}
           disabled={emptying || !items?.length}
         >
-          <Trash2 size={16} strokeWidth={2} />
+          <Trash2 size={17} strokeWidth={2.25} />
           {emptying ? "Очищаем…" : "Очистить корзину"}
         </Button>
-      </header>
+      </PageHeader>
 
       {error && (
         <div className="mt-4">
@@ -108,13 +112,13 @@ export function TrashScreen() {
         </div>
       )}
 
-      <div className="mt-6 sm:mt-5">
+      <div className="mt-5">
         {items === null ? (
-          <p className="text-muted-foreground text-sm">Загружаем…</p>
+          <LoadingRows />
         ) : items.length === 0 ? (
           <EmptyState title="Пусто" note="Ничего удалённого — и хорошо." />
         ) : (
-          <ul className="space-y-3 sm:space-y-2">
+          <List>
             {items.map((item) => (
               <Row
                 key={`${item.entity}:${item.id}`}
@@ -125,7 +129,7 @@ export function TrashScreen() {
                 onPurge={() => void act(item, "purge")}
               />
             ))}
-          </ul>
+          </List>
         )}
       </div>
     </section>
@@ -149,24 +153,34 @@ function Row({
   const left = retention + daysFromToday(item.deletedAt);
 
   return (
-    <li className="border-border bg-background flex flex-wrap items-center gap-3 rounded-xl border px-3 py-3 sm:py-2.5">
-      <div className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium">{item.title}</span>
-        <span className="text-muted-foreground mt-0.5 block truncate text-xs">
-          {/* Без «удалён»: подписи приходят с сервера и бывают женского рода
-              («Статья»), а согласовать род на клиенте не по чему. */}
-          {item.label} · в корзине с {formatDate(item.deletedAt)}
+    // Все пять колонок только с xl: с боковой колонкой ниже им не хватает ширины.
+    // Строка не открывает ничего, поэтому подсветки при наведении у неё нет.
+    <li className="grid min-h-14 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 px-4 py-2.5 sm:grid-cols-[minmax(0,1fr)_7.5rem_auto] xl:grid-cols-[minmax(0,1fr)_7rem_11rem_7.5rem_auto]">
+      {/* На xl обёртка растворяется, и тип с датой становятся колонками сетки. */}
+      <div className="flex min-w-0 flex-wrap gap-x-2 gap-y-0.5 xl:contents">
+        <span className="w-full truncate text-[15px] font-semibold xl:w-auto">
+          {item.title}
+        </span>
+        <span className="text-muted-foreground truncate text-[13px] font-medium">
+          {item.label}
+        </span>
+        {/* Без «удалён»: подписи приходят с сервера и бывают женского рода
+            («Статья»), а согласовать род на клиенте не по чему. */}
+        <span className="text-muted-foreground truncate text-[13px] font-medium">
+          в корзине с {formatDate(item.deletedAt)}
         </span>
       </div>
 
-      <Badge tone={left <= 3 ? "danger" : "neutral"}>
-        {left <= 0 ? "вот-вот исчезнет" : `${left} дн.`}
-      </Badge>
+      <span className="flex justify-end">
+        <Badge tone={left <= 3 ? "danger" : "neutral"}>
+          {left <= 0 ? "вот-вот исчезнет" : `${left} дн.`}
+        </Badge>
+      </span>
 
-      <div className="flex items-center gap-1">
-        <Button variant="ghost" onClick={onRestore} disabled={busy}>
-          <RotateCcw size={15} strokeWidth={2} />
-          Вернуть
+      <div className="col-span-2 flex items-center justify-end gap-1 sm:col-span-1">
+        <Button variant="secondary" size="sm" onClick={onRestore} disabled={busy}>
+          <RotateCcw size={15} strokeWidth={2.25} />
+          Восстановить
         </Button>
         <button
           type="button"
@@ -174,9 +188,9 @@ function Row({
           disabled={busy}
           aria-label="Удалить насовсем"
           title="Удалить насовсем"
-          className="text-muted-foreground hover:bg-muted hover:text-danger rounded-lg p-2 transition"
+          className="text-muted-foreground hover:bg-muted hover:text-danger flex size-8 items-center justify-center rounded-lg transition disabled:opacity-50"
         >
-          <Trash2 size={15} strokeWidth={2} />
+          <Trash2 size={17} strokeWidth={2.25} />
         </button>
       </div>
     </li>

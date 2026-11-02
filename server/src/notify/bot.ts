@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client";
+import { isDeveloper } from "../crm/developers.js";
 import { prisma } from "../db.js";
 import { env } from "../env.js";
 import { buildDigest } from "./digest.js";
@@ -58,7 +59,35 @@ async function auditLink(
   }
 }
 
-async function linkByCode(chatId: string, code: string, log: Log): Promise<void> {
+/**
+ * Подключение бота заодно сообщает ник: человек не вписывает его дважды. Заполняется
+ * только пустое поле, ник из Настроек сильнее: его ставил владелец осознанно.
+ */
+async function rememberHandle(
+  userName: string | null,
+  username: string | undefined,
+  log: Log,
+): Promise<void> {
+  const name = userName?.trim().split(/\s+/)[0] ?? "";
+  if (!username || !isDeveloper(name)) return;
+
+  const existing = await prisma.teamMember.findUnique({ where: { name } });
+  if (existing?.telegramUsername) return;
+
+  await prisma.teamMember.upsert({
+    where: { name },
+    create: { name, telegramUsername: username },
+    update: { telegramUsername: username },
+  });
+  log.info({ name }, "ник исполнителя взят из телеграма");
+}
+
+async function linkByCode(
+  chatId: string,
+  code: string,
+  username: string | undefined,
+  log: Log,
+): Promise<void> {
   const user = await prisma.user.findFirst({
     where: {
       telegramLinkCode: code.toUpperCase(),
@@ -94,6 +123,7 @@ async function linkByCode(chatId: string, code: string, log: Log): Promise<void>
     { chatId, previousChatId: user.telegramChatId },
     log,
   );
+  await rememberHandle(user.name, username, log);
   log.info({ email: user.email }, "телеграм привязан");
   await trySendMessage(
     chatId,
@@ -102,13 +132,18 @@ async function linkByCode(chatId: string, code: string, log: Log): Promise<void>
   );
 }
 
-async function handleCommand(chatId: string, text: string, log: Log): Promise<void> {
+async function handleCommand(
+  chatId: string,
+  text: string,
+  username: string | undefined,
+  log: Log,
+): Promise<void> {
   // В группах команды приходят как «/today@it_optimization_bot».
   const [rawCommand = "", argument = ""] = text.trim().split(/\s+/, 2);
   const command = rawCommand.split("@", 1)[0]?.toLowerCase() ?? "";
 
   if (command === "/start") {
-    if (argument) return linkByCode(chatId, argument, log);
+    if (argument) return linkByCode(chatId, argument, username, log);
     await trySendMessage(
       chatId,
       `Чтобы смотреть сводку здесь, откройте CRM → «Подключить телеграм» и пришлите мне выданный код.\n\n${HELP}`,
@@ -181,9 +216,12 @@ export function startBot(log: Log): () => Promise<void> {
           const chatId = update.message?.chat.id;
           if (!text || chatId === undefined) continue;
 
-          await handleCommand(String(chatId), text, log).catch((cause: unknown) => {
-            log.error({ err: cause }, "ошибка обработки сообщения бота");
-          });
+          const username = update.message?.from?.username;
+          await handleCommand(String(chatId), text, username, log).catch(
+            (cause: unknown) => {
+              log.error({ err: cause }, "ошибка обработки сообщения бота");
+            },
+          );
         }
       } catch (cause) {
         if (controller.signal.aborted) return;

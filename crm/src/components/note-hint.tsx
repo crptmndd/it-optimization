@@ -38,18 +38,18 @@ export function NoteHint({
     // недопустим по разметке.
     <span
       className={cn(
-        "text-muted-foreground mt-1.5 flex w-full items-start gap-1.5 text-xs",
+        "text-muted-foreground mt-1.5 flex w-full items-start gap-1.5 text-xs font-medium",
         className,
       )}
     >
-      <MessageSquare size={13} strokeWidth={2} className="mt-0.5 shrink-0 opacity-60" />
+      <MessageSquare size={15} strokeWidth={2.25} className="shrink-0 opacity-60" />
       <span className="min-w-0 flex-1">
         {/* Две строки максимум: строка списка не должна превращаться в абзац. */}
         <span className="line-clamp-2">{body}</span>
-        {note && (
-          <span className="opacity-70">
-            {note.author && `— ${note.author}`}
-            {note.count > 1 && ` · ещё ${note.count - 1}`}
+        {note && (note.author || note.count > 1) && (
+          <span className="mt-0.5 flex gap-2 font-normal">
+            {note.author && <span className="truncate">{note.author}</span>}
+            {note.count > 1 && <span className="shrink-0">ещё {note.count - 1}</span>}
           </span>
         )}
       </span>

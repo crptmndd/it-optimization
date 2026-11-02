@@ -1,8 +1,16 @@
-import { Check, Send } from "lucide-react";
+import { Check } from "lucide-react";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { ApiError } from "@/api/client";
 import { BOT_USERNAME, telegramApi, type TelegramStatus } from "@/api/telegram";
-import { Button, ErrorNote, Field, Input } from "@/components/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  ErrorNote,
+  Field,
+  Input,
+  PageHeader,
+} from "@/components/ui";
 import { useCurrentUser } from "@/auth/auth-context";
 import { TeamPanel } from "./settings/team-panel";
 import { TwoFactorPanel } from "./settings/two-factor-panel";
@@ -62,136 +70,135 @@ export function SettingsScreen() {
   }
 
   return (
-    <section className="max-w-2xl">
-      <h1 className="text-xl font-bold tracking-tight">Настройки</h1>
-      <p className="text-muted-foreground mt-1 text-sm">{user.email}</p>
+    <section className="max-w-[720px]">
+      <PageHeader title="Настройки" subtitle={user.email} />
 
-      {/* Включение 2FA снимает привязку телеграма и выданный код: блок ниже устарел. */}
-      <TwoFactorPanel
-        onEnabled={() => {
-          setCode(null);
-          load();
-        }}
-      />
+      <div className="mt-5 space-y-6">
+        {/* Включение 2FA снимает привязку телеграма и выданный код: блок ниже устарел. */}
+        <TwoFactorPanel
+          onEnabled={() => {
+            setCode(null);
+            load();
+          }}
+        />
 
-      {canUseBot && (
-        <div className="border-border mt-6 rounded-xl border p-5">
-          <div className="flex items-start gap-3">
-            <Send size={18} className="mt-0.5 shrink-0" strokeWidth={2} />
-            <div className="min-w-0 flex-1">
-              <h2 className="text-sm font-semibold">Напоминания в телеграме</h2>
-              <p className="text-muted-foreground mt-1 text-sm">
-                Каждое утро бот присылает просроченные задачи, деньги и продления и то,
-                что запланировано на сегодня. Если присылать нечего — молчит.
-              </p>
-              <p className="text-muted-foreground mt-2 text-sm">
-                Сводка и задачи идут в общий чат команды. Подключение здесь даёт команду
-                /today в личных сообщениях с ботом.
-              </p>
-
-              {error && (
-                <div className="mt-4">
-                  <ErrorNote>{error}</ErrorNote>
-                </div>
-              )}
-
-              {status && !status.available && (
-                <p className="text-muted-foreground mt-4 text-sm">
-                  Бот не настроен на сервере — подключать пока нечего.
-                </p>
-              )}
-
+        {canUseBot && (
+          <Card className="p-5">
+            <div className="flex items-start justify-between gap-3">
+              <h2 className="text-[17px] leading-6 font-bold tracking-tight">
+                Напоминания в телеграме
+              </h2>
               {status?.available && status.connected && (
-                <div className="mt-4 flex flex-wrap items-center gap-3">
-                  <span className="text-success inline-flex items-center gap-1.5 text-sm font-medium">
-                    <Check size={16} strokeWidth={2.5} />
-                    Подключено
-                  </span>
-                  <Button
-                    variant="danger"
-                    onClick={() => void unlink()}
-                    disabled={pending}
-                  >
-                    Отключить
-                  </Button>
-                </div>
-              )}
-
-              {status?.available && !status.connected && (
-                <div className="mt-4">
-                  {askingPassword && !code ? (
-                    <form
-                      onSubmit={(event) => void requestCode(event)}
-                      className="max-w-sm"
-                    >
-                      <Field
-                        label="Пароль от CRM"
-                        hint="Привязанный чат видит сводку без входа в CRM"
-                      >
-                        <Input
-                          type="password"
-                          value={password}
-                          onChange={(event) => setPassword(event.target.value)}
-                          required
-                          autoFocus
-                          autoComplete="current-password"
-                        />
-                      </Field>
-                      <div className="mt-4 flex items-center gap-2">
-                        <Button type="submit" disabled={pending}>
-                          {pending ? "Готовим код…" : "Получить код"}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          onClick={() => {
-                            setAskingPassword(false);
-                            setPassword("");
-                            setError(null);
-                          }}
-                        >
-                          Отмена
-                        </Button>
-                      </div>
-                    </form>
-                  ) : code ? (
-                    <div className="space-y-3">
-                      <p className="text-sm">
-                        Отправьте боту{" "}
-                        <a
-                          href={`https://t.me/${BOT_USERNAME}?start=${code}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="font-semibold underline underline-offset-2"
-                        >
-                          @{BOT_USERNAME}
-                        </a>{" "}
-                        команду с этим кодом:
-                      </p>
-                      <code className="bg-muted block rounded-lg px-3 py-2.5 font-mono text-sm">
-                        /start {code}
-                      </code>
-                      <p className="text-muted-foreground text-sm">
-                        Код действует 15 минут. Ссылка выше подставит его сама — после
-                        отправки обновите страницу.
-                      </p>
-                      <Button variant="ghost" onClick={load}>
-                        Проверить подключение
-                      </Button>
-                    </div>
-                  ) : (
-                    <Button onClick={() => setAskingPassword(true)}>
-                      Подключить телеграм
-                    </Button>
-                  )}
-                </div>
+                <Badge tone="success">
+                  <Check size={15} strokeWidth={2.5} />
+                  Подключено
+                </Badge>
               )}
             </div>
-          </div>
-        </div>
-      )}
+            <p className="text-muted-foreground mt-1 text-sm">
+              Сводка и задачи идут в общий чат команды. Подключение здесь даёт команду
+              /today в личных сообщениях с ботом.
+            </p>
 
-      {user.role === "owner" && <TeamPanel />}
+            {error && (
+              <div className="mt-4">
+                <ErrorNote>{error}</ErrorNote>
+              </div>
+            )}
+
+            {status && !status.available && (
+              <p className="text-muted-foreground mt-4 text-sm">
+                Бот не настроен на сервере — подключать пока нечего.
+              </p>
+            )}
+
+            {status?.available && status.connected && (
+              <div className="mt-4">
+                <Button
+                  variant="danger"
+                  size="sm"
+                  onClick={() => void unlink()}
+                  disabled={pending}
+                >
+                  Отключить
+                </Button>
+              </div>
+            )}
+
+            {status?.available && !status.connected && (
+              <div className="mt-4">
+                {askingPassword && !code ? (
+                  <form
+                    onSubmit={(event) => void requestCode(event)}
+                    className="max-w-sm"
+                  >
+                    <Field
+                      label="Пароль от CRM"
+                      hint="Привязанный чат видит сводку без входа в CRM"
+                    >
+                      <Input
+                        type="password"
+                        value={password}
+                        onChange={(event) => setPassword(event.target.value)}
+                        required
+                        autoFocus
+                        autoComplete="current-password"
+                      />
+                    </Field>
+                    <div className="mt-4 flex items-center gap-2">
+                      <Button type="submit" disabled={pending}>
+                        {pending ? "Готовим код…" : "Получить код"}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        onClick={() => {
+                          setAskingPassword(false);
+                          setPassword("");
+                          setError(null);
+                        }}
+                      >
+                        Отмена
+                      </Button>
+                    </div>
+                  </form>
+                ) : code ? (
+                  <div className="space-y-3">
+                    <p className="text-sm">
+                      Отправьте боту{" "}
+                      <a
+                        href={`https://t.me/${BOT_USERNAME}?start=${code}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="font-semibold underline underline-offset-2"
+                      >
+                        @{BOT_USERNAME}
+                      </a>{" "}
+                      команду с этим кодом:
+                    </p>
+                    <code className="bg-muted block rounded-lg px-3 py-2.5 font-mono text-sm">
+                      /start {code}
+                    </code>
+                    <p className="text-muted-foreground text-sm">
+                      Код действует 15 минут. Ссылка выше подставит его сама — после
+                      отправки обновите страницу.
+                    </p>
+                    <Button variant="secondary" size="sm" onClick={load}>
+                      Проверить подключение
+                    </Button>
+                  </div>
+                ) : (
+                  <Button variant="secondary" onClick={() => setAskingPassword(true)}>
+                    Подключить телеграм
+                  </Button>
+                )}
+              </div>
+            )}
+          </Card>
+        )}
+
+        {user.role === "owner" && <TeamPanel />}
+      </div>
     </section>
   );
 }

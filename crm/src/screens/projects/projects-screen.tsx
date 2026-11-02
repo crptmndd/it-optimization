@@ -1,14 +1,4 @@
-import {
-  Briefcase,
-  Building2,
-  CalendarDays,
-  FileText,
-  Filter,
-  Plus,
-  Receipt,
-  Server,
-  Wallet,
-} from "lucide-react";
+import { Building2, CheckSquare, Columns3, List as ListIcon, Plus } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -48,14 +38,17 @@ import {
   Button,
   EmptyState,
   ErrorNote,
-  Input,
+  List,
+  LoadingRows,
   Modal,
+  PageHeader,
+  SearchField,
+  Segmented,
   Select,
 } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { NoteHint } from "@/components/note-hint";
-import { money } from "@/lib/money";
-import { describeDeadline, formatDate, periodLabel } from "@/lib/dates";
+import { describeDeadline, periodLabel } from "@/lib/dates";
 import {
   emptyProjectValues,
   ProjectFields,
@@ -98,156 +91,148 @@ const COLUMN_TONE: Record<string, ColumnTone> = {
   cancelled: "neutral",
 };
 
-/**
- * Карточка проекта на доске.
- *
- * Заливка означает, что горит. Невыставленный счёт стоит выше срока намеренно:
- * сдвинутый дедлайн переживём, а забытый счёт — это недополученные деньги, и
- * заметить его больше негде.
- */
-/**
- * Заливка означает, что горит. Невыставленный счёт стоит выше срока намеренно:
- * сдвинутый дедлайн переживём, а забытый счёт — это недополученные деньги.
- */
-function projectTone(project: Project): { card: string; pill: string } {
-  const closed = (CLOSED_PROJECT_STATUSES as readonly string[]).includes(project.status);
-  if (closed) return { card: "bg-muted/60", pill: "bg-background text-muted-foreground" };
-  if (project.unbilledPeriod) {
-    return { card: "bg-danger-soft", pill: "bg-danger text-white" };
-  }
+/** Колонка доски бывает уже плашки, а обрезать срок или месяц без счёта нельзя. */
+const WRAPPING_BADGE = "h-auto min-h-6 py-0.5 whitespace-normal";
 
-  const deadline = project.deadline ? describeDeadline(project.deadline) : null;
-  if (deadline?.tone === "danger") {
-    return { card: "bg-danger-soft", pill: "bg-danger text-white" };
-  }
-  if (deadline?.tone === "warning") {
-    return { card: "bg-warning-soft", pill: "bg-warning text-white" };
-  }
-  return { card: "bg-background", pill: "bg-muted text-muted-foreground" };
+function isClosed(project: Project): boolean {
+  return (CLOSED_PROJECT_STATUSES as readonly string[]).includes(project.status);
 }
 
-/** Строка сведений с иконкой. Пустое значение показывается серым, а не прячется:
- *  на доске это подсказка, что в проекте не хватает, а не мусор. */
-function Meta({
-  icon: Icon,
-  children,
-  muted,
-  wrap,
-}: {
-  icon: typeof Building2;
-  children: ReactNode;
-  muted?: boolean;
-  /** Переносить, а не обрезать: когда важен именно конец строки. */
-  wrap?: boolean;
-}) {
+/** Сколько задач ещё открыто из всех. Мелко: это сведение, а не повод для действия. */
+function TaskCount({ project }: { project: Project }) {
+  if (project.taskCount === 0) return null;
   return (
     <span
-      className={cn(
-        "flex items-center gap-1.5 text-xs",
-        muted ? "text-muted-foreground/60" : "text-muted-foreground",
-      )}
+      title={`Открытых задач ${project.openTaskCount} из ${project.taskCount}`}
+      className="text-muted-foreground flex shrink-0 items-center gap-1 text-xs font-medium tabular-nums"
     >
-      <Icon size={12} strokeWidth={2} className="shrink-0" />
-      <span className={wrap ? undefined : "truncate"}>{children}</span>
+      <CheckSquare size={15} strokeWidth={2.25} />
+      {project.openTaskCount}/{project.taskCount}
     </span>
   );
 }
 
+function Team({ names }: { names: string[] }) {
+  return names.length > 0 ? (
+    <PersonChips names={names} />
+  ) : (
+    <span className="text-muted-foreground/70 text-xs font-medium whitespace-nowrap">
+      никто не ведёт
+    </span>
+  );
+}
+
+/**
+ * Подпись этапов делится на состояние и следующий платёж. Вся она в плашку не помещается,
+ * а общая у неё с карточкой клиента, поэтому деление живёт здесь.
+ */
+function splitPaymentLabel(label: string): { state: string; detail: string | null } {
+  const at = label.indexOf(" · ");
+  return at === -1
+    ? { state: label, detail: null }
+    : { state: label.slice(0, at), detail: label.slice(at + 3) };
+}
+
+/**
+ * Как у проекта с деньгами: плашка и мелкая строка рядом. Невыставленный счёт стоит
+ * первым намеренно: сдвинутый дедлайн переживём, а забытый счёт — это недополученные
+ * деньги, и заметить его больше негде. Вид работы — только там, где подпись оплаты
+ * о нём не говорит.
+ */
+function PaymentState({ project }: { project: Project }) {
+  const payment = paymentSummary(project);
+
+  if (project.unbilledPeriod) {
+    return (
+      <>
+        <Badge tone="danger" className={WRAPPING_BADGE}>
+          счёт за {periodLabel(project.unbilledPeriod)}
+        </Badge>
+        {payment && (
+          <span className={cn("text-xs font-medium", PAYMENT_TEXT_CLASS[payment.tone])}>
+            {payment.label}
+          </span>
+        )}
+      </>
+    );
+  }
+
+  if (payment) {
+    const { state, detail } = splitPaymentLabel(payment.label);
+    return (
+      <>
+        <Badge tone={payment.tone} className={WRAPPING_BADGE}>
+          {state}
+        </Badge>
+        {detail && (
+          <span className="text-muted-foreground text-xs font-medium tabular-nums">
+            {detail}
+          </span>
+        )}
+      </>
+    );
+  }
+
+  return project.workType ? (
+    <span className="text-muted-foreground text-xs font-medium">
+      {workTypeLabel(project.workType)}
+    </span>
+  ) : null;
+}
+
+/** Карточка проекта на доске: кто, что, деньги, срок и люди. Остальное — внутри. */
 function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void }) {
-  const closed = (CLOSED_PROJECT_STATUSES as readonly string[]).includes(project.status);
+  const closed = isClosed(project);
   const deadline =
     project.deadline && !closed ? describeDeadline(project.deadline) : null;
-  const tone = projectTone(project);
-  const doneTasks = project.taskCount - project.openTaskCount;
-  const payment = paymentSummary(project);
 
   return (
     <button
       type="button"
       onClick={onOpen}
-      className={cn("flex w-full flex-col gap-2 p-3.5 text-left", tone.card)}
+      className="flex w-full flex-col gap-1.5 p-3 text-left"
     >
-      {(deadline || project.unbilledPeriod) && (
-        <span className="flex flex-wrap items-center gap-1.5">
-          {deadline && (
-            <span
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium",
-                tone.pill,
-              )}
-            >
-              <CalendarDays size={11} strokeWidth={2.5} />
-              {deadline.label}
-            </span>
+      <span className="flex items-center justify-between gap-2">
+        {/* Пустой клиент виден, а не спрятан: на доске это подсказка, что в проекте
+            чего-то не хватает. */}
+        <span
+          className={cn(
+            "text-muted-foreground min-w-0 truncate text-xs font-medium",
+            !project.client && "opacity-70",
           )}
-          {project.unbilledPeriod && (
-            <span className="bg-danger inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium text-white">
-              <Wallet size={11} strokeWidth={2.5} />
-              счёт за {periodLabel(project.unbilledPeriod)}
-            </span>
-          )}
-        </span>
-      )}
-
-      <span className="text-sm leading-snug font-semibold">{project.title}</span>
-
-      <span className="flex flex-col gap-1">
-        <Meta icon={Building2} muted={!project.client}>
+        >
           {project.client?.name ?? "без клиента"}
-        </Meta>
-
-        {project.workType && (
-          <Meta icon={Briefcase}>{workTypeLabel(project.workType)}</Meta>
-        )}
-        {project.hosting && <Meta icon={Server}>{project.hosting}</Meta>}
-        {project.contractNumber && (
-          <Meta icon={FileText}>
-            договор {project.contractNumber}
-            {project.contractDate && ` от ${formatDate(project.contractDate)}`}
-          </Meta>
-        )}
-        {project.billingMonthly && project.monthlyAmountMinor !== null && (
-          <Meta icon={Wallet}>
-            {money(project.monthlyAmountMinor, project.currency)} в месяц
-          </Meta>
-        )}
-        {payment && (
-          // Колонка доски узкая, а сумма следующего этапа стоит в конце подписи.
-          <Meta icon={Receipt} wrap>
-            <span className={PAYMENT_TEXT_CLASS[payment.tone]}>{payment.label}</span>
-          </Meta>
-        )}
-      </span>
-
-      {/* Полоса выполнения вместо «задач 3/7»: доля закрытого читается мгновенно,
-          а точные числа остаются подписью рядом. */}
-      {project.taskCount > 0 && (
-        <span className="mt-0.5 block">
-          <span className="bg-foreground/10 block h-1.5 overflow-hidden rounded-full">
-            <span
-              className="bg-success block h-full rounded-full transition-all"
-              style={{ width: `${(doneTasks / project.taskCount) * 100}%` }}
-            />
-          </span>
-          <span className="text-muted-foreground mt-1 block text-[11px]">
-            задач {doneTasks} из {project.taskCount}
-          </span>
         </span>
-      )}
-
-      <span className="border-foreground/10 mt-0.5 flex min-h-6 items-center justify-between gap-2 border-t pt-2.5">
-        {project.developers.length > 0 ? (
-          <PersonChips names={project.developers} />
-        ) : (
-          <span className="text-muted-foreground/60 text-[11px]">никто не ведёт</span>
-        )}
-        {project.startedAt && !closed && (
-          <span className="text-muted-foreground/70 text-[11px]">
-            с {formatDate(project.startedAt)}
-          </span>
-        )}
+        <TaskCount project={project} />
       </span>
-      <NoteHint note={project.note} />
+
+      <span
+        className={cn(
+          "text-sm leading-snug font-semibold",
+          closed && "text-muted-foreground",
+        )}
+      >
+        {project.title}
+      </span>
+
+      <NoteHint note={project.note} className="mt-0" />
+
+      <span className="flex flex-wrap items-center gap-x-2 gap-y-1 empty:hidden">
+        <PaymentState project={project} />
+      </span>
+
+      <span className="mt-1 flex min-h-6 flex-wrap items-center justify-between gap-x-2 gap-y-1">
+        {deadline ? (
+          <Badge tone={deadline.tone} className={WRAPPING_BADGE}>
+            {deadline.label}
+          </Badge>
+        ) : (
+          <span />
+        )}
+        <span className="ml-auto flex">
+          <Team names={project.developers} />
+        </span>
+      </span>
     </button>
   );
 }
@@ -374,18 +359,37 @@ export function ProjectsScreen() {
 
   return (
     <section>
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-bold tracking-tight">Проекты</h1>
+      <PageHeader title="Проекты">
         <Button onClick={() => setCreating(true)}>
-          <Plus size={16} strokeWidth={2.5} />
+          <Plus size={17} strokeWidth={2.5} />
           Новый проект
         </Button>
-      </header>
+      </PageHeader>
 
-      {/* Та же панель, что в задачах: одинаковый по смыслу фильтр не должен
-          выглядеть по-разному в соседних разделах. */}
       <FilterToolbar
-        activeCount={(tab === "all" ? 0 : 1) + (clientFilter === ALL_CLIENTS ? 0 : 1)}
+        filters={
+          <>
+            <Segmented
+              value={tab}
+              onChange={(value) => setTab(value as TabKey)}
+              ariaLabel="Какие проекты показать"
+              options={TABS.map((item) => ({ value: item.key, label: item.label }))}
+            />
+            <Select
+              value={clientFilter}
+              onChange={setClientFilter}
+              ariaLabel="Фильтр по клиенту"
+              icon={<Building2 size={15} strokeWidth={2.25} />}
+              className="bg-background shadow-card w-full rounded-xl sm:w-52"
+              options={[
+                { value: ALL_CLIENTS, label: "Все клиенты" },
+                { value: NO_CLIENT, label: "Без клиента" },
+                ...clients.map((client) => ({ value: client.id, label: client.name })),
+              ]}
+            />
+          </>
+        }
+        search={<SearchField value={search} onChange={setSearch} />}
         view={{
           value: shownView,
           onChange: (value) => {
@@ -395,50 +399,10 @@ export function ProjectsScreen() {
           },
           ariaLabel: "Вид списка проектов",
           options: [
-            { value: "list", label: "Список" },
-            { value: "board", label: "Доска" },
+            { value: "list", label: "Список", icon: ListIcon },
+            { value: "board", label: "Доска", icon: Columns3 },
           ],
         }}
-        filters={[
-          {
-            label: "Срез",
-            render: (full) => (
-              <Select
-                value={tab}
-                onChange={(value) => setTab(value as TabKey)}
-                ariaLabel="Фильтр проектов"
-                icon={<Filter size={14} strokeWidth={2} />}
-                className={full ? "w-full" : "w-40"}
-                options={TABS.map((item) => ({ value: item.key, label: item.label }))}
-              />
-            ),
-          },
-          {
-            label: "Клиент",
-            render: (full) => (
-              <Select
-                value={clientFilter}
-                onChange={setClientFilter}
-                ariaLabel="Фильтр по клиенту"
-                icon={<Building2 size={14} strokeWidth={2} />}
-                className={full ? "w-full" : "w-52"}
-                options={[
-                  { value: ALL_CLIENTS, label: "Все клиенты" },
-                  { value: NO_CLIENT, label: "Без клиента" },
-                  ...clients.map((client) => ({ value: client.id, label: client.name })),
-                ]}
-              />
-            ),
-          },
-        ]}
-        search={
-          <Input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Поиск"
-            className="w-full sm:w-56"
-          />
-        }
       />
 
       {error && (
@@ -447,9 +411,9 @@ export function ProjectsScreen() {
         </div>
       )}
 
-      <div className="mt-6 sm:mt-5">
+      <div className="mt-5">
         {projects === null ? (
-          <p className="text-muted-foreground text-sm">Загружаем…</p>
+          <LoadingRows />
         ) : projects.length === 0 ? (
           <EmptyState {...emptyState(tab, clientFilter, debouncedSearch)} />
         ) : shownView === "board" ? (
@@ -472,7 +436,7 @@ export function ProjectsScreen() {
             )}
           />
         ) : (
-          <ul className="space-y-3 sm:space-y-2">
+          <List>
             {projects.map((project) => (
               <ProjectRow
                 key={project.id}
@@ -480,13 +444,14 @@ export function ProjectsScreen() {
                 onOpen={() => setEditing(project)}
               />
             ))}
-          </ul>
+          </List>
         )}
       </div>
 
       {creating && (
         <ProjectModal
           title="Новый проект"
+          submitLabel="Создать проект"
           clients={clients}
           initial={{
             ...emptyProjectValues(),
@@ -572,65 +537,54 @@ function emptyState(
 }
 
 function ProjectRow({ project, onOpen }: { project: Project; onOpen: () => void }) {
-  const closed = (CLOSED_PROJECT_STATUSES as readonly string[]).includes(project.status);
   // Срок убранного проекта никого не торопит, поэтому в архиве красной плашки нет.
   const deadline =
-    project.deadline && !closed && !project.archivedAt
+    project.deadline && !isClosed(project) && !project.archivedAt
       ? describeDeadline(project.deadline)
       : null;
-  const payment = paymentSummary(project);
 
   return (
     <li>
+      {/* Колонки с xl, а не с sm: боковое меню отнимает ширину, и на меньшем экране пять
+          столбцов сжали бы название до пары букв. До этого плашки идут вторым рядом.
+          Столбец задан у каждой ячейки: пустой срок не должен сдвигать соседние. */}
       <button
         type="button"
         onClick={onOpen}
         data-card-id={project.id}
-        className="border-border bg-background hover:border-accent-border flex w-full flex-wrap items-start gap-x-3 gap-y-1.5 rounded-xl border px-3 py-3 text-left transition hover:shadow-sm lg:flex-nowrap lg:py-2.5"
+        className="hover:bg-muted/60 grid min-h-14 w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 px-4 py-2.5 text-left transition-colors xl:grid-cols-[minmax(0,1fr)_6.5rem_6rem_10rem_11rem]"
       >
-        {/* Название отдельной строкой до lg, а не до sm: боковое меню с 768 px отнимает
-            ширину строки, и бейджи сжимают название до пары букв. */}
-        <div className="w-full min-w-0 lg:w-auto lg:flex-1">
-          <span className="block truncate text-sm font-medium">{project.title}</span>
-          <span className="text-muted-foreground mt-0.5 block truncate text-xs">
-            {[
-              project.client?.name,
-              project.developers.length
-                ? project.developers.join(", ")
-                : "никто не ведёт",
-              workTypeLabel(project.workType) || null,
-              project.taskCount > 0
-                ? `задач ${project.openTaskCount}/${project.taskCount}`
-                : null,
-            ]
-              .filter(Boolean)
-              .join(" · ")}
+        <span className="min-w-0 xl:col-start-1 xl:row-start-1">
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="truncate text-[15px] font-semibold">{project.title}</span>
+            <TaskCount project={project} />
           </span>
-          {payment && (
-            <span
-              className={cn(
-                "mt-0.5 block truncate text-xs",
-                PAYMENT_TEXT_CLASS[payment.tone],
-              )}
-            >
-              {payment.label}
+          <span className="text-muted-foreground mt-0.5 block truncate text-[13px] font-medium">
+            {project.client?.name ?? "без клиента"}
+          </span>
+        </span>
+
+        <span className="flex xl:col-start-3 xl:row-start-1">
+          <Team names={project.developers} />
+        </span>
+
+        <span className="col-span-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 xl:contents">
+          <span className="flex xl:col-start-2 xl:row-start-1">
+            <Badge tone={STATUS_TONE[project.status] ?? "neutral"}>
+              {PROJECT_STATUS_LABELS[project.status]}
+            </Badge>
+          </span>
+
+          {deadline && (
+            <span className="flex xl:col-start-4 xl:row-start-1">
+              <Badge tone={deadline.tone}>{deadline.label}</Badge>
             </span>
           )}
-        </div>
 
-        {project.unbilledPeriod && (
-          <Badge tone="danger" className="mt-0.5">
-            счёт за {periodLabel(project.unbilledPeriod)}
-          </Badge>
-        )}
-        {deadline && (
-          <Badge tone={deadline.tone} className="mt-0.5">
-            {deadline.label}
-          </Badge>
-        )}
-        <Badge tone={STATUS_TONE[project.status] ?? "neutral"} className="mt-0.5">
-          {PROJECT_STATUS_LABELS[project.status]}
-        </Badge>
+          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 empty:hidden xl:col-start-5 xl:row-start-1 xl:flex-col xl:items-end xl:justify-self-end">
+            <PaymentState project={project} />
+          </span>
+        </span>
       </button>
     </li>
   );
@@ -638,6 +592,7 @@ function ProjectRow({ project, onOpen }: { project: Project; onOpen: () => void 
 
 function ProjectModal({
   title,
+  submitLabel = "Сохранить",
   badge,
   initial,
   clients,
@@ -650,6 +605,7 @@ function ProjectModal({
   onDelete,
 }: {
   title: string;
+  submitLabel?: string;
   badge?: ReactNode;
   initial: ProjectFormValues;
   clients: Client[];
@@ -720,7 +676,9 @@ function ProjectModal({
   }
 
   return (
-    <Modal title={title} badge={badge} onClose={onClose}>
+    // Широкое только у заведённого проекта: строки этапов и счетов идут в четыре столбца,
+    // а новому хватает обычной ширины, таких строк у него ещё нет.
+    <Modal title={title} badge={badge} onClose={onClose} wide={Boolean(project)}>
       <form onSubmit={handleSubmit}>
         <ProjectFields
           values={values}
@@ -747,7 +705,7 @@ function ProjectModal({
               reveal={reveal && project.payment.mode === "stages"}
               onChanged={() => onChanged?.()}
             />
-            <div className="mt-4">
+            <div className="mt-5">
               {/* key: сохранённая сумма могла дойти до записей текущего месяца, а
                   валюта и режим читаются только при монтировании. */}
               <ProjectInvoices
@@ -758,7 +716,7 @@ function ProjectModal({
                 onChanged={onChanged}
               />
             </div>
-            <div className="mt-4">
+            <div className="mt-6">
               <NotesPanel
                 load={async () => (await getProject(project.id)).notes}
                 add={(body) => addProjectNote(project.id, body)}
@@ -774,19 +732,15 @@ function ProjectModal({
           </div>
         )}
 
-        {/* flex-wrap: четыре кнопки на телефоне в один ряд не встают. */}
-        <div className="mt-5 flex flex-wrap items-center gap-2">
-          <Button type="submit" disabled={saving}>
-            {saving ? "Сохраняем…" : "Сохранить"}
-          </Button>
-          <Button type="button" variant="ghost" onClick={onClose}>
-            Отмена
+        <div className="mt-6 flex flex-wrap items-center gap-2">
+          <Button type="submit" disabled={saving} className="h-11 flex-1">
+            {saving ? "Сохраняем…" : submitLabel}
           </Button>
           {onArchive && (
             <Button
               type="button"
-              variant="ghost"
-              className="ml-auto"
+              variant="secondary"
+              className="h-11"
               onClick={() => void handleArchive()}
               disabled={saving}
             >
@@ -797,7 +751,7 @@ function ProjectModal({
             <Button
               type="button"
               variant="danger"
-              className={onArchive ? undefined : "ml-auto"}
+              className="h-11"
               onClick={() => void handleDelete()}
               disabled={saving}
             >

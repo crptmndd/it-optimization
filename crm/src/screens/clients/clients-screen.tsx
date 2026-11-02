@@ -1,4 +1,12 @@
-import { Plus } from "lucide-react";
+import {
+  Mail,
+  MessageCircle,
+  Phone,
+  Plus,
+  Send,
+  UserRound,
+  type LucideIcon,
+} from "lucide-react";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { ApiError } from "@/api/client";
 import { useOpenFromSearch } from "@/lib/open-from-search";
@@ -11,7 +19,18 @@ import {
   updateClient,
   type Client,
 } from "@/api/clients";
-import { Badge, Button, EmptyState, ErrorNote, Input, Modal } from "@/components/ui";
+import {
+  Badge,
+  Button,
+  EmptyState,
+  ErrorNote,
+  List,
+  LoadingRows,
+  Modal,
+  PageHeader,
+  SearchField,
+} from "@/components/ui";
+import { cn } from "@/lib/cn";
 import {
   ClientFields,
   clientToValues,
@@ -24,6 +43,14 @@ import { ClientProjects } from "./client-projects";
 const CONTACT_LABELS = new Map<string, string>(
   CONTACT_TYPES.map((type) => [type.value, type.label]),
 );
+
+/** Значок вместо подписи: «Телефон: …» в колонке повторялось бы в каждой строке. */
+const CONTACT_ICONS: Record<string, LucideIcon> = {
+  phone: Phone,
+  email: Mail,
+  telegram: Send,
+  whatsapp: MessageCircle,
+};
 
 export function ClientsScreen() {
   const [search, setSearch] = useState("");
@@ -53,20 +80,19 @@ export function ClientsScreen() {
 
   return (
     <section>
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-bold tracking-tight">Клиенты</h1>
+      <PageHeader title="Клиенты">
         <Button onClick={() => setCreating(true)}>
-          <Plus size={16} strokeWidth={2.5} />
+          <Plus size={17} strokeWidth={2.5} />
           Новый клиент
         </Button>
-      </header>
+      </PageHeader>
 
-      <div className="mt-6 sm:mt-5">
-        <Input
+      <div className="mt-5 flex">
+        <SearchField
           value={search}
-          onChange={(event) => setSearch(event.target.value)}
+          onChange={setSearch}
           placeholder="Поиск по названию, ИНН или заметкам"
-          className="w-full sm:w-80"
+          className="sm:w-80"
         />
       </div>
 
@@ -76,9 +102,9 @@ export function ClientsScreen() {
         </div>
       )}
 
-      <div className="mt-6 sm:mt-5">
+      <div className="mt-5">
         {clients === null ? (
-          <p className="text-muted-foreground text-sm">Загружаем…</p>
+          <LoadingRows />
         ) : clients.length === 0 ? (
           <EmptyState
             title={debouncedSearch ? "Ничего не нашлось" : "Пока пусто"}
@@ -89,7 +115,7 @@ export function ClientsScreen() {
             }
           />
         ) : (
-          <ul className="space-y-3 sm:space-y-2">
+          <List>
             {clients.map((client) => (
               <ClientRow
                 key={client.id}
@@ -97,7 +123,7 @@ export function ClientsScreen() {
                 onOpen={() => setEditing(client)}
               />
             ))}
-          </ul>
+          </List>
         )}
       </div>
 
@@ -137,40 +163,56 @@ export function ClientsScreen() {
   );
 }
 
-function ClientRow({ client, onOpen }: { client: Client; onOpen: () => void }) {
-  const contacts = client.contacts
-    .slice(0, 2)
-    .map(
-      (contact) =>
-        `${CONTACT_LABELS.get(contact.type) ?? contact.type}: ${contact.value}`,
-    )
-    .join(" · ");
+/** Контакты столбиком: длинная почта рядом с телефоном в одну строку не помещается. */
+function ClientContacts({ client, className }: { client: Client; className?: string }) {
+  const contacts = client.contacts.slice(0, 2);
 
   return (
-    <li>
+    <span
+      className={cn("text-muted-foreground min-w-0 text-[13px] font-medium", className)}
+    >
+      {contacts.length === 0 && "контакты не заполнены"}
+      {contacts.map((contact, index) => {
+        const Icon = CONTACT_ICONS[contact.type] ?? UserRound;
+        const label = CONTACT_LABELS.get(contact.type) ?? contact.type;
+        return (
+          <span key={index} title={label} className="flex min-w-0 items-center gap-1.5">
+            <Icon size={15} strokeWidth={2.25} aria-label={label} className="shrink-0" />
+            <span className="truncate">{contact.value}</span>
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+function ClientRow({ client, onOpen }: { client: Client; onOpen: () => void }) {
+  return (
+    <li className="hover:bg-muted/60 transition-colors">
+      {/* Доли, а не rem: с боковой колонкой на 768px остаётся меньше 500px, и
+          колонка контактов постоянной ширины съела бы название целиком. */}
       <button
         type="button"
         onClick={onOpen}
-        className="border-border bg-background hover:border-accent-border flex w-full items-start gap-3 rounded-xl border px-3 py-2.5 text-left transition hover:shadow-sm"
+        className="grid min-h-14 w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 px-4 py-2.5 text-left sm:grid-cols-[minmax(0,3fr)_minmax(0,2fr)_6.5rem]"
       >
-        <div className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-medium">{client.name}</span>
-          <span className="text-muted-foreground mt-0.5 block truncate text-xs">
-            {contacts || "контакты не заполнены"}
-          </span>
+        <span className="min-w-0">
+          <span className="block truncate text-[15px] font-semibold">{client.name}</span>
+          <ClientContacts client={client} className="mt-0.5 block sm:hidden" />
           <NoteHint note={client.note} text={client.notes} />
-        </div>
+        </span>
 
-        {client.projectCount > 0 && (
-          <Badge
-            tone={client.activeProjectCount > 0 ? "accent" : "neutral"}
-            className="mt-0.5"
-          >
-            {client.activeProjectCount > 0
-              ? `${client.activeProjectCount} в работе`
-              : `проектов ${client.projectCount}`}
-          </Badge>
-        )}
+        <ClientContacts client={client} className="hidden sm:block" />
+
+        <span className="flex justify-end">
+          {client.projectCount > 0 && (
+            <Badge tone={client.activeProjectCount > 0 ? "accent" : "neutral"}>
+              {client.activeProjectCount > 0
+                ? `${client.activeProjectCount} в работе`
+                : `проектов ${client.projectCount}`}
+            </Badge>
+          )}
+        </span>
       </button>
     </li>
   );
@@ -227,7 +269,8 @@ function ClientModal({
   }
 
   return (
-    <Modal title={title} onClose={onClose}>
+    // Шире только с проектами: их строкам нужно место под бейджи оплаты.
+    <Modal title={title} onClose={onClose} wide={Boolean(client)}>
       <form onSubmit={handleSubmit}>
         <ClientFields values={values} onChange={setValues} />
 
@@ -245,18 +288,15 @@ function ClientModal({
           </div>
         )}
 
-        <div className="mt-5 flex items-center gap-2">
-          <Button type="submit" disabled={saving}>
+        <div className="mt-6 flex items-center gap-2">
+          <Button type="submit" disabled={saving} className="h-11 flex-1">
             {saving ? "Сохраняем…" : "Сохранить"}
-          </Button>
-          <Button type="button" variant="ghost" onClick={onClose}>
-            Отмена
           </Button>
           {onDelete && (
             <Button
               type="button"
               variant="danger"
-              className="ml-auto"
+              className="h-11"
               onClick={() => void handleDelete()}
               disabled={saving}
             >

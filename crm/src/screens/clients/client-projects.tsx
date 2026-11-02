@@ -7,7 +7,7 @@ import {
   updateProject,
   type Project,
 } from "@/api/projects";
-import { Badge, Button, ErrorNote, Select } from "@/components/ui";
+import { Badge, Button, ErrorNote, LoadingRows, Select } from "@/components/ui";
 import { paymentSummary } from "@/screens/projects/payment-summary";
 
 /**
@@ -100,34 +100,36 @@ export function ClientProjects({
   }
 
   return (
-    <div className="border-border mt-4 border-t pt-4">
-      <span className="text-sm font-medium">Проекты</span>
+    <div className="mt-5">
+      <h3 className="text-[15px] font-bold tracking-tight">Проекты</h3>
 
       {error && (
-        <div className="mt-3">
+        <div className="mt-2">
           <ErrorNote>{error}</ErrorNote>
         </div>
       )}
 
-      <div className="mt-2">
+      <div className="mt-1">
         {own === null ? (
-          <p className="text-muted-foreground text-sm">Загружаем…</p>
+          <LoadingRows rows={2} />
         ) : own.length === 0 ? (
-          <p className="text-muted-foreground text-sm">Пока ни одного.</p>
+          <p className="text-muted-foreground py-1 text-sm">Пока ни одного.</p>
         ) : (
           <ul className="divide-border divide-y">
             {own.map((project) => {
               const payment = paymentSummary(project);
               return (
-                <li key={project.id} className="flex items-start gap-3 py-2">
-                  <div className="min-w-0 flex-1">
+                <li key={project.id} className="flex min-h-12 items-center gap-3 py-1.5">
+                  {/* На компьютере всё в одну линию. На телефоне бейджи уходят вниз:
+                      «этапы 1/3 · следующий 200 000 ₽» рядом с названием не влезает. */}
+                  <div className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-center sm:gap-3">
                     <Link
                       to={`/projects?open=${project.id}`}
-                      className="block truncate text-sm font-medium underline-offset-2 hover:underline"
+                      className="min-w-0 truncate text-sm font-semibold underline-offset-2 hover:underline sm:flex-1"
                     >
                       {project.title}
                     </Link>
-                    <span className="mt-1 flex flex-wrap items-center gap-1.5">
+                    <span className="flex flex-wrap items-center gap-1.5 sm:justify-end">
                       <Badge>{PROJECT_STATUS_LABELS[project.status]}</Badge>
                       {payment && <Badge tone={payment.tone}>{payment.label}</Badge>}
                       {project.archivedAt && <Badge>архив</Badge>}
@@ -135,7 +137,8 @@ export function ClientProjects({
                   </div>
                   <Button
                     type="button"
-                    variant="ghost"
+                    variant="secondary"
+                    size="sm"
                     disabled={pending}
                     onClick={() => void assign(project, null)}
                   >
@@ -149,7 +152,7 @@ export function ClientProjects({
       </div>
 
       {others.length > 0 && (
-        <div className="mt-3 flex items-center gap-2">
+        <div className="mt-2 flex items-center gap-2">
           <div className="min-w-0 flex-1">
             <Select
               value={picked}
@@ -164,7 +167,13 @@ export function ClientProjects({
               ]}
             />
           </div>
-          <Button type="button" disabled={pending || !picked} onClick={attach}>
+          {/* Не лаймовая: главное действие окна одно, и это «Сохранить». */}
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={pending || !picked}
+            onClick={attach}
+          >
             Привязать
           </Button>
         </div>

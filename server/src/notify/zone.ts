@@ -136,3 +136,16 @@ export function pluralDays(count: number): string {
   if (mod10 >= 2 && mod10 <= 4) return `${count} дня`;
   return `${count} дней`;
 }
+
+/** «5 ноября, ср» — дата для сообщений, где важнее читаться, чем уместиться. */
+export function formatDayLong(date: Date, timeZone: string): string {
+  const day = new Intl.DateTimeFormat("ru-RU", {
+    day: "numeric",
+    month: "long",
+    timeZone,
+  }).format(date);
+  const weekday = new Intl.DateTimeFormat("ru-RU", { weekday: "short", timeZone }).format(
+    date,
+  );
+  return `${day}, ${weekday}`;
+}

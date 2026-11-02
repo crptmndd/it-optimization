@@ -11,12 +11,12 @@ import { cn } from "@/lib/cn";
  * один и тот же, а новое имя не требует ни поля в базе, ни правки палитры.
  */
 const PALETTE = [
-  "bg-[#e8f0d6] text-[#4a5d1f]",
-  "bg-[#dce7f5] text-[#274668]",
-  "bg-[#f5e2dc] text-[#6b3323]",
-  "bg-[#e6e0f2] text-[#41316b]",
-  "bg-[#fdeecd] text-[#6b4c14]",
-  "bg-[#d9efe8] text-[#1f5148]",
+  "bg-[#dff0a6] text-[#3f5208]",
+  "bg-[#cfe2fb] text-[#1d4576]",
+  "bg-[#fbd9cf] text-[#7a2f18]",
+  "bg-[#e2d8f8] text-[#43298a]",
+  "bg-[#fce6b4] text-[#6e4a06]",
+  "bg-[#c9efe2] text-[#10584a]",
 ] as const;
 
 function paletteFor(name: string): string {
@@ -32,7 +32,7 @@ export function PersonChip({ name, className }: { name: string; className?: stri
     <span
       title={name}
       className={cn(
-        "inline-flex size-6 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold",
+        "inline-flex size-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold",
         paletteFor(name),
         className,
       )}

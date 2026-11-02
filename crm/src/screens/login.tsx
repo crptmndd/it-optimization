@@ -1,9 +1,8 @@
 import { useState, type FormEvent } from "react";
 import { ApiError } from "@/api/client";
+import logoMark from "@/assets/logo-mark.svg";
 import { useAuth } from "@/auth/auth-context";
-
-const inputClass =
-  "border-border bg-background focus:border-accent w-full rounded-lg border px-3 py-2.5 text-sm transition outline-none";
+import { Button, Card, ErrorNote, Field, Input } from "@/components/ui";
 
 export function LoginScreen() {
   const { login, completeTwoFactor } = useAuth();
@@ -70,12 +69,13 @@ export function LoginScreen() {
   }
 
   return (
-    <main className="flex min-h-full items-center justify-center px-5 py-12">
-      <div className="w-full max-w-sm">
-        <div className="mb-8">
-          <div className="bg-accent mb-3 h-2 w-10 rounded-full" />
-          <h1 className="text-2xl font-bold tracking-tight">CRM</h1>
-          <p className="text-muted-foreground mt-1 text-sm">
+    // Вход рисуется вне оболочки, поэтому полотно задано здесь, а не взято из `Shell`.
+    <main className="bg-canvas flex min-h-full items-center justify-center px-4 py-10">
+      <Card className="w-full max-w-sm p-6 sm:p-7">
+        <div className="mb-6 flex flex-col items-center text-center">
+          <img src={logoMark} alt="" className="h-9 w-auto" />
+          <h1 className="mt-4 text-2xl font-extrabold tracking-tight">Вход в CRM</h1>
+          <p className="text-muted-foreground mt-0.5 text-sm font-medium">
             Внутренняя система «Айти-Оптимизации»
           </p>
         </div>
@@ -84,93 +84,69 @@ export function LoginScreen() {
             на втором шаге не сработал бы. */}
         {ticket ? (
           <form key="code" onSubmit={handleCode} className="space-y-4">
-            <label className="block">
-              <span className="mb-1.5 block text-sm font-medium">Код подтверждения</span>
+            <Field
+              label="Код подтверждения"
+              hint="Шесть цифр из приложения. Телефона нет — код восстановления."
+            >
               {/* inputMode="text": подходит и код восстановления, а в нём есть буквы. */}
-              <input
+              <Input
                 value={code}
                 onChange={(event) => setCode(event.target.value)}
                 required
                 autoFocus
                 autoComplete="one-time-code"
                 inputMode="text"
-                className={inputClass}
+                className="h-11"
               />
-              <span className="text-muted-foreground mt-1.5 block text-sm">
-                Шесть цифр из приложения. Телефона нет — код восстановления.
-              </span>
-            </label>
+            </Field>
 
-            {error && (
-              <p
-                role="alert"
-                className="bg-danger-soft text-danger rounded-lg px-3 py-2.5 text-sm"
-              >
-                {error}
-              </p>
-            )}
+            {error && <ErrorNote>{error}</ErrorNote>}
 
-            <button
-              type="submit"
-              disabled={pending}
-              className="bg-surface text-surface-foreground w-full rounded-lg px-4 py-2.5 text-sm font-semibold transition hover:opacity-90 disabled:opacity-50"
-            >
+            <Button type="submit" disabled={pending} className="h-11 w-full">
               {pending ? "Проверяем…" : "Войти"}
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              variant="ghost"
               onClick={() => backToPassword()}
-              className="text-muted-foreground hover:text-foreground w-full text-sm transition"
+              className="w-full"
             >
               Назад
-            </button>
+            </Button>
           </form>
         ) : (
           <form key="password" onSubmit={handlePassword} className="space-y-4">
-            <label className="block">
-              <span className="mb-1.5 block text-sm font-medium">Почта</span>
-              <input
+            <Field label="Почта">
+              <Input
                 type="email"
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
                 required
                 autoComplete="username"
                 autoFocus
-                className={inputClass}
+                className="h-11"
               />
-            </label>
+            </Field>
 
-            <label className="block">
-              <span className="mb-1.5 block text-sm font-medium">Пароль</span>
-              <input
+            <Field label="Пароль">
+              <Input
                 type="password"
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 required
                 autoComplete="current-password"
-                className={inputClass}
+                className="h-11"
               />
-            </label>
+            </Field>
 
-            {error && (
-              <p
-                role="alert"
-                className="bg-danger-soft text-danger rounded-lg px-3 py-2.5 text-sm"
-              >
-                {error}
-              </p>
-            )}
+            {error && <ErrorNote>{error}</ErrorNote>}
 
-            <button
-              type="submit"
-              disabled={pending}
-              className="bg-surface text-surface-foreground w-full rounded-lg px-4 py-2.5 text-sm font-semibold transition hover:opacity-90 disabled:opacity-50"
-            >
+            <Button type="submit" disabled={pending} className="h-11 w-full">
               {pending ? "Входим…" : "Войти"}
-            </button>
+            </Button>
           </form>
         )}
-      </div>
+      </Card>
     </main>
   );
 }

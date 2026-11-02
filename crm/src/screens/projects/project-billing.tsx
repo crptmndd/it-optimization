@@ -74,7 +74,7 @@ export function ProjectBilling({
   }, [reveal]);
 
   return (
-    <div ref={root} className="border-border scroll-mt-4 border-t pt-4">
+    <div ref={root} className="scroll-mt-4">
       <div className="flex flex-wrap items-end gap-2">
         <div className="min-w-32 flex-1">
           <Field label="Сумма в месяц">
@@ -94,13 +94,18 @@ export function ProjectBilling({
         </div>
         <CurrencySelect value={currency} onChange={setCurrency} />
         {/* type="button": форма проекта снаружи, и submit сохранил бы её. */}
-        <Button type="button" onClick={save} disabled={saving || !dirty}>
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={save}
+          disabled={saving || !dirty}
+        >
           {saving ? "Сохраняем…" : "Сохранить сумму"}
         </Button>
       </div>
-      <p className="text-muted-foreground mt-1 text-xs">
-        Можно с копейками: 45000 или 5,19. Пойдёт в счёт и акт следующего месяца, а в
-        записи этого месяца без суммы впишется сразу.
+      <p className="text-muted-foreground mt-1.5 text-xs">
+        Пойдёт в счёт и акт следующего месяца, а в записи этого месяца без суммы впишется
+        сразу.
       </p>
 
       {error && (

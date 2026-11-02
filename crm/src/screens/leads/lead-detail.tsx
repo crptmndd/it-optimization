@@ -9,7 +9,8 @@ import {
   type Note,
 } from "@/api/leads";
 import { memberLabel, type TeamMember } from "@/api/team";
-import { Button, ErrorNote, Modal, Textarea } from "@/components/ui";
+import { NotesView } from "@/components/notes-panel";
+import { Button, ErrorNote, LoadingRows, Modal } from "@/components/ui";
 import { formatDateTime } from "@/lib/dates";
 import {
   LeadFields,
@@ -98,67 +99,50 @@ export function LeadDetail({
 
   return (
     <Modal title={lead?.name ?? lead?.contact ?? "Лид"} onClose={onClose}>
-      {!values && !error && <p className="text-muted-foreground text-sm">Загружаем…</p>}
-      {error && <ErrorNote>{error}</ErrorNote>}
+      {!values && !error && <LoadingRows rows={5} />}
+      {!values && error && <ErrorNote>{error}</ErrorNote>}
 
       {values && (
-        <>
-          <form onSubmit={handleSave}>
-            <LeadFields values={values} onChange={setValues} team={team} />
+        <form onSubmit={handleSave}>
+          <LeadFields values={values} onChange={setValues} team={team} />
 
-            <div className="mt-5 flex items-center gap-2">
-              <Button type="submit" disabled={saving}>
-                {saving ? "Сохраняем…" : "Сохранить"}
-              </Button>
-              <Button type="button" variant="danger" onClick={() => void handleDelete()}>
-                Удалить
-              </Button>
-            </div>
-          </form>
-
-          <section className="border-border mt-7 border-t pt-5">
-            <h3 className="text-sm font-semibold">Заметки</h3>
-
-            {notes.length > 0 && (
-              <ul className="mt-3 space-y-3">
-                {notes.map((note) => (
-                  <li key={note.id} className="text-sm">
-                    <p className="whitespace-pre-wrap">{note.body}</p>
-                    <p className="text-muted-foreground mt-0.5 text-xs">
-                      {memberLabel(note.author) || "Кто-то"} ·{" "}
-                      {formatDateTime(note.createdAt)}
-                    </p>
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            <div className="mt-3">
-              <Textarea
-                value={noteDraft}
-                onChange={(event) => setNoteDraft(event.target.value)}
-                rows={2}
-                placeholder="Позвонил, попросил счёт до пятницы"
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                className="mt-2 px-0"
-                disabled={!noteDraft.trim()}
-                onClick={() => void handleAddNote()}
-              >
-                Добавить заметку
-              </Button>
-            </div>
-          </section>
+          <div className="mt-6">
+            <NotesView
+              notes={notes}
+              draft={noteDraft}
+              onDraftChange={setNoteDraft}
+              onSubmit={() => void handleAddNote()}
+              placeholder="Позвонил, попросил счёт до пятницы"
+            />
+          </div>
 
           {lead && (
-            <p className="text-muted-foreground mt-5 text-xs">
-              Создан {formatDateTime(lead.createdAt)}
-              {lead.owner && ` · ведёт ${memberLabel(lead.owner)}`}
+            <p className="text-muted-foreground mt-5 flex flex-wrap gap-x-3 text-xs font-medium">
+              <span>Создан {formatDateTime(lead.createdAt)}</span>
+              {lead.owner && <span>Ведёт {memberLabel(lead.owner)}</span>}
             </p>
           )}
-        </>
+
+          {error && (
+            <div className="mt-4">
+              <ErrorNote>{error}</ErrorNote>
+            </div>
+          )}
+
+          <div className="mt-6 flex items-center gap-2">
+            <Button type="submit" disabled={saving} className="h-11 flex-1">
+              {saving ? "Сохраняем…" : "Сохранить"}
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              className="h-11"
+              onClick={() => void handleDelete()}
+            >
+              Удалить
+            </Button>
+          </div>
+        </form>
       )}
     </Modal>
   );
