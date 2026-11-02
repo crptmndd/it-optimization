@@ -1,5 +1,6 @@
 import { Search, X, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
 
 /*
@@ -437,7 +438,9 @@ export function Modal({
     return () => document.removeEventListener("keydown", onKey);
   }, [leave]);
 
-  return (
+  // В body, а не на месте: страница появляется с анимацией transform, и пока она идёт,
+  // `fixed` считался бы от страницы. Окно, открытое сразу после перехода, стояло не там.
+  return createPortal(
     <div
       data-modal-backdrop
       className={cn(
@@ -474,7 +477,8 @@ export function Modal({
         </div>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
