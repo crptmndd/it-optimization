@@ -62,6 +62,7 @@ const ROLE_EFFECT: Record<UserRole, string> = {
   employee: "станет сотрудником: будет видеть только свои задачи и проекты, без денег",
 };
 
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i;
 const MIN_PASSWORD_LENGTH = 12;
 
 const HANDLE_PATTERN = /^[A-Za-z0-9_]{5,32}$/;
@@ -567,6 +568,11 @@ function AccountForm({
 
     if (!values.name.trim()) {
       setError("Укажите имя");
+      return;
+    }
+    // Браузер пропускает `vadim@dev`, а сервер нет, и вход с таким адресом не сработал бы.
+    if (!EMAIL_PATTERN.test(values.email.trim())) {
+      setError("Укажите почту полностью, например name@company.ru");
       return;
     }
     if (values.password.length < MIN_PASSWORD_LENGTH) {
