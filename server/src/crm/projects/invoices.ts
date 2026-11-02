@@ -4,6 +4,7 @@ import { z } from "zod";
 import { audit } from "../../audit.js";
 import { requireTeam } from "../../auth/guard.js";
 import { prisma } from "../../db.js";
+import { periodTitle } from "../../notify/zone.js";
 import { sumByCurrency } from "../currency.js";
 import { invalidInput } from "../http.js";
 import { listBills } from "./bills.js";
@@ -158,7 +159,9 @@ export async function invoiceRoutes(app: FastifyInstance): Promise<void> {
     });
     if (duplicate) {
       const what = input.kind === "invoice" ? "Счёт" : "Акт";
-      return reply.code(409).send({ error: `${what} за ${input.period} уже заведён` });
+      return reply
+        .code(409)
+        .send({ error: `${what} за ${periodTitle(input.period)} уже заведён` });
     }
 
     const invoice = await prisma.invoice.create({
