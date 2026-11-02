@@ -1,5 +1,12 @@
 import { Check, Copy, ExternalLink, Eye, EyeOff, Lock, Pencil } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type Ref,
+} from "react";
 import { ApiError } from "@/api/client";
 import type { Credential } from "@/api/credentials";
 import type { RevealPassword } from "@/components/two-factor-prompt";
@@ -44,8 +51,9 @@ function shortUrl(url: string): string {
     .replace(/\/$/, "");
 }
 
+/** Ниже 1024px по этим кнопкам попадают пальцем: мельче 44px они промахиваются. */
 const iconActionClass =
-  "text-muted-foreground hover:bg-disabled hover:text-foreground flex size-8 shrink-0 items-center justify-center rounded-lg transition disabled:opacity-50";
+  "text-muted-foreground hover:bg-disabled hover:text-foreground flex size-8 shrink-0 items-center justify-center rounded-lg transition disabled:opacity-50 max-lg:size-11";
 
 /**
  * Дата стоит на самой кнопке, поэтому нажатие не вслепую. Подтверждения нет намеренно:
@@ -69,7 +77,7 @@ export function PaidButton({
       variant="secondary"
       size="sm"
       disabled={saving}
-      className={className}
+      className={cn("max-lg:h-11", className)}
       onClick={() => {
         setSaving(true);
         void onPaid().finally(() => setSaving(false));
@@ -202,20 +210,22 @@ function Detail({
   children: ReactNode;
 }) {
   return (
-    <div className="grid grid-cols-[4.5rem_minmax(0,1fr)_auto] gap-x-3 py-2">
-      <dt className="text-muted-foreground py-1.5 text-[13px] leading-5 font-semibold">
+    <div className="grid grid-cols-[4.5rem_minmax(0,1fr)_auto] gap-x-3 py-2 max-lg:py-0.5">
+      <dt className="text-muted-foreground py-1.5 text-[13px] leading-5 font-semibold max-lg:py-3">
         {label}
       </dt>
       <dd
         className={cn(
-          "min-w-0 py-1.5 text-right text-sm leading-5 font-medium",
+          "min-w-0 py-1.5 text-right text-sm leading-5 font-medium max-lg:py-3",
           full && "col-span-2",
         )}
       >
         {children}
       </dd>
       {!full && (
-        <dd className="flex w-[4.125rem] items-start justify-end gap-0.5">{actions}</dd>
+        <dd className="flex w-[4.125rem] items-start justify-end gap-0.5 max-lg:w-[5.625rem]">
+          {actions}
+        </dd>
       )}
     </div>
   );
@@ -236,7 +246,7 @@ function PasswordDetail({ item, reveal }: { item: Credential; reveal: RevealPass
           item.legacyPending && (
             <span
               title="Нажмите «Перенести пароли» вверху экрана"
-              className="text-muted-foreground flex size-8 items-center justify-center"
+              className="text-muted-foreground flex size-8 items-center justify-center max-lg:size-11"
             >
               <Lock size={17} strokeWidth={2.25} />
             </span>
@@ -294,21 +304,28 @@ function PasswordDetail({ item, reveal }: { item: Credential; reveal: RevealPass
  * Монтируется с `key` по id записи: смена записи обязана стереть открытый пароль.
  */
 export function CredentialCard({
+  ref,
   item,
   reveal,
   onEdit,
   onPaid,
+  onEscape,
   inModal = false,
   className,
 }: {
+  /** Сюда экран переводит фокус, поэтому корень принимает его, хотя Tab на нём не встаёт. */
+  ref?: Ref<HTMLDivElement>;
   item: Credential;
   reveal: RevealPassword;
   onEdit: () => void;
-  onPaid: () => Promise<void>;
+  /** Ошибку сообщает через `report`: показать её надо рядом с нажатой кнопкой. */
+  onPaid: (report: (failure: string | null) => void) => Promise<void>;
+  onEscape?: () => void;
   /** В окне название уже в его заголовке, а «Изменить» уходит вниз, под большой палец. */
   inModal?: boolean;
   className?: string;
 }) {
+  const [paidError, setPaidError] = useState<string | null>(null);
   const renews = item.renewsAt ? describeDeadline(item.renewsAt) : null;
 
   const edit = (
@@ -374,15 +391,20 @@ export function CredentialCard({
           <Detail label="Оплата" full>
             {/* Отрицательный отступ: кнопка выше строки текста, и без него ряд с ней
                 выходил бы выше соседних. */}
-            <div className="-my-1.5 flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
+            <div className="-my-1.5 flex flex-wrap items-center justify-end gap-x-3 gap-y-2 max-lg:-my-3">
               {item.amountMinor != null && (
                 <span className="leading-8 font-semibold tabular-nums">
                   {fee(item.amountMinor, item.monthlyFee, item.currency)}
                 </span>
               )}
               {renews && <Badge tone={renews.tone}>{renews.label}</Badge>}
-              <PaidButton item={item} onPaid={onPaid} />
+              <PaidButton item={item} onPaid={() => onPaid(setPaidError)} />
             </div>
+            {paidError && (
+              <p role="alert" className="text-danger mt-2 text-xs">
+                {paidError}
+              </p>
+            )}
           </Detail>
         )}
 
@@ -402,7 +424,7 @@ export function CredentialCard({
 
   if (inModal) {
     return (
-      <>
+      <div ref={ref} tabIndex={-1} className="outline-none">
         {body}
         <Button
           type="button"
@@ -412,12 +434,19 @@ export function CredentialCard({
         >
           {edit}
         </Button>
-      </>
+      </div>
     );
   }
 
   return (
-    <Card className={cn("px-5 py-4 sm:px-6 sm:py-5", className)}>
+    <Card
+      ref={ref}
+      tabIndex={-1}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") onEscape?.();
+      }}
+      className={cn("px-5 py-4 outline-none sm:px-6 sm:py-5", className)}
+    >
       <div className="flex items-start justify-between gap-3">
         <h2 className="min-w-0 text-xl leading-8 font-extrabold tracking-tight [overflow-wrap:anywhere]">
           {item.service}

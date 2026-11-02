@@ -112,17 +112,9 @@ export function Badge({
 }
 
 /** Белая карточка на сером полотне: основной строительный блок экранов. */
-export function Card({
-  className,
-  children,
-}: {
-  className?: string;
-  children: ReactNode;
-}) {
+export function Card({ className, ...props }: React.ComponentProps<"div">) {
   return (
-    <div className={cn("bg-background shadow-card rounded-2xl", className)}>
-      {children}
-    </div>
+    <div {...props} className={cn("bg-background shadow-card rounded-2xl", className)} />
   );
 }
 
@@ -462,15 +454,16 @@ export function Modal({
         )}
       >
         <div className="mb-5 flex items-start justify-between gap-4">
-          <h2 className="flex flex-wrap items-center gap-2 text-xl font-extrabold tracking-tight">
+          <h2 className="flex min-w-0 flex-wrap items-center gap-2 text-xl font-extrabold tracking-tight [overflow-wrap:anywhere]">
             {title}
             {badge}
           </h2>
+          {/* Значок маленький, а попасть по нему надо пальцем: зона нажатия шире него. */}
           <button
             type="button"
             onClick={leave}
             aria-label="Закрыть"
-            className="text-muted-foreground bg-muted hover:bg-disabled hover:text-foreground -mt-0.5 -mr-0.5 flex size-8 shrink-0 items-center justify-center rounded-full transition"
+            className="text-muted-foreground bg-muted hover:bg-disabled hover:text-foreground relative -mt-0.5 -mr-0.5 flex size-8 shrink-0 items-center justify-center rounded-full transition after:absolute after:-inset-1.5"
           >
             <X size={16} strokeWidth={2.5} />
           </button>

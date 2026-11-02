@@ -1,5 +1,5 @@
 import { KeyRound, Plus } from "lucide-react";
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useSearchParams } from "react-router";
 import { ApiError } from "@/api/client";
 import { useFocusFromLink } from "@/lib/focus-card";
@@ -71,11 +71,25 @@ function useWide(): boolean {
   return useSyncExternalStore(subscribeWide, () => window.matchMedia(WIDE).matches);
 }
 
+/**
+ * Сколько «Оплатил» молчит после продления. Продлённая запись уходит из блока, под
+ * курсор встаёт кнопка соседней, и второе нажатие двойного клика оплатило бы её.
+ */
+const PAID_PAUSE_MS = 800;
+
 /** Запись, к которой надо подвести, даже если её сейчас прячет поиск или фильтр. */
 interface Target {
   id: string;
   /** На узком экране карточка живёт в окне: открыть его, когда запись найдётся. */
   open: boolean;
+  /** Выбрали с клавиатуры: фокус перейдёт в карточку. */
+  keyboard?: boolean;
+}
+
+function focusRow(id: string) {
+  document
+    .querySelector<HTMLElement>(`[data-card-id="${CSS.escape(id)}"] button`)
+    ?.focus();
 }
 
 export function CredentialsScreen() {
@@ -98,6 +112,20 @@ export function CredentialsScreen() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<Credential | null>(null);
+  /** Запомненная в начале правки кнопка: после формы фокус вернётся на неё. */
+  const editOpener = useRef<HTMLElement | null>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+  /**
+   * Счётчик выборов с клавиатуры. Карточка в разметке стоит после всего списка, и без
+   * перевода фокуса до пароля были бы десятки Tab. Мышь фокус не трогает.
+   */
+  const [cardFocus, setCardFocus] = useState(0);
+  /** Номер последнего запроса списка: ответ на более ранний уже никому не нужен. */
+  const loadSeq = useRef(0);
+  /** Текущий поиск для `load`: после продления и формы он мог смениться, пока шёл запрос. */
+  const query = useRef("");
+  /** До какого момента «Оплатил» не срабатывает, на всех записях сразу. */
+  const paidPause = useRef(0);
   // Одно окно кода на экран: и карточка, и форма просят его одинаково.
   const { reveal, prompt } = useRevealPassword();
   const wide = useWide();
@@ -119,39 +147,49 @@ export function CredentialsScreen() {
   }, []);
 
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
+    const text = query.current;
     setError(null);
     try {
       const [found, whole] = await Promise.all([
-        listCredentials(debouncedSearch || undefined),
-        debouncedSearch ? listCredentials() : null,
+        listCredentials(text || undefined),
+        text ? listCredentials() : null,
       ]);
+      if (seq !== loadSeq.current) return;
       setItems(found);
       setAll(whole ?? found);
     } catch (cause) {
+      if (seq !== loadSeq.current) return;
       setError(cause instanceof ApiError ? cause.message : "Не удалось загрузить");
       setItems([]);
       setAll((current) => current ?? []);
     }
-  }, [debouncedSearch]);
+  }, []);
 
   /**
    * Продление из карточки или блока. Отправляем только `renewsAt`: PATCH применяет
    * пришедшие поля и не трогает остальные, поэтому пароль и всё прочее
    * остаются как были.
    */
-  async function markPaid(item: Credential) {
+  async function markPaid(item: Credential, report: (failure: string | null) => void) {
+    if (Date.now() < paidPause.current) return;
+    paidPause.current = Infinity;
+    report(null);
     const next = nextRenewalDate(toDateInputValue(item.renewsAt));
     try {
       await updateCredential(item.id, { renewsAt: fromDateInputValue(next) });
       await load();
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Не удалось продлить");
+      report(cause instanceof ApiError ? cause.message : "Не удалось продлить");
+    } finally {
+      paidPause.current = Date.now() + PAID_PAUSE_MS;
     }
   }
 
   useEffect(() => {
+    query.current = debouncedSearch;
     void load();
-  }, [load]);
+  }, [debouncedSearch, load]);
 
   // Глобальный поиск (?open=<id>) и «Сегодня» (?focus=<id>) ведут к записи одинаково:
   // ставят цель, а дальше её ведёт эффект ниже. Хуки только убирают параметр из адреса
@@ -194,6 +232,7 @@ export function CredentialsScreen() {
     setTarget(null);
     setSelectedId(item.id);
     if (target.open && !wide) setSheetOpen(true);
+    if (target.keyboard) setCardFocus((tick) => tick + 1);
     document
       .querySelector(`[data-card-id="${CSS.escape(item.id)}"]`)
       ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -204,7 +243,10 @@ export function CredentialsScreen() {
     if (wide) setSheetOpen(false);
   }, [wide]);
 
-  const closeSheet = useCallback(() => setSheetOpen(false), []);
+  const closeSheet = useCallback(() => {
+    setSheetOpen(false);
+    if (selectedId) focusRow(selectedId);
+  }, [selectedId]);
 
   // Фильтр применяется здесь, а не запросом: список доступов целиком уже в
   // памяти, и лишний поход в базу ради выборки по одному полю ничего не даст.
@@ -219,19 +261,37 @@ export function CredentialsScreen() {
     rows.find((item) => item.id === selectedId) ?? (wide ? rows[0] : undefined);
   // Поверх формы окно не держим: Escape закрыл бы оба разом.
   const sheetItem = !wide && sheetOpen && !editing ? selected : undefined;
+  const sheetId = sheetItem?.id;
+
+  // Окно общее и само фокус не берёт, а без него Tab ходил бы по списку под затемнением.
+  useEffect(() => {
+    if (sheetId || cardFocus) cardRef.current?.focus({ preventScroll: true });
+  }, [sheetId, cardFocus]);
 
   // Подсветка ждёт выбора. Хук вешает класс прямо на строку, и смена её className
   // следующим рендером стёрла бы его, а раньше строки и вовсе может не быть в разметке.
   useFocusFromLink(Boolean(focusId) && selected?.id === focusId);
 
-  // Срок считается по всем записям: горящее продление не должно пропадать из-за поиска.
+  // Срок считается по всем записям: на широком экране горящее продление не должно
+  // пропадать из-за поиска.
   const renewals = (all ?? [])
     .filter(renewsSoon)
     .sort((a, b) => a.renewsAt!.localeCompare(b.renewsAt!));
 
-  function choose(item: Credential) {
+  function choose(item: Credential, keyboard: boolean) {
     setSelectedId(item.id);
     if (!wide) setSheetOpen(true);
+    if (keyboard) setCardFocus((tick) => tick + 1);
+  }
+
+  function openEdit(item: Credential) {
+    editOpener.current = document.activeElement as HTMLElement | null;
+    setEditing(item);
+  }
+
+  function closeEdit() {
+    setEditing(null);
+    editOpener.current?.focus();
   }
 
   const emptyState = (
@@ -302,7 +362,8 @@ export function CredentialsScreen() {
           поле вниз. На широком блок идёт во всю ширину, а поле стоит над списком. */}
       {!wide && <div className="mt-5">{filters}</div>}
 
-      {renewals.length > 0 && (
+      {/* Здесь блок стоит между полем и списком, и пока ищут, результат уехал бы за экран. */}
+      {(wide || !(search.trim() || projectFilter)) && renewals.length > 0 && (
         <div className="mt-6">
           <SectionTitle title="Скоро продлить" count={renewals.length} />
           <List>
@@ -310,8 +371,8 @@ export function CredentialsScreen() {
               <RenewalRow
                 key={item.id}
                 item={item}
-                onSelect={() => setTarget({ id: item.id, open: true })}
-                onPaid={() => markPaid(item)}
+                onSelect={(keyboard) => setTarget({ id: item.id, open: true, keyboard })}
+                onPaid={() => markPaid(item, setError)}
               />
             ))}
           </List>
@@ -340,7 +401,7 @@ export function CredentialsScreen() {
                         key={item.id}
                         item={item}
                         selected={item.id === selected?.id}
-                        onSelect={() => choose(item)}
+                        onSelect={(keyboard) => choose(item, keyboard)}
                       />
                     ))}
                   </List>
@@ -354,10 +415,12 @@ export function CredentialsScreen() {
           (selected ? (
             <CredentialCard
               key={selected.id}
+              ref={cardRef}
               item={selected}
               reveal={reveal}
-              onEdit={() => setEditing(selected)}
-              onPaid={() => markPaid(selected)}
+              onEdit={() => openEdit(selected)}
+              onPaid={(report) => markPaid(selected, report)}
+              onEscape={() => focusRow(selected.id)}
               className="sticky top-0 max-h-[calc(100dvh-3.5rem)] overflow-y-auto"
             />
           ) : visible === undefined ? (
@@ -369,17 +432,12 @@ export function CredentialsScreen() {
 
       {sheetItem && (
         <Modal key={sheetItem.id} title={sheetItem.service} onClose={closeSheet}>
-          {/* Общая ошибка лежит под окном, а продлить можно и отсюда. */}
-          {error && (
-            <div className="mb-4">
-              <ErrorNote>{error}</ErrorNote>
-            </div>
-          )}
           <CredentialCard
+            ref={cardRef}
             item={sheetItem}
             reveal={reveal}
-            onEdit={() => setEditing(sheetItem)}
-            onPaid={() => markPaid(sheetItem)}
+            onEdit={() => openEdit(sheetItem)}
+            onPaid={(report) => markPaid(sheetItem, report)}
             inModal
           />
         </Modal>
@@ -408,11 +466,11 @@ export function CredentialsScreen() {
           item={editing}
           projects={projects}
           reveal={reveal}
-          onClose={() => setEditing(null)}
+          onClose={closeEdit}
           onSubmit={async (values) => {
             await updateCredential(editing.id, toInput(values));
             await load();
-            setEditing(null);
+            closeEdit();
             // Правка могла увести запись из-под фильтра, а выбранной она должна остаться.
             setTarget({ id: editing.id, open: false });
           }}
@@ -472,7 +530,8 @@ function Row({
 }: {
   item: Credential;
   selected: boolean;
-  onSelect: () => void;
+  /** `keyboard`: нажатие пришло с клавиатуры, у него `detail` равен нулю. */
+  onSelect: (keyboard: boolean) => void;
 }) {
   const soon = renewsSoon(item) ? describeDeadline(item.renewsAt!) : null;
 
@@ -487,7 +546,7 @@ function Row({
     >
       <button
         type="button"
-        onClick={onSelect}
+        onClick={(event) => onSelect(event.detail === 0)}
         aria-current={selected ? "true" : undefined}
         className="flex min-h-14 w-full items-center gap-3 px-4 py-2.5 text-left focus-visible:-outline-offset-2"
       >
@@ -511,7 +570,7 @@ function RenewalRow({
   onPaid,
 }: {
   item: Credential;
-  onSelect: () => void;
+  onSelect: (keyboard: boolean) => void;
   onPaid: () => Promise<void>;
 }) {
   const deadline = describeDeadline(item.renewsAt!);
@@ -521,7 +580,7 @@ function RenewalRow({
       {/* Строку выбирает нажатие в любом месте: кнопка растянута, «Оплатил» лежит поверх. */}
       <button
         type="button"
-        onClick={onSelect}
+        onClick={(event) => onSelect(event.detail === 0)}
         aria-label={item.service}
         className="absolute inset-0 focus-visible:-outline-offset-2"
       />
