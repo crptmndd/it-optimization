@@ -213,7 +213,8 @@ export function TeamPanel() {
           <div className="max-w-prose min-w-0">
             <h2 className="text-[17px] leading-6 font-bold tracking-tight">Команда</h2>
             <p className="text-muted-foreground mt-1 text-sm">
-              Без ника бот напишет в чате только имя и не отметит человека. Отключение
+              Без ника бот напишет в чате только имя и не отметит человека. Админам бот
+              пишет лично, если они подключили его в своих настройках. Отключение
               закрывает вход, но не убирает из телеграм-чата: это делается руками.
             </p>
           </div>
@@ -310,6 +311,9 @@ function PersonRow({
         <span className="flex min-w-0 items-center gap-2">
           <span className="truncate text-[15px] font-semibold">{title}</span>
           {account?.disabledAt && <Badge tone="danger">отключена</Badge>}
+          {account?.role === "admin" &&
+            !account.disabledAt &&
+            !account.telegramLinked && <Badge tone="warning">бот не подключён</Badge>}
         </span>
         {account && (
           <span className="text-muted-foreground block truncate text-[13px] font-medium">

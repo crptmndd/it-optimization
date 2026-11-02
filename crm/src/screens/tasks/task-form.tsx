@@ -74,9 +74,11 @@ function MissingHandleHint({ people }: { people: string[] }) {
   const admin = isAdmin(useCurrentUser());
   if (!team) return null;
 
-  const missing = people.filter(
-    (name) => !team.find((person) => person.name === name)?.telegramUsername,
-  );
+  // Админу бот пишет лично, ник в чате ему не нужен.
+  const missing = people.filter((name) => {
+    const person = team.find((item) => item.name === name);
+    return person?.role !== "admin" && !person?.telegramUsername;
+  });
   if (missing.length === 0) return null;
 
   return (

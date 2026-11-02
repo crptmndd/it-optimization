@@ -8,14 +8,62 @@ interface Log {
   warn: (obj: unknown, msg: string) => void;
 }
 
+/** У групп идентификатор отрицательный, в них нельзя писать адресованное человеку. */
+export function isPrivateChat(chatId: string): boolean {
+  return /^\d+$/.test(chatId);
+}
+
+/** Один заблокировавший бота админ не должен оставить без сообщения остальных. */
+async function sendPrivate(
+  chatId: string,
+  text: string,
+  log: Log,
+  button?: LinkButton,
+): Promise<void> {
+  try {
+    await trySendMessage(chatId, text, log, 3, button);
+  } catch (cause) {
+    log.warn({ err: cause, chatId }, "личное сообщение не доставлено");
+  }
+}
+
 /**
- * Сообщение о новом лиде. Уходит в общий чат, если он задан, иначе — админам, которые
- * подключили бота. Второй путь важен: заводить группу ради троих необязательно. Только
- * админам, потому что лиды закрыты для сотрудника, а в сообщении контакт человека.
+ * Лично каждому действующему админу, подключившему бота. Запасного пути в общий чат нет
+ * намеренно: там сидят сотрудники, а в этих сообщениях деньги и контакты клиентов.
  */
-export async function notifyNewLead(lead: Lead, log: Log): Promise<void> {
+export async function notifyAdmins(
+  text: string,
+  log: Log,
+  button?: LinkButton,
+): Promise<void> {
   if (!canNotify) return;
 
+  const admins = await prisma.user.findMany({
+    where: { role: "admin", disabledAt: null, telegramChatId: { not: null } },
+    select: { telegramChatId: true },
+  });
+  const chats = admins.flatMap(({ telegramChatId: chatId }) =>
+    chatId && isPrivateChat(chatId) ? [chatId] : [],
+  );
+
+  if (chats.length === 0) {
+    log.warn({}, "ни один админ не подключил бота, сообщение не отправлено");
+    return;
+  }
+  for (const chatId of chats) await sendPrivate(chatId, text, log, button);
+}
+
+/** Люди из списка с учёткой админа. Значение — их чат, если бот подключён. */
+async function adminChatsOf(people: string[]): Promise<Map<string, string | null>> {
+  const rows = await prisma.teamMember.findMany({
+    where: { name: { in: people }, user: { role: "admin", disabledAt: null } },
+    select: { name: true, user: { select: { telegramChatId: true } } },
+  });
+  return new Map(rows.map((row) => [row.name, row.user?.telegramChatId ?? null]));
+}
+
+/** Сообщение о новом лиде. Лиды закрыты для сотрудника, а в сообщении контакт человека. */
+export async function notifyNewLead(lead: Lead, log: Log): Promise<void> {
   const lines = [
     "🆕 <b>Новый лид</b>",
     "",
@@ -25,21 +73,7 @@ export async function notifyNewLead(lead: Lead, log: Log): Promise<void> {
   if (lead.message?.trim()) lines.push("", escapeHtml(lead.message.trim()));
   if (!lead.ownerId) lines.push("", "Никто не назначен.");
 
-  const text = lines.join("\n");
-
-  if (env.TELEGRAM_TEAM_CHAT_ID) {
-    await trySendMessage(env.TELEGRAM_TEAM_CHAT_ID, text, log);
-    return;
-  }
-
-  const users = await prisma.user.findMany({
-    where: { role: "admin", disabledAt: null, telegramChatId: { not: null } },
-    select: { telegramChatId: true },
-  });
-
-  for (const user of users) {
-    if (user.telegramChatId) await trySendMessage(user.telegramChatId, text, log);
-  }
+  await notifyAdmins(lines.join("\n"), log);
 }
 
 /**
@@ -65,7 +99,7 @@ export function mention(
 ): string {
   if (handle) return `@${escapeHtml(handle)}`;
   // У групп идентификатор отрицательный, упомянуть можно только человека.
-  if (telegramId && /^\d+$/.test(telegramId)) {
+  if (telegramId && isPrivateChat(telegramId)) {
     return `<a href="tg://user?id=${telegramId}">${escapeHtml(name)}</a>`;
   }
   return `<b>${escapeHtml(name)}</b>`;
@@ -131,11 +165,13 @@ export function taskMessage(input: {
   task: TaskNotice;
   tags: string[];
   kind: "created" | "assigned";
+  /** Лично человеку: вместо тэга «Вам», и «исполнителя нет» тут не бывает. */
+  personal?: boolean;
   actor: string | null;
   timeZone: string;
   now?: Date;
 }): string {
-  const { task, tags, kind, actor, timeZone, now } = input;
+  const { task, tags, kind, personal = false, actor, timeZone, now } = input;
   const urgent = task.priority === "high";
   const icon = urgent ? "🔥" : kind === "created" ? "📌" : "👋";
   const noun = task.parent ? "подзадача" : "задача";
@@ -149,8 +185,9 @@ export function taskMessage(input: {
         : `новая ${noun}`;
 
   // Тэг в первой строке: это единственное, что видно в уведомлении на телефоне.
-  const headline =
-    tags.length > 0
+  const headline = personal
+    ? `${icon} Вам ${what}`
+    : tags.length > 0
       ? `${icon} ${tags.join(" ")}, ${what}`
       : `${icon} ${what[0]?.toUpperCase()}${what.slice(1)}, исполнителя пока нет`;
 
@@ -181,6 +218,11 @@ export function taskButton(
   return { text: "Открыть задачу", url: `${origin}/#/tasks?open=${id}` };
 }
 
+/**
+ * Админу лично, остальным тэгом в общем чате. Работу админа в чате не показываем, поэтому
+ * задача только на админов туда не идёт, а в общей отмечены только сотрудники. Задача без
+ * исполнителя остаётся в чате: там её кто-то возьмёт.
+ */
 async function notifyTask(
   task: TaskNotice,
   people: string[],
@@ -188,10 +230,34 @@ async function notifyTask(
   actor: TaskActor,
   log: Log,
 ): Promise<void> {
-  // Запасного пути «всем лично», как у лидов, нет намеренно: тэг имеет смысл только
+  if (!canNotify) return;
+
+  const admins = await adminChatsOf(people);
+  const others = people.filter((name) => !admins.has(name));
+  // Своей карточки у подзадачи нет, открывается родитель.
+  const button = taskButton(task.parent?.id ?? task.id, env.CRM_ORIGIN);
+
+  for (const [name, chatId] of admins) {
+    if (!chatId || !isPrivateChat(chatId)) {
+      log.warn({ name }, "админ не подключил бота, задача ему не отправлена");
+      continue;
+    }
+    const text = taskMessage({
+      task,
+      tags: [],
+      personal: true,
+      kind,
+      actor: actor.memberName === name ? null : actor.name,
+      timeZone: env.TIMEZONE,
+    });
+    await sendPrivate(chatId, text, log, button);
+  }
+
+  // Запасного пути «всем лично», как у админов, нет намеренно: тэг имеет смысл только
   // там, где его видят все, а личное сообщение о чужой задаче никому не нужно.
   const chatId = env.TELEGRAM_TEAM_CHAT_ID;
-  if (!canNotify || !chatId) return;
+  if (!chatId) return;
+  if (people.length > 0 && others.length === 0) return;
 
   // Задачу без исполнителя показывают всем, чтобы её кто-то взял. Подзадачу без него
   // никто не ждёт: это строка чек-листа внутри чужой карточки, а не работа без хозяина.
@@ -199,16 +265,14 @@ async function notifyTask(
 
   const text = taskMessage({
     task,
-    tags: await taskTags(people),
+    tags: await taskTags(others),
     kind,
     // Поставил сам себе — подпись ничего не добавляет.
-    actor: actor.memberName && people.includes(actor.memberName) ? null : actor.name,
+    actor: actor.memberName && others.includes(actor.memberName) ? null : actor.name,
     timeZone: env.TIMEZONE,
   });
 
-  // Своей карточки у подзадачи нет, открывается родитель.
-  const target = task.parent?.id ?? task.id;
-  await trySendMessage(chatId, text, log, 3, taskButton(target, env.CRM_ORIGIN));
+  await trySendMessage(chatId, text, log, 3, button);
 }
 
 /**
@@ -225,5 +289,96 @@ export function notifyTaskInBackground(
 ): void {
   void notifyTask(task, people, kind, actor, log).catch((cause: unknown) => {
     log.warn({ err: cause }, "уведомление о задаче не отправлено");
+  });
+}
+
+export interface ProjectNotice {
+  id: string;
+  title: string;
+  deadline: Date | null;
+  developers: string[];
+  client: { name: string } | null;
+}
+
+export function projectMessage(input: {
+  project: ProjectNotice;
+  kind: "created" | "assigned";
+  actor: string | null;
+  timeZone: string;
+  now?: Date;
+}): string {
+  const { project, kind, actor, timeZone, now } = input;
+
+  const facts: string[] = [];
+  if (project.client) facts.push(`🏢 ${escapeHtml(project.client.name)}`);
+  if (project.developers.length > 0) {
+    facts.push(`👥 Ведут: ${project.developers.map(escapeHtml).join(", ")}`);
+  }
+  if (project.deadline) facts.push(`⏰ ${dueLine(project.deadline, timeZone, now)}`);
+  if (actor) facts.push(`👤 От: ${escapeHtml(actor)}`);
+
+  const lines = [
+    kind === "created" ? "📁 Новый проект" : "👋 Вам назначен проект",
+    "",
+    `<b>${escapeHtml(project.title)}</b>`,
+  ];
+  if (facts.length > 0) lines.push("", ...facts);
+  return lines.join("\n");
+}
+
+function projectButton(id: string, origin: string | undefined): LinkButton | undefined {
+  if (!origin?.startsWith("https://")) return undefined;
+  return { text: "Открыть проект", url: `${origin}/#/projects?open=${id}` };
+}
+
+/** Новый проект видят все админы: в общий чат проекты не идут. */
+export function notifyNewProjectInBackground(
+  project: ProjectNotice,
+  actor: TaskActor,
+  log: Log,
+): void {
+  const text = projectMessage({
+    project,
+    kind: "created",
+    actor: actor.name,
+    timeZone: env.TIMEZONE,
+  });
+  void notifyAdmins(text, log, projectButton(project.id, env.CRM_ORIGIN)).catch(
+    (cause: unknown) => {
+      log.warn({ err: cause }, "уведомление о проекте не отправлено");
+    },
+  );
+}
+
+async function notifyProjectAssigned(
+  project: ProjectNotice,
+  people: string[],
+  actor: TaskActor,
+  log: Log,
+): Promise<void> {
+  if (!canNotify) return;
+
+  const button = projectButton(project.id, env.CRM_ORIGIN);
+  for (const [name, chatId] of await adminChatsOf(people)) {
+    if (!chatId || !isPrivateChat(chatId)) continue;
+    const text = projectMessage({
+      project,
+      kind: "assigned",
+      actor: actor.memberName === name ? null : actor.name,
+      timeZone: env.TIMEZONE,
+    });
+    await sendPrivate(chatId, text, log, button);
+  }
+}
+
+/** Админ, добавленный в уже заведённый проект. Сотрудников это не касается. */
+export function notifyProjectAssignedInBackground(
+  project: ProjectNotice,
+  people: string[],
+  actor: TaskActor,
+  log: Log,
+): void {
+  void notifyProjectAssigned(project, people, actor, log).catch((cause: unknown) => {
+    log.warn({ err: cause }, "уведомление о проекте не отправлено");
   });
 }

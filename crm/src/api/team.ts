@@ -29,6 +29,8 @@ export interface Account {
   /** Человек из команды, которым значится учётка. Ключ для общего списка в «Команде». */
   memberName: string | null;
   twoFactorEnabled: boolean;
+  /** Подключён личный чат с ботом. Админу без него бот не напишет ничего. */
+  telegramLinked: boolean;
   lastLoginAt: string | null;
   disabledAt: string | null;
   createdAt: string;

@@ -1,16 +1,21 @@
 import { formatMoney } from "../crm/currency.js";
 import type { BillDto } from "../crm/projects/bills.js";
-import { collectToday, isQuietSnapshot, type TodaySnapshot } from "../crm/today.js";
+import {
+  collectToday,
+  isQuietSnapshot,
+  teamChatSnapshot,
+  type TodaySnapshot,
+} from "../crm/today.js";
 import { env } from "../env.js";
+import { notifyAdmins } from "./notifications.js";
 import { escapeHtml, fitMessage, sendMessage, TelegramError } from "./telegram.js";
 import { daysOverdue, daysUntil, periodTitle, pluralDays } from "./zone.js";
 
 /**
- * Утренняя сводка в общий чат.
- *
- * Личной рассылки нет: у каждой строки указано, на ком она висит, и в общем чате
- * команды этого хватает. Личный срез бывает только по запросу, `/today` сотрудника в
- * своём чате: тот же текст из меньшего снимка.
+ * Утренняя сводка. Админы получают полную лично: в ней деньги, продления и вся работа
+ * команды. В общий чат уходит та же сводка из меньшего снимка, `teamChatSnapshot`:
+ * только работа сотрудников. Личный срез сотрудника бывает только по запросу, `/today`
+ * в своём чате.
  *
  * Если напоминать не о чем, сообщение не отправляется вовсе. Ежедневное «всё
  * чисто» приучает не открывать бота, и тогда важное сообщение тоже пролистают.
@@ -173,14 +178,19 @@ export async function buildDigest(source?: TodaySnapshot): Promise<string | null
   );
 }
 
-/** Отправляет сводку в общий чат. */
-export async function sendTeamDigest(log: Log): Promise<void> {
+/** Отправляет полную сводку админам лично и урезанную в общий чат. */
+export async function sendMorningDigest(log: Log): Promise<void> {
+  const snapshot = await collectToday();
+
+  const full = await buildDigest(snapshot);
+  if (full) await notifyAdmins(full, log);
+
   if (!env.TELEGRAM_TEAM_CHAT_ID) {
     log.warn({}, "TELEGRAM_TEAM_CHAT_ID не задан — сводку слать некуда");
     return;
   }
 
-  const text = await buildDigest();
+  const text = await buildDigest(await teamChatSnapshot(snapshot));
   if (!text) return;
 
   try {

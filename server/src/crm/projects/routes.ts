@@ -5,6 +5,10 @@ import { audit } from "../../audit.js";
 import { requireAdmin, requireTeam } from "../../auth/guard.js";
 import { prisma } from "../../db.js";
 import { env } from "../../env.js";
+import {
+  notifyNewProjectInBackground,
+  notifyProjectAssignedInBackground,
+} from "../../notify/notifications.js";
 import { projectScope } from "../access.js";
 import { invalidInput } from "../http.js";
 import { briefNotes, listNotes, noteRoutesFor } from "../notes.js";
@@ -204,6 +208,11 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
     });
 
     await audit(request, { entity: "projects", entityId: project.id, action: "create" });
+
+    // Заведённый сразу закрытым проект — запись задним числом, работы в нём нет.
+    if (!project.closedAt) {
+      notifyNewProjectInBackground(project, request.user!, request.log);
+    }
     return reply.code(201).send({ project: toProjectDto(project, env.TIMEZONE) });
   });
 
@@ -308,6 +317,14 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
       action: "update",
       diff: { status: { from: existing.status, to: project.status } },
     });
+
+    // Как у задач: состав приходит целиком, поэтому будим только добавленных.
+    const added = project.developers.filter(
+      (name) => !existing.developers.includes(name),
+    );
+    if (added.length > 0 && !project.closedAt) {
+      notifyProjectAssignedInBackground(project, added, request.user!, request.log);
+    }
 
     return reply.send({ project: toProjectDto(project, env.TIMEZONE) });
   });

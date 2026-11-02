@@ -1,7 +1,7 @@
 import { runMonthlyDocumentsIfDue } from "../crm/projects/monthly-documents.js";
 import { prisma } from "../db.js";
 import { canNotify, env } from "../env.js";
-import { sendTeamDigest } from "./digest.js";
+import { sendMorningDigest } from "./digest.js";
 import { zonedNow } from "./zone.js";
 
 /**
@@ -42,7 +42,7 @@ async function runDigestIfDue(log: Log): Promise<void> {
     update: { ranOn: date },
   });
 
-  await sendTeamDigest(log);
+  await sendMorningDigest(log);
 }
 
 export function startScheduler(log: Log): () => void {

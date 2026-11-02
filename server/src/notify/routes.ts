@@ -6,6 +6,7 @@ import { requireCrmOrigin, requireTeam } from "../auth/guard.js";
 import { verifyPassword } from "../auth/password.js";
 import { prisma } from "../db.js";
 import { canNotify } from "../env.js";
+import { isPrivateChat } from "./notifications.js";
 
 /**
  * Привязка телеграма — личная настройка, она есть у всей команды. Что покажет
@@ -41,7 +42,12 @@ export async function telegramRoutes(app: FastifyInstance): Promise<void> {
       where: { id: request.user!.id },
       select: { telegramChatId: true },
     });
-    return reply.send({ available: canNotify, connected: Boolean(user?.telegramChatId) });
+    // Старая привязка к группе не считается: лично туда не напишешь.
+    const chatId = user?.telegramChatId;
+    return reply.send({
+      available: canNotify,
+      connected: Boolean(chatId && isPrivateChat(chatId)),
+    });
   });
 
   app.post(

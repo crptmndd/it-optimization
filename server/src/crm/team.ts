@@ -6,6 +6,7 @@ import { requireAdmin, requireTeam } from "../auth/guard.js";
 import { hashPassword, validatePasswordStrength } from "../auth/password.js";
 import { confirmAdmin, totpCode } from "../auth/two-factor.js";
 import { prisma } from "../db.js";
+import { isPrivateChat } from "../notify/notifications.js";
 import { memberNameOf } from "./access.js";
 import { invalidInput } from "./http.js";
 import { assertDevelopers, linkPerson } from "./people.js";
@@ -20,6 +21,7 @@ const ACCOUNT_FIELDS = {
   name: true,
   role: true,
   totpEnabledAt: true,
+  telegramChatId: true,
   lastLoginAt: true,
   disabledAt: true,
   createdAt: true,
@@ -36,6 +38,8 @@ function toAccountDto(row: AccountRow) {
     role: row.role,
     memberName: memberNameOf(row),
     twoFactorEnabled: row.totpEnabledAt !== null,
+    // Сам чат наружу не отдаётся. Админу без лички бот не напишет ничего.
+    telegramLinked: Boolean(row.telegramChatId && isPrivateChat(row.telegramChatId)),
     lastLoginAt: row.lastLoginAt?.toISOString() ?? null,
     disabledAt: row.disabledAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),

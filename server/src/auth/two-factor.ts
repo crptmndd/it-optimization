@@ -5,8 +5,9 @@ import { z } from "zod";
 import { audit } from "../audit.js";
 import { canVault, open, seal } from "../crypto/sealed.js";
 import { prisma } from "../db.js";
-import { canNotify, env } from "../env.js";
-import { escapeHtml, trySendMessage } from "../notify/telegram.js";
+import { env } from "../env.js";
+import { notifyAdmins } from "../notify/notifications.js";
+import { escapeHtml } from "../notify/telegram.js";
 import { requireAuth } from "./guard.js";
 import { verifyPassword } from "./password.js";
 import { createSession, hashToken, toUserDto, WITH_MEMBER } from "./session.js";
@@ -122,13 +123,10 @@ function noStore(reply: FastifyReply): void {
 }
 
 /** Отправка в фоне: ответ её не ждёт, а сбой телеграма только логируется. */
-function tellTeam(request: FastifyRequest, text: string): void {
-  if (!canNotify || !env.TELEGRAM_TEAM_CHAT_ID) return;
-  void trySendMessage(env.TELEGRAM_TEAM_CHAT_ID, text, request.log).catch(
-    (cause: unknown) => {
-      request.log.warn({ err: cause }, "сообщение о блокировке не отправлено");
-    },
-  );
+function tellAdmins(request: FastifyRequest, text: string): void {
+  void notifyAdmins(text, request.log).catch((cause: unknown) => {
+    request.log.warn({ err: cause }, "сообщение о блокировке не отправлено");
+  });
 }
 
 /**
@@ -147,7 +145,7 @@ async function reportLock(
     action: "2fa_locked",
     userId,
   });
-  tellTeam(
+  tellAdmins(
     request,
     `🔒 Вход заблокирован после ${MAX_FAILED_CODES} неверных кодов: ${escapeHtml(email)}`,
   );
@@ -161,7 +159,7 @@ async function reportSetupReset(
 ): Promise<void> {
   request.log.warn({ userId }, "подключение 2FA сброшено после неверных кодов");
   await audit(request, { entity: "users", entityId: userId, action: "2fa_setup_reset" });
-  tellTeam(
+  tellAdmins(
     request,
     `🔒 Подключение 2FA сброшено после ${MAX_FAILED_CODES} неверных кодов: ${escapeHtml(email)}`,
   );

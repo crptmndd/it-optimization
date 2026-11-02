@@ -1,4 +1,4 @@
-import { buildDigest, sendTeamDigest } from "../notify/digest.js";
+import { buildDigest, sendMorningDigest } from "../notify/digest.js";
 import { prisma } from "../db.js";
 
 /**
@@ -21,7 +21,7 @@ function strip(html: string): string {
 
 async function main(): Promise<void> {
   if (process.argv.includes("send")) {
-    await sendTeamDigest({
+    await sendMorningDigest({
       info: (_obj, msg) => console.log(msg),
       warn: (_obj, msg) => console.warn(msg),
       error: (obj, msg) => console.error(msg, obj),

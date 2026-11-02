@@ -293,6 +293,38 @@ export async function collectTodayFor(
   return collectToday({ developer: member, workOnly: true, viewer });
 }
 
+/**
+ * Что можно показать общему чату: работа сотрудников и задачи, ждущие исполнителя. Там
+ * сидят сотрудники, поэтому денег, продлений и работы только админов здесь нет, это
+ * уходит админам лично. Человек без учётки считается сотрудником: написать ему лично
+ * всё равно некуда.
+ */
+export async function teamChatSnapshot(source: TodaySnapshot): Promise<TodaySnapshot> {
+  const admins = await prisma.teamMember.findMany({
+    where: { user: { role: "admin", disabledAt: null } },
+    select: { name: true },
+  });
+  const adminNames = new Set(admins.map((member) => member.name));
+  const hasEmployee = (developers: string[]) =>
+    developers.some((name) => !adminNames.has(name));
+  const visible = (task: TaskFull) =>
+    task.developers.length === 0 || hasEmployee(task.developers);
+
+  const empty = emptySnapshot();
+  return {
+    ...empty,
+    tasks: {
+      overdue: source.tasks.overdue.filter(visible),
+      today: source.tasks.today.filter(visible),
+      unassigned: source.tasks.unassigned,
+    },
+    projects: {
+      ...empty.projects,
+      urgent: source.projects.urgent.filter((project) => hasEmployee(project.developers)),
+    },
+  };
+}
+
 function emptySnapshot(): TodaySnapshot {
   return {
     tasks: { overdue: [], today: [], unassigned: [] },

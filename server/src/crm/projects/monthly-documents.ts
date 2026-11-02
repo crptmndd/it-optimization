@@ -1,7 +1,8 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../../db.js";
-import { canNotify, env } from "../../env.js";
-import { escapeHtml, fitMessage, trySendMessage } from "../../notify/telegram.js";
+import { env } from "../../env.js";
+import { notifyAdmins } from "../../notify/notifications.js";
+import { escapeHtml, fitMessage } from "../../notify/telegram.js";
 import { periodTitle, zonedNow } from "../../notify/zone.js";
 import { formatMoney } from "../currency.js";
 import { currentPeriod, unbilled } from "./dto.js";
@@ -100,10 +101,9 @@ function billsMessage(period: string, bills: CreatedBill[]): string {
 
 /** Счета уже созданы, поэтому сбой отправки только логируется и ничего не откатывает. */
 async function announce(period: string, bills: CreatedBill[], log: Log): Promise<void> {
-  const chatId = env.TELEGRAM_TEAM_CHAT_ID;
-  if (!canNotify || !chatId || bills.length === 0) return;
+  if (bills.length === 0) return;
   try {
-    await trySendMessage(chatId, billsMessage(period, bills), log);
+    await notifyAdmins(billsMessage(period, bills), log);
   } catch (cause) {
     log.warn({ err: cause }, "сообщение о счетах за месяц не отправлено");
   }

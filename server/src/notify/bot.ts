@@ -1,11 +1,11 @@
 import type { Prisma } from "@prisma/client";
 import { WITH_MEMBER } from "../auth/session.js";
 import { memberNameOf } from "../crm/access.js";
-import { collectTodayFor } from "../crm/today.js";
+import { collectToday, collectTodayFor, teamChatSnapshot } from "../crm/today.js";
 import { prisma } from "../db.js";
 import { env } from "../env.js";
 import { buildDigest } from "./digest.js";
-
+import { isPrivateChat } from "./notifications.js";
 import { callBotApi, escapeHtml, trySendMessage } from "./telegram.js";
 
 /**
@@ -35,13 +35,14 @@ interface TelegramUpdate {
 }
 
 const HELP = [
-  "Я напоминаю о задачах, сроках и деньгах в общем чате команды.",
+  "Я напоминаю о задачах, сроках и деньгах: сотрудникам в общем чате, админам лично.",
   "",
   "<b>/today</b> — что горит прямо сейчас",
   "<b>/chatid</b> — идентификатор этого чата",
   "<b>/stop</b> — отвязать этот чат от учётки",
   "",
-  "Каждое утро пишу в общий чат просроченное и запланированное на сегодня.",
+  "Каждое утро пишу в общий чат просроченное и запланированное на сегодня,",
+  "а админам лично полную сводку.",
   "Если писать не о чем — молчу.",
 ].join("\n");
 
@@ -127,9 +128,13 @@ async function linkByCode(
   );
   await rememberHandle(user.id, username, log);
   log.info({ email: user.email }, "телеграм привязан");
+  const next =
+    user.role === "admin"
+      ? "Счета, сводка, новые проекты и ваши задачи будут приходить сюда."
+      : "Команда /today покажет здесь вашу работу, а задачи приходят в общий чат.";
   await trySendMessage(
     chatId,
-    `Готово, ${escapeHtml(user.name ?? user.email)}. Чат привязан: команда /today покажет здесь сводку, а напоминания приходят в общий чат.\n\n${HELP}`,
+    `Готово, ${escapeHtml(user.name ?? user.email)}. Чат привязан. ${next}\n\n${HELP}`,
     log,
   );
 }
@@ -149,7 +154,7 @@ async function handleCommand(
       // У групп идентификатор отрицательный, как и в `mention`. Привязка в группе дала бы
       // её участникам личную сводку. Код там уже прочитан всеми, поэтому он гаснет: иначе
       // любой из них прислал бы его боту в личку и привязал свой телеграм к чужой учётке.
-      if (!/^\d+$/.test(chatId)) {
+      if (!isPrivateChat(chatId)) {
         await prisma.user.updateMany({
           where: { telegramLinkCode: argument.toUpperCase() },
           data: { telegramLinkCode: null, telegramLinkExpiresAt: null },
@@ -207,7 +212,14 @@ async function handleCommand(
   if (command === "/today") {
     // Общий чат получает общую сводку, кто бы ни спросил: утром туда приходит она же.
     if (chatId === env.TELEGRAM_TEAM_CHAT_ID) {
-      await trySendMessage(chatId, (await buildDigest()) ?? NOTHING_BURNS, log);
+      const digest = await buildDigest(await teamChatSnapshot(await collectToday()));
+      await trySendMessage(chatId, digest ?? NOTHING_BURNS, log);
+      return;
+    }
+
+    // Старая привязка к группе не должна открывать её участникам сводку учётки.
+    if (!isPrivateChat(chatId)) {
+      await trySendMessage(chatId, "Сводка доступна в личном чате с ботом.", log);
       return;
     }
 
