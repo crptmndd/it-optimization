@@ -189,30 +189,40 @@ export function ProjectStages({
   }
 
   /**
-   * Сумма, набранная перед отметкой, сохраняется первой: иначе этап стал бы оплаченным
-   * без суммы, а итог договора занижен. Своя строка важнее общей, как и в
-   * `enteredAmounts`, а черновики других строк этой отметки не касаются.
+   * Что набрано перед отметкой, сохраняется первым: иначе этап стал бы оплаченным без
+   * суммы или не в той валюте, а заблокированный выбор показывал бы другую. Своя строка
+   * важнее общей, как и в `enteredAmounts`, а черновики других строк этой отметки не
+   * касаются.
    *
    * Общая делится здесь же, пока этап не оплачен: после отметки сервер считал бы его за
    * ноль и отдал всю сумму двум другим. Очищенное поле не применяется: оно стёрло бы
    * сумму, которая видна в строке оплачиваемого этапа.
    */
+  async function writeBeforePaid(stage: Stage, index: number) {
+    const typed = parseAmount(amounts[index] ?? "");
+    const saved = loaded.map((item) => item.amountMinor);
+    if (typed !== stage.amountMinor) {
+      await saveStageAmounts(projectId, {
+        amounts: saved.map((value, at) => (at === index ? typed : value)),
+        currency,
+      });
+      return;
+    }
+    const entered = enteredAmounts();
+    if (entered && "totalMinor" in entered && entered.totalMinor !== null) {
+      show(await saveStageAmounts(projectId, { ...entered, currency }));
+    } else if (currency !== stage.currency) {
+      await saveStageAmounts(projectId, { amounts: saved, currency });
+    }
+  }
+
   function togglePaid(stage: Stage, index: number) {
     if (stage.paidAt) {
       void changeStage(() => patch(stage, { paidAt: null }));
       return;
     }
     void changeStage(async () => {
-      const typed = parseAmount(amounts[index] ?? "");
-      const entered = enteredAmounts();
-      if (editable && typed !== stage.amountMinor) {
-        await saveStageAmounts(projectId, {
-          amounts: loaded.map((item, at) => (at === index ? typed : item.amountMinor)),
-          currency,
-        });
-      } else if (entered && "totalMinor" in entered && entered.totalMinor !== null) {
-        show(await saveStageAmounts(projectId, { ...entered, currency }));
-      }
+      if (editable) await writeBeforePaid(stage, index);
       await patch(stage, { paidAt: new Date().toISOString() });
     });
   }
