@@ -84,7 +84,7 @@ function archiveHandler(action: "archive" | "unarchive") {
         where: { id, deletedAt: null, archivedAt: archive ? null : { not: null } },
         data: { archivedAt: archive ? new Date() : null },
       });
-      if (count > 0 && !archive) await rememberUnbilledMonth(tx, id);
+      if (count > 0) await rememberUnbilledMonth(tx, id);
       return count;
     });
 
@@ -349,16 +349,17 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
 
     // Задачи проекта уходят вместе с ним: у задачи вне проекта, который её
     // породил, нет смысла. Мягко, как и сам проект.
-    await prisma.$transaction([
-      prisma.project.update({
+    await prisma.$transaction(async (tx) => {
+      await tx.project.update({
         where: { id: project.id },
         data: { deletedAt: new Date() },
-      }),
-      prisma.task.updateMany({
+      });
+      await tx.task.updateMany({
         where: { projectId: project.id, deletedAt: null },
         data: { deletedAt: new Date() },
-      }),
-    ]);
+      });
+      await rememberUnbilledMonth(tx, project.id);
+    });
 
     await audit(request, {
       entity: "projects",
