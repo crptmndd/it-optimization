@@ -32,6 +32,8 @@ export interface Credential {
   currency: Currency;
   monthlyFee: boolean;
   notes: string | null;
+  /** Когда запись закрепил текущий пользователь. Набор у каждого свой. */
+  pinnedAt: string | null;
 }
 
 export interface CredentialInput {
@@ -78,6 +80,15 @@ export async function updateCredential(
 
 export async function deleteCredential(id: string): Promise<void> {
   await api.delete<void>(`/credentials/${id}`);
+}
+
+export async function pinCredential(id: string): Promise<string> {
+  const { pinnedAt } = await api.put<{ pinnedAt: string }>(`/credentials/${id}/pin`);
+  return pinnedAt;
+}
+
+export async function unpinCredential(id: string): Promise<void> {
+  await api.delete<void>(`/credentials/${id}/pin`);
 }
 
 export interface RevealedPassword {

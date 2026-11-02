@@ -15,6 +15,8 @@ import type { Credential, Currency, Prisma, Project } from "@prisma/client";
  */
 export type CredentialWithProject = Credential & {
   project: Pick<Project, "id" | "title"> | null;
+  /** Отметка того, кто спрашивает. Без неё, как на экране «Сегодня», запись не закреплена. */
+  pins?: { createdAt: Date }[];
 };
 
 /**
@@ -45,6 +47,8 @@ export interface CredentialDto {
   currency: Currency;
   monthlyFee: boolean;
   notes: string | null;
+  /** Когда запись закрепил тот, кто спрашивает. */
+  pinnedAt: string | null;
 }
 
 export function isLegacyPending(
@@ -70,5 +74,6 @@ export function toCredentialDto(item: CredentialWithProject): CredentialDto {
     currency: item.currency,
     monthlyFee: item.monthlyFee,
     notes: item.notes,
+    pinnedAt: item.pins?.[0]?.createdAt.toISOString() ?? null,
   };
 }

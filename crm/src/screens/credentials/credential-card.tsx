@@ -1,4 +1,14 @@
-import { Check, Copy, ExternalLink, Eye, EyeOff, Lock, Pencil } from "lucide-react";
+import {
+  Check,
+  Copy,
+  ExternalLink,
+  Eye,
+  EyeOff,
+  Lock,
+  Pencil,
+  Pin,
+  PinOff,
+} from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -297,6 +307,12 @@ function PasswordDetail({ item, reveal }: { item: Credential; reveal: RevealPass
   );
 }
 
+/** Значок закрепления: тот же смысл в строке списка и на кнопке карточки. */
+export function PinIcon({ pinned, size = 15 }: { pinned: boolean; size?: number }) {
+  const Icon = pinned ? PinOff : Pin;
+  return <Icon size={size} strokeWidth={2.25} />;
+}
+
 /**
  * Карточка записи: то, ради чего сюда приходят чаще всего, логин с паролем, плюс срок
  * оплаты. Править здесь нельзя намеренно, правка живёт в отдельной форме.
@@ -308,6 +324,7 @@ export function CredentialCard({
   item,
   reveal,
   onEdit,
+  onPin,
   onPaid,
   onEscape,
   inModal = false,
@@ -318,6 +335,7 @@ export function CredentialCard({
   item: Credential;
   reveal: RevealPassword;
   onEdit: () => void;
+  onPin: () => void;
   /** Ошибку сообщает через `report`: показать её надо рядом с нажатой кнопкой. */
   onPaid: (report: (failure: string | null) => void) => Promise<void>;
   onEscape?: () => void;
@@ -328,10 +346,19 @@ export function CredentialCard({
   const [paidError, setPaidError] = useState<string | null>(null);
   const renews = item.renewsAt ? describeDeadline(item.renewsAt) : null;
 
+  const pinned = Boolean(item.pinnedAt);
+
   const edit = (
     <>
       <Pencil size={15} strokeWidth={2.25} />
       Изменить
+    </>
+  );
+
+  const pin = (
+    <>
+      <PinIcon pinned={pinned} />
+      {pinned ? "Открепить" : "Закрепить"}
     </>
   );
 
@@ -426,14 +453,20 @@ export function CredentialCard({
     return (
       <div ref={ref} tabIndex={-1} className="outline-none">
         {body}
-        <Button
-          type="button"
-          variant="secondary"
-          onClick={onEdit}
-          className="mt-4 h-11 w-full"
-        >
-          {edit}
-        </Button>
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={onPin}
+            aria-pressed={pinned}
+            className="h-11"
+          >
+            {pin}
+          </Button>
+          <Button type="button" variant="secondary" onClick={onEdit} className="h-11">
+            {edit}
+          </Button>
+        </div>
       </div>
     );
   }
@@ -447,13 +480,25 @@ export function CredentialCard({
       }}
       className={cn("px-5 py-4 outline-none sm:px-6 sm:py-5", className)}
     >
-      <div className="flex items-start justify-between gap-3">
-        <h2 className="min-w-0 text-xl leading-8 font-extrabold tracking-tight [overflow-wrap:anywhere]">
+      {/* В узкой колонке кнопки уходят под название: рядом с ним оно ломалось по слогам. */}
+      <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+        <h2 className="min-w-0 flex-[1_1_12rem] text-xl leading-8 font-extrabold tracking-tight [overflow-wrap:anywhere]">
           {item.service}
         </h2>
-        <Button type="button" variant="secondary" size="sm" onClick={onEdit}>
-          {edit}
-        </Button>
+        <div className="flex shrink-0 gap-2">
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={onPin}
+            aria-pressed={pinned}
+          >
+            {pin}
+          </Button>
+          <Button type="button" variant="secondary" size="sm" onClick={onEdit}>
+            {edit}
+          </Button>
+        </div>
       </div>
       {body}
     </Card>

@@ -171,6 +171,7 @@ curl http://localhost:4000/health          # {"ok":true}
 | ------------- | ------------------------- | --------- | --------- |
 | GET, POST     | `/credentials`            | `admin`   |           |
 | PATCH, DELETE | `/credentials/:id`        | `admin`   |           |
+| PUT, DELETE   | `/credentials/:id/pin`    | `admin`   |           |
 | POST          | `/credentials/:id/reveal` | `admin`   | 60/5 мин  |
 | POST          | `/credentials/legacy`     | `admin`   | 10/5 мин  |
 | POST          | `/credentials/migrate`    | `admin`   | 10/5 мин  |

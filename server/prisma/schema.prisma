@@ -193,9 +193,9 @@ model ContentRevision {
 /// API на старый образ работает без SQL. В сыром SQL писать старые значения.
 enum UserRole {
   /// Видит всё: команду, деньги, доступы, панель сайта.
-  admin    @map("owner")
+  admin     @map("owner")
   /// Видит только своё: см. `src/crm/access.ts`.
-  employee @map("editor")
+  employee  @map("editor")
   /// Устарело, строк нет. Осталось только потому, что Postgres не умеет удалять
   /// значение enum.
   marketing
@@ -238,6 +238,7 @@ model User {
   totpSetupAt        DateTime? @map("totp_setup_at")
 
   sessions      Session[]
+  pins          CredentialPin[]
   actions       AuditLog[]
   recoveryCodes RecoveryCode[]
   loginTickets  LoginTicket[]
@@ -501,17 +502,17 @@ model Project {
   /// Порядок внутри колонки на доске.
   position Int @default(0)
 
-  startedAt  DateTime? @map("started_at")
-  deadline   DateTime?
-  closedAt   DateTime? @map("closed_at")
+  startedAt    DateTime? @map("started_at")
+  deadline     DateTime?
+  closedAt     DateTime? @map("closed_at")
   /// Архив — отдельный признак, а не статус: проект в архиве сохраняет итог
   /// («сдан», «отменён»), а статус говорит о работе, не о том, видно ли его.
-  archivedAt DateTime? @map("archived_at")
+  archivedAt   DateTime? @map("archived_at")
   /// Месяц ГГГГ-ММ, с которого считается «Не выставлено» у старого сопровождения
   /// без галочки, ставшего подходящим без единой записи. Без него первой записью
   /// станет следующий месяц, и этот пропадёт из списка молча. Ставит и снимает
   /// rememberUnbilledMonth() в projects/monthly-documents.ts.
-  unbilledFrom String? @map("unbilled_from")
+  unbilledFrom String?   @map("unbilled_from")
 
   /// Кейс на сайте, в который превратился проект. Связь ставится в момент
   /// публикации; удаление кейса обнуляет её, но не трогает сам проект.
@@ -714,9 +715,26 @@ model Credential {
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
 
+  pins CredentialPin[]
+
   @@index([service])
   @@index([projectId])
   @@map("credentials")
+}
+
+/// Закреплённая запись в Доступах. Отдельная таблица, а не поле записи: набор у каждого
+/// админа свой. Время нужно для порядка в группе: новая отметка встаёт в конец и не
+/// сдвигает то, что человек уже помнит по месту.
+model CredentialPin {
+  userId       String     @map("user_id") @db.Uuid
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  credentialId String     @map("credential_id") @db.Uuid
+  credential   Credential @relation(fields: [credentialId], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now()) @map("created_at")
+
+  @@id([userId, credentialId])
+  @@index([credentialId])
+  @@map("credential_pins")
 }
 
 /// Отметки планировщика: «эта рассылка за такое-то число уже ушла».

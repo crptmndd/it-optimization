@@ -8,6 +8,8 @@ import {
   createCredential,
   deleteCredential,
   listCredentials,
+  pinCredential,
+  unpinCredential,
   updateCredential,
   type Credential,
 } from "@/api/credentials";
@@ -34,7 +36,7 @@ import {
 import { listProjects, type Project } from "@/api/projects";
 import { fee } from "@/lib/money";
 import { useRevealPassword } from "@/components/two-factor-prompt";
-import { CredentialCard, PaidButton, renewsSoon } from "./credential-card";
+import { CredentialCard, PaidButton, PinIcon, renewsSoon } from "./credential-card";
 import { CredentialModal, empty, toInput, toValues } from "./credential-form";
 import { LegacyMigration } from "./legacy-migration";
 
@@ -76,6 +78,12 @@ function useWide(): boolean {
  * курсор встаёт кнопка соседней, и второе нажатие двойного клика оплатило бы её.
  */
 const PAID_PAUSE_MS = 800;
+
+/** То же для закрепления: строка уезжает наверх, под курсором оказывается соседняя. */
+const PIN_PAUSE_MS = 600;
+
+/** Ключ группы закреплённых. Настоящие ключи — uuid проекта или пустая строка. */
+const PINNED_GROUP = "pinned";
 
 /** Запись, к которой надо подвести, даже если её сейчас прячет поиск или фильтр. */
 interface Target {
@@ -122,10 +130,14 @@ export function CredentialsScreen() {
   const [cardFocus, setCardFocus] = useState(0);
   /** Номер последнего запроса списка: ответ на более ранний уже никому не нужен. */
   const loadSeq = useRef(0);
+  /** Номер последнего дошедшего ответа: разница с `loadSeq` значит, что запрос ещё идёт. */
+  const loadDone = useRef(0);
   /** Текущий поиск для `load`: после продления и формы он мог смениться, пока шёл запрос. */
   const query = useRef("");
   /** До какого момента «Оплатил» не срабатывает, на всех записях сразу. */
   const paidPause = useRef(0);
+  /** До какого момента закрепление не срабатывает, на всех записях сразу. */
+  const pinPause = useRef(0);
   // Одно окно кода на экран: и карточка, и форма просят его одинаково.
   const { reveal, prompt } = useRevealPassword();
   const wide = useWide();
@@ -156,10 +168,12 @@ export function CredentialsScreen() {
         text ? listCredentials() : null,
       ]);
       if (seq !== loadSeq.current) return;
+      loadDone.current = seq;
       setItems(found);
       setAll(whole ?? found);
     } catch (cause) {
       if (seq !== loadSeq.current) return;
+      loadDone.current = seq;
       setError(cause instanceof ApiError ? cause.message : "Не удалось загрузить");
       setItems([]);
       setAll((current) => current ?? []);
@@ -183,6 +197,36 @@ export function CredentialsScreen() {
       report(cause instanceof ApiError ? cause.message : "Не удалось продлить");
     } finally {
       paidPause.current = Date.now() + PAID_PAUSE_MS;
+    }
+  }
+
+  /** Только эта запись: перечитанный список скрыл бы пароль, открытый в карточке. */
+  function setPinnedAt(id: string, pinnedAt: string | null) {
+    const update = (list: Credential[] | null) =>
+      list && list.map((item) => (item.id === id ? { ...item, pinnedAt } : item));
+    setItems(update);
+    setAll(update);
+  }
+
+  /** Строка переезжает сразу, а не после ответа: ждать тут нечего. Сбой вернёт её назад. */
+  async function togglePin(item: Credential) {
+    if (Date.now() < pinPause.current) return;
+    pinPause.current = Date.now() + PIN_PAUSE_MS;
+
+    const before = item.pinnedAt ?? null;
+    setError(null);
+    // Без выбора карточка показывает первую строку, а первой станет закреплённая.
+    if (selected) setSelectedId(selected.id);
+    setPinnedAt(item.id, before ? null : new Date().toISOString());
+    try {
+      if (before) await unpinCredential(item.id);
+      setPinnedAt(item.id, before ? null : await pinCredential(item.id));
+    } catch (cause) {
+      setPinnedAt(item.id, before);
+      setError(cause instanceof ApiError ? cause.message : "Не удалось закрепить");
+    } finally {
+      // Ответ, отправленный до этой отметки, вернул бы строку на старое место.
+      if (loadDone.current !== loadSeq.current) void load();
     }
   }
 
@@ -251,7 +295,7 @@ export function CredentialsScreen() {
   // Фильтр применяется здесь, а не запросом: список доступов целиком уже в
   // памяти, и лишний поход в базу ради выборки по одному полю ничего не даст.
   const visible = items?.filter((item) => inProject(item, projectFilter));
-  const groups = visible ? groupByProject(visible) : [];
+  const groups = visible ? groupCredentials(visible) : [];
   /** В порядке показа: сосед при удалении и первая запись считаются по нему. */
   const rows = groups.flatMap((group) => group.items);
 
@@ -401,7 +445,9 @@ export function CredentialsScreen() {
                         key={item.id}
                         item={item}
                         selected={item.id === selected?.id}
+                        showProject={group.key === PINNED_GROUP}
                         onSelect={(keyboard) => choose(item, keyboard)}
+                        onPin={wide ? () => void togglePin(item) : undefined}
                       />
                     ))}
                   </List>
@@ -419,6 +465,7 @@ export function CredentialsScreen() {
               item={selected}
               reveal={reveal}
               onEdit={() => openEdit(selected)}
+              onPin={() => void togglePin(selected)}
               onPaid={(report) => markPaid(selected, report)}
               onEscape={() => focusRow(selected.id)}
               className="sticky top-0 max-h-[calc(100dvh-3.5rem)] overflow-y-auto"
@@ -437,6 +484,7 @@ export function CredentialsScreen() {
             item={sheetItem}
             reveal={reveal}
             onEdit={() => openEdit(sheetItem)}
+            onPin={() => void togglePin(sheetItem)}
             onPaid={(report) => markPaid(sheetItem, report)}
             inModal
           />
@@ -523,24 +571,49 @@ function groupByProject(items: Credential[]) {
   });
 }
 
+/**
+ * Закреплённое идёт отдельной группой над проектами и из своего проекта уходит: две
+ * одинаковые строки в списке читаются как две записи. Порядок по времени отметки, новая
+ * встаёт в конец и не сдвигает остальные.
+ */
+function groupCredentials(items: Credential[]) {
+  const pinned = items
+    .filter((item) => item.pinnedAt)
+    .sort((a, b) => a.pinnedAt!.localeCompare(b.pinnedAt!));
+  const projects = groupByProject(items.filter((item) => !item.pinnedAt));
+
+  if (pinned.length === 0) return projects;
+  return [{ key: PINNED_GROUP, title: "Закреплённые", items: pinned }, ...projects];
+}
+
 function Row({
   item,
   selected,
+  showProject,
   onSelect,
+  onPin,
 }: {
   item: Credential;
   selected: boolean;
+  /** Над закреплёнными нет заголовка проекта, и логин `root` сам ни о чём не скажет. */
+  showProject: boolean;
   /** `keyboard`: нажатие пришло с клавиатуры, у него `detail` равен нулю. */
   onSelect: (keyboard: boolean) => void;
+  /** Только на широком экране. На телефоне наведения нет, там кнопка в карточке. */
+  onPin?: () => void;
 }) {
   const soon = renewsSoon(item) ? describeDeadline(item.renewsAt!) : null;
+  const pinned = Boolean(item.pinnedAt);
+  const note = [item.login, showProject && item.project?.title]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <li
       data-card-id={item.id}
       className={cn(
         // На телефоне низ экрана закрыт панелью разделов: строка не должна встать под неё.
-        "scroll-my-4 transition-colors max-md:scroll-mb-24",
+        "group relative scroll-my-4 transition-colors max-md:scroll-mb-24",
         selected ? "bg-accent-soft" : "hover:bg-muted/60",
       )}
     >
@@ -550,16 +623,34 @@ function Row({
         aria-current={selected ? "true" : undefined}
         className="flex min-h-14 w-full items-center gap-3 px-4 py-2.5 text-left focus-visible:-outline-offset-2"
       >
-        <span className="min-w-0 flex-1">
+        <span className={cn("min-w-0 flex-1", onPin && !soon && "group-hover:pr-8")}>
           <span className="block truncate text-[15px] font-semibold">{item.service}</span>
-          {item.login && (
+          {note && (
             <span className="text-muted-foreground mt-0.5 block truncate text-[13px] font-medium">
-              {item.login}
+              {note}
             </span>
           )}
         </span>
-        {soon && <Badge tone={soon.tone}>{soon.label}</Badge>}
+        {soon && (
+          <span className={cn("transition-opacity", onPin && "group-hover:opacity-0")}>
+            <Badge tone={soon.tone}>{soon.label}</Badge>
+          </span>
+        )}
       </button>
+
+      {/* Вне порядка Tab: с клавиатуры закрепляют из карточки, иначе строк стало бы вдвое. */}
+      {onPin && (
+        <button
+          type="button"
+          tabIndex={-1}
+          onClick={onPin}
+          aria-label={pinned ? "Открепить" : "Закрепить"}
+          title={pinned ? "Открепить" : "Закрепить"}
+          className="text-muted-foreground hover:bg-disabled hover:text-foreground absolute top-1/2 right-3 flex size-8 -translate-y-1/2 items-center justify-center rounded-lg opacity-0 transition group-hover:opacity-100"
+        >
+          <PinIcon pinned={pinned} size={16} />
+        </button>
+      )}
     </li>
   );
 }

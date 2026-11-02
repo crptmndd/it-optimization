@@ -20,6 +20,14 @@ import { isLegacyPending, LEGACY_PENDING, toCredentialDto as toDto } from "./dto
 /** Название проекта нужно экрану для заголовка группы — тянем сразу. */
 const PROJECT_BRIEF = { project: { select: { id: true, title: true } } } as const;
 
+/** То же плюс отметка самого пользователя: чужие закрепления ему не показываются. */
+function briefFor(userId: string) {
+  return {
+    ...PROJECT_BRIEF,
+    pins: { where: { userId }, select: { createdAt: true } },
+  } as const;
+}
+
 /**
  * Справочник учёток сервисов: что есть, на кого записано, когда продлевать и
  * под каким паролем заходят.
@@ -131,7 +139,7 @@ export async function credentialRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const credentials = await prisma.credential.findMany({
-      include: PROJECT_BRIEF,
+      include: briefFor(request.user!.id),
       where,
       // Сначала то, что скоро продлевать; без даты — в конце по алфавиту.
       orderBy: [{ renewsAt: { sort: "asc", nulls: "last" } }, { service: "asc" }],
@@ -196,7 +204,7 @@ export async function credentialRoutes(app: FastifyInstance): Promise<void> {
     if (!existing) return reply.code(404).send({ error: "Запись не найдена" });
 
     const credential = await prisma.credential.update({
-      include: PROJECT_BRIEF,
+      include: briefFor(request.user!.id),
       where: { id: existing.id },
       data: {
         ...(input.service !== undefined && { service: input.service }),
@@ -249,6 +257,48 @@ export async function credentialRoutes(app: FastifyInstance): Promise<void> {
     });
     return reply.code(204).send();
   });
+
+  /**
+   * Закрепить запись для себя. PUT и DELETE, а не переключатель: повтор из второй вкладки
+   * или после сбоя сети не должен снимать отметку. В журнал не пишется, это настройка
+   * вида. Удалённая запись отметку сохраняет и возвращается из корзины закреплённой.
+   */
+  app.put(
+    "/credentials/:id/pin",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      const params = idParams.safeParse(request.params);
+      if (!params.success) return invalidInput(reply, params.error);
+
+      const existing = await prisma.credential.findFirst({
+        where: { id: params.data.id, deletedAt: null },
+        select: { id: true },
+      });
+      if (!existing) return reply.code(404).send({ error: "Запись не найдена" });
+
+      const pin = { userId: request.user!.id, credentialId: existing.id };
+      const { createdAt } = await prisma.credentialPin.upsert({
+        where: { userId_credentialId: pin },
+        create: pin,
+        update: {},
+      });
+      return reply.send({ pinnedAt: createdAt.toISOString() });
+    },
+  );
+
+  app.delete(
+    "/credentials/:id/pin",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      const params = idParams.safeParse(request.params);
+      if (!params.success) return invalidInput(reply, params.error);
+
+      await prisma.credentialPin.deleteMany({
+        where: { userId: request.user!.id, credentialId: params.data.id },
+      });
+      return reply.code(204).send();
+    },
+  );
 
   /**
    * Открыть пароль. Порядок строгий: сначала второй фактор, затем запись в журнал и
