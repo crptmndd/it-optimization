@@ -1,5 +1,4 @@
-import { Flame, Plus } from "lucide-react";
-import { useState } from "react";
+import { Flame } from "lucide-react";
 import { Link } from "react-router";
 import type { Project } from "@/api/projects";
 import {
@@ -10,16 +9,15 @@ import {
   type TaskPriority,
   type TaskStatus,
 } from "@/api/tasks";
-import { useCurrentUser } from "@/auth/auth-context";
+import { isAdmin, useCurrentUser } from "@/auth/auth-context";
 import { DateField } from "@/components/date-field";
 import { DeveloperPicker } from "@/components/developer-picker";
-import { Field, Input, Select, Switch, Textarea } from "@/components/ui";
+import { Field, Input, Select, Switch } from "@/components/ui";
 import { fromDateInputValue, toDateInputValue } from "@/lib/dates";
-import { useHandles } from "@/lib/handles";
+import { usePeople } from "@/lib/people";
 
 export interface TaskFormValues {
   title: string;
-  description: string;
   status: TaskStatus;
   priority: TaskPriority;
   projectId: string;
@@ -33,7 +31,6 @@ export function emptyTaskValues(defaults: {
 }): TaskFormValues {
   return {
     title: "",
-    description: "",
     status: "todo",
     priority: "normal",
     projectId: defaults.projectId ?? "",
@@ -45,7 +42,6 @@ export function emptyTaskValues(defaults: {
 export function taskToValues(task: Task): TaskFormValues {
   return {
     title: task.title,
-    description: task.description ?? "",
     status: task.status,
     priority: task.priority,
     projectId: task.project?.id ?? "",
@@ -54,10 +50,13 @@ export function taskToValues(task: Task): TaskFormValues {
   };
 }
 
+/**
+ * Описания в запросе нет вовсе: поля больше нет в форме, и `null` здесь стёр бы старое
+ * значение, которое на время выката ещё нужно откату.
+ */
 export function valuesToTaskInput(values: TaskFormValues): TaskInput {
   return {
     title: values.title.trim(),
-    description: values.description.trim() || null,
     status: values.status,
     priority: values.priority,
     projectId: values.projectId || null,
@@ -71,18 +70,25 @@ export function valuesToTaskInput(values: TaskFormValues): TaskInput {
  * и лучшее место напомнить о нём — момент, когда он понадобился.
  */
 function MissingHandleHint({ people }: { people: string[] }) {
-  const handles = useHandles();
-  const owner = useCurrentUser().role === "owner";
-  if (!handles) return null;
+  const team = usePeople();
+  const admin = isAdmin(useCurrentUser());
+  if (!team) return null;
 
-  const missing = people.filter((name) => !handles.get(name));
+  const missing = people.filter(
+    (name) => !team.find((person) => person.name === name)?.telegramUsername,
+  );
   if (missing.length === 0) return null;
 
   return (
     <p className="text-warning text-xs font-medium">
       {missing.join(", ")}: ник в Telegram не указан, бот может не отметить.{" "}
-      {owner && (
-        <Link to="/settings" className="font-bold underline underline-offset-2">
+      {admin && (
+        // В новой вкладке: ссылка стоит внутри окна, и уход закрыл бы несохранённую форму.
+        <Link
+          to="/settings?focus=team"
+          target="_blank"
+          className="font-bold underline underline-offset-2"
+        >
           Указать
         </Link>
       )}
@@ -111,8 +117,6 @@ export function TaskFields({
    */
   editing?: boolean;
 }) {
-  const [details, setDetails] = useState(values.description !== "");
-
   function set<K extends keyof TaskFormValues>(key: K, value: TaskFormValues[K]) {
     onChange({ ...values, [key]: value });
   }
@@ -189,26 +193,6 @@ export function TaskFields({
       {/* На всю ширину и под полями: в колонке текст переносился и сдвигал поле рядом
           прямо под открытым списком исполнителей. */}
       <MissingHandleHint people={values.developers} />
-
-      {details ? (
-        <Field label="Подробности">
-          <Textarea
-            value={values.description}
-            onChange={(event) => set("description", event.target.value)}
-            rows={3}
-            autoFocus={!editing}
-          />
-        </Field>
-      ) : (
-        <button
-          type="button"
-          onClick={() => setDetails(true)}
-          className="text-muted-foreground hover:text-foreground flex items-center gap-1.5 text-[13px] font-semibold transition"
-        >
-          <Plus size={15} strokeWidth={2.5} />
-          Добавить подробности
-        </button>
-      )}
     </div>
   );
 }

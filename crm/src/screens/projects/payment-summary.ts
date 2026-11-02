@@ -30,9 +30,20 @@ const MONTHLY: Record<"paid" | "unpaid" | "missing", PaymentSummary> = {
   missing: { label: "нет счёта", tone: "danger" },
 };
 
+/**
+ * Деньги приходят только в ответе для админа. Спрашивать надо ответ, а не роль вкладки:
+ * она прочитана при входе и понижения не заметит, а сервер применяет его сразу. Тип
+ * об этом не знает, `payment` в нём обязателен.
+ */
+export function hasMoney(project: Pick<Project, "payment">): boolean {
+  return "payment" in project;
+}
+
 export function paymentSummary(
   project: Pick<Project, "payment" | "status">,
 ): PaymentSummary | null {
+  if (!hasMoney(project)) return null;
+
   const { stages, monthly } = project.payment;
   const closed = CLOSED_PROJECT_STATUSES.includes(project.status);
 

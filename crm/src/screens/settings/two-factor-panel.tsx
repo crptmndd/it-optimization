@@ -6,7 +6,7 @@ import {
   type TwoFactorSetup,
   type TwoFactorStatus,
 } from "@/api/two-factor";
-import { useAuth, useCurrentUser } from "@/auth/auth-context";
+import { isAdmin, useAuth, useCurrentUser } from "@/auth/auth-context";
 import { Badge, Button, Card, ErrorNote, Field, Input } from "@/components/ui";
 import { formatDate } from "@/lib/dates";
 
@@ -14,7 +14,7 @@ import { formatDate } from "@/lib/dates";
  * Подключение 2FA. Шагов несколько, и каждый живёт в `step`: секрет и коды
  * восстановления показываются ровно один раз и только в состоянии этого компонента.
  *
- * Панель видят все, включая маркетолога: 2FA защищает вход, а не только пароли.
+ * Панель видят все, включая сотрудника: 2FA защищает вход, а не только пароли.
  */
 type Step =
   | { name: "idle" }
@@ -30,8 +30,8 @@ function errorText(cause: unknown, fallback: string): string {
 
 export function TwoFactorPanel({ onEnabled }: { onEnabled: () => void }) {
   const { refreshUser } = useAuth();
-  // Лаймовая кнопка одна на экран: у владельца это «Сохранить ники» ниже.
-  const owner = useCurrentUser().role === "owner";
+  // Лаймовая кнопка одна на экран: у админа это «Новый сотрудник» в «Команде».
+  const admin = isAdmin(useCurrentUser());
   const [status, setStatus] = useState<TwoFactorStatus | null>(null);
   const [step, setStep] = useState<Step>({ name: "idle" });
   const [password, setPassword] = useState("");
@@ -145,7 +145,9 @@ export function TwoFactorPanel({ onEnabled }: { onEnabled: () => void }) {
       </div>
       <p className="text-muted-foreground mt-1 text-sm">
         При входе, кроме пароля, нужен код из приложения: Google Authenticator, Яндекс
-        Ключ, 1Password. Без него пароли в Доступах не открываются.
+        Ключ, 1Password.
+        {/* Доступов сотрудник не видит, и упоминать их при нём незачем. */}
+        {admin && " Без него пароли в Доступах не открываются."}
       </p>
 
       {status && !status.available && (
@@ -184,7 +186,7 @@ export function TwoFactorPanel({ onEnabled }: { onEnabled: () => void }) {
           {status && !status.enabled && status.available && (
             <div className="mt-4">
               <Button
-                variant={owner ? "secondary" : "primary"}
+                variant={admin ? "secondary" : "primary"}
                 onClick={() => go({ name: "password" })}
               >
                 Подключить

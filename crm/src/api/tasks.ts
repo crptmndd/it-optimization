@@ -43,10 +43,13 @@ export interface Task {
   note?: NoteBrief | null;
   id: string;
   title: string;
-  description: string | null;
   status: TaskStatus;
   priority: TaskPriority;
   project: { id: string; title: string } | null;
+  /** Заполнен у подзадачи: своего экрана у неё нет, открывается родитель. */
+  parentId: string | null;
+  /** Прогресс для карточки и строки списка. Удалённые не считаются. */
+  subtasks: SubtaskProgress;
   developers: string[];
   dueAt: string | null;
   completedAt: string | null;
@@ -55,14 +58,40 @@ export interface Task {
   updatedAt: string;
 }
 
+export interface SubtaskProgress {
+  total: number;
+  done: number;
+}
+
+export interface Subtask {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  developers: string[];
+  completedAt: string | null;
+}
+
+/** Подзадачи целиком приходят только в карточке: на доске хватает прогресса. */
+export interface TaskDetail extends Task {
+  subtaskList: Subtask[];
+}
+
+/**
+ * Описания здесь нет намеренно: поля нет в форме, а сервер принимает его только ради
+ * старой вкладки на время выката. CRM не должна его ни затирать, ни присылать.
+ */
 export interface TaskInput {
   title?: string;
-  description?: string | null;
   status?: TaskStatus;
   priority?: TaskPriority;
   projectId?: string | null;
   developers?: string[];
   dueAt?: string | null;
+}
+
+/** Родителя можно указать только при создании: подзадачи не переезжают. */
+export interface NewTaskInput extends TaskInput {
+  parentId?: string;
 }
 
 export interface TaskFilters {
@@ -93,11 +122,16 @@ export async function listTasks(filters: TaskFilters = {}): Promise<Task[]> {
   return tasks;
 }
 
-export async function getTask(id: string): Promise<{ task: Task; notes: Note[] }> {
-  return api.get<{ task: Task; notes: Note[] }>(`/tasks/${id}`);
+export interface TaskWithNotes {
+  task: TaskDetail;
+  notes: Note[];
 }
 
-export async function createTask(input: TaskInput): Promise<Task> {
+export async function getTask(id: string): Promise<TaskWithNotes> {
+  return api.get<TaskWithNotes>(`/tasks/${id}`);
+}
+
+export async function createTask(input: NewTaskInput): Promise<Task> {
   const { task } = await api.post<{ task: Task }>("/tasks", input);
   return task;
 }

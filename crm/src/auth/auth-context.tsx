@@ -9,14 +9,24 @@ import {
 } from "react";
 import { api, ApiError } from "@/api/client";
 
-/** marketing видит только лиды — запрет продублирован на сервере. */
-export type UserRole = "owner" | "editor" | "marketing";
+/**
+ * Две роли. Скрытие разделов здесь вторично: настоящий запрет стоит на сервере, он
+ * читает роль на каждом запросе. Значения совпадают с API, а не с базой: там enum
+ * остался прежним ради отката.
+ */
+export type UserRole = "admin" | "employee";
 
 export interface User {
   id: string;
   email: string;
   name: string | null;
   role: UserRole;
+  /**
+   * Человек из команды, которым значится учётка: это его имя лежит в `developers`
+   * задач. Первое слово `name` больше не угадываем: `null` значит, что своих задач у
+   * учётки нет.
+   */
+  memberName: string | null;
   twoFactorEnabled: boolean;
   /** На сервере задан ключ: без него 2FA подключить нельзя. */
   twoFactorAvailable: boolean;
@@ -114,6 +124,11 @@ export function useAuth(): AuthContextValue {
   const context = useContext(AuthContext);
   if (!context) throw new Error("useAuth вызван вне AuthProvider");
   return context;
+}
+
+/** Одно место, где интерфейс решает, чьи разделы показывать. */
+export function isAdmin(user: { role: UserRole }): boolean {
+  return user.role === "admin";
 }
 
 /** Пользователь внутри защищённой части — там он гарантированно есть. */

@@ -2,7 +2,7 @@ import type { Currency, Invoice } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { audit } from "../../audit.js";
-import { requireTeam } from "../../auth/guard.js";
+import { requireAdmin } from "../../auth/guard.js";
 import { prisma } from "../../db.js";
 import { periodTitle } from "../../notify/zone.js";
 import { sumByCurrency } from "../currency.js";
@@ -82,7 +82,7 @@ export async function invoiceRoutes(app: FastifyInstance): Promise<void> {
    * Без этого «кто нам должен» отвечается только обходом каждого проекта по
    * очереди — то есть не отвечается вовсе. Здесь же общая сумма долга.
    */
-  app.get("/invoices", { preHandler: requireTeam }, async (request, reply) => {
+  app.get("/invoices", { preHandler: requireAdmin }, async (request, reply) => {
     const query = listQuery.safeParse(request.query);
     if (!query.success) return invalidInput(reply, query.error);
 
@@ -100,7 +100,9 @@ export async function invoiceRoutes(app: FastifyInstance): Promise<void> {
       where: { kind: "invoice", project: { deletedAt: null }, paidAt: null },
       orderBy: [{ period: "asc" }],
       include: {
-        project: { select: { id: true, title: true, client: { select: { name: true } } } },
+        project: {
+          select: { id: true, title: true, client: { select: { name: true } } },
+        },
       },
       take: 500,
     });
@@ -121,70 +123,82 @@ export async function invoiceRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  app.get("/projects/:id/invoices", { preHandler: requireTeam }, async (request, reply) => {
-    const params = projectParams.safeParse(request.params);
-    if (!params.success) return invalidInput(reply, params.error);
-    if (!(await projectExists(params.data.id))) {
-      return reply.code(404).send({ error: "Проект не найден" });
-    }
+  app.get(
+    "/projects/:id/invoices",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      const params = projectParams.safeParse(request.params);
+      if (!params.success) return invalidInput(reply, params.error);
+      if (!(await projectExists(params.data.id))) {
+        return reply.code(404).send({ error: "Проект не найден" });
+      }
 
-    const invoices = await prisma.invoice.findMany({
-      where: { projectId: params.data.id },
-      // Свежие периоды сверху: чаще всего смотрят текущий месяц.
-      orderBy: [{ period: "desc" }, { kind: "asc" }],
-    });
+      const invoices = await prisma.invoice.findMany({
+        where: { projectId: params.data.id },
+        // Свежие периоды сверху: чаще всего смотрят текущий месяц.
+        orderBy: [{ period: "desc" }, { kind: "asc" }],
+      });
 
-    return reply.send({ invoices: invoices.map(toInvoiceDto) });
-  });
+      return reply.send({ invoices: invoices.map(toInvoiceDto) });
+    },
+  );
 
-  app.post("/projects/:id/invoices", { preHandler: requireTeam }, async (request, reply) => {
-    const params = projectParams.safeParse(request.params);
-    if (!params.success) return invalidInput(reply, params.error);
+  app.post(
+    "/projects/:id/invoices",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      const params = projectParams.safeParse(request.params);
+      if (!params.success) return invalidInput(reply, params.error);
 
-    const parsed = invoiceBody.safeParse(request.body);
-    if (!parsed.success) return invalidInput(reply, parsed.error);
+      const parsed = invoiceBody.safeParse(request.body);
+      if (!parsed.success) return invalidInput(reply, parsed.error);
 
-    if (!(await projectExists(params.data.id))) {
-      return reply.code(404).send({ error: "Проект не найден" });
-    }
+      if (!(await projectExists(params.data.id))) {
+        return reply.code(404).send({ error: "Проект не найден" });
+      }
 
-    const input = parsed.data;
-    if (input.kind === "invoice" && (await paidByStages(params.data.id))) {
-      return reply.code(409).send({ error: STAGES_ONLY });
-    }
+      const input = parsed.data;
+      if (input.kind === "invoice" && (await paidByStages(params.data.id))) {
+        return reply.code(409).send({ error: STAGES_ONLY });
+      }
 
-    // Уникальность (проект, вид, период) держит база. Ловим её здесь, чтобы
-    // вместо «внутренней ошибки» человек увидел, что именно не так.
-    const duplicate = await prisma.invoice.count({
-      where: { projectId: params.data.id, kind: input.kind, period: input.period },
-    });
-    if (duplicate) {
-      const what = input.kind === "invoice" ? "Счёт" : "Акт";
-      return reply
-        .code(409)
-        .send({ error: `${what} за ${periodTitle(input.period)} уже заведён` });
-    }
+      // Уникальность (проект, вид, период) держит база. Ловим её здесь, чтобы
+      // вместо «внутренней ошибки» человек увидел, что именно не так.
+      const duplicate = await prisma.invoice.count({
+        where: { projectId: params.data.id, kind: input.kind, period: input.period },
+      });
+      if (duplicate) {
+        const what = input.kind === "invoice" ? "Счёт" : "Акт";
+        return reply
+          .code(409)
+          .send({ error: `${what} за ${periodTitle(input.period)} уже заведён` });
+      }
 
-    const invoice = await prisma.invoice.create({
-      data: {
-        projectId: params.data.id,
-        kind: input.kind,
-        period: input.period,
-        amountMinor: input.amountMinor ?? null,
-        currency: input.currency ?? "rub",
-        issuedAt: input.issuedAt ?? null,
-        paidAt: input.paidAt ?? null,
-        note: input.note ?? null,
-      },
-    });
+      const invoice = await prisma.invoice.create({
+        data: {
+          projectId: params.data.id,
+          kind: input.kind,
+          period: input.period,
+          amountMinor: input.amountMinor ?? null,
+          currency: input.currency ?? "rub",
+          issuedAt: input.issuedAt ?? null,
+          paidAt: input.paidAt ?? null,
+          note: input.note ?? null,
+        },
+      });
 
-    await audit(request, { entity: "invoices", entityId: invoice.id, action: "create" });
-    return reply.code(201).send({ invoice: toInvoiceDto(invoice) });
-  });
+      await audit(request, {
+        entity: "invoices",
+        entityId: invoice.id,
+        action: "create",
+      });
+      return reply.code(201).send({ invoice: toInvoiceDto(invoice) });
+    },
+  );
 
   app.patch(
     "/projects/:id/invoices/:invoiceId",
-    { preHandler: requireTeam },
+    { preHandler: requireAdmin },
     async (request, reply) => {
       const params = invoiceParams.safeParse(request.params);
       if (!params.success) return invalidInput(reply, params.error);
@@ -222,14 +236,18 @@ export async function invoiceRoutes(app: FastifyInstance): Promise<void> {
         return updated;
       });
 
-      await audit(request, { entity: "invoices", entityId: invoice.id, action: "update" });
+      await audit(request, {
+        entity: "invoices",
+        entityId: invoice.id,
+        action: "update",
+      });
       return reply.send({ invoice: toInvoiceDto(invoice) });
     },
   );
 
   app.delete(
     "/projects/:id/invoices/:invoiceId",
-    { preHandler: requireTeam },
+    { preHandler: requireAdmin },
     async (request, reply) => {
       const params = invoiceParams.safeParse(request.params);
       if (!params.success) return invalidInput(reply, params.error);

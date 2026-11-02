@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { requireTeam } from "../../auth/guard.js";
+import { requireAdmin } from "../../auth/guard.js";
 import { prisma } from "../../db.js";
 import { LEGACY_PENDING } from "../credentials/dto.js";
 
@@ -21,7 +21,7 @@ const ROW_ID = "vault";
 const GONE = "Мастер-фраза больше не используется";
 
 export async function vaultRoutes(app: FastifyInstance): Promise<void> {
-  app.get("/vault", { preHandler: requireTeam }, async (_request, reply) => {
+  app.get("/vault", { preHandler: requireAdmin }, async (_request, reply) => {
     const row = await prisma.vaultSetting.findUnique({ where: { id: ROW_ID } });
     if (!row) return reply.send({ configured: false });
 
@@ -39,11 +39,11 @@ export async function vaultRoutes(app: FastifyInstance): Promise<void> {
   // Задать фразу и сбросить хранилище больше нельзя. Маршруты отвечают явным отказом,
   // а не 404: старая вкладка CRM покажет понятный текст. Сброс к тому же стёр бы
   // колонку `secret`, а она запас на случай отката API.
-  app.post("/vault", { preHandler: requireTeam }, async (_request, reply) => {
+  app.post("/vault", { preHandler: requireAdmin }, async (_request, reply) => {
     return reply.code(410).send({ error: GONE });
   });
 
-  app.post("/vault/reset", { preHandler: requireTeam }, async (_request, reply) => {
+  app.post("/vault/reset", { preHandler: requireAdmin }, async (_request, reply) => {
     return reply.code(410).send({ error: GONE });
   });
 }

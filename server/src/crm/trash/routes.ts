@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { audit } from "../../audit.js";
-import { requireTeam } from "../../auth/guard.js";
+import { requireAdmin } from "../../auth/guard.js";
 import { invalidInput } from "../http.js";
 import { deleteNotes } from "../notes.js";
 import { purgeDeleted } from "./purge.js";
@@ -18,7 +18,7 @@ const entity = z.enum(TRASH_ENTITIES);
 const targetBody = z.object({ entity, id: z.string().uuid() });
 
 export async function trashRoutes(app: FastifyInstance): Promise<void> {
-  app.get("/trash", { preHandler: requireTeam }, async (_request, reply) => {
+  app.get("/trash", { preHandler: requireAdmin }, async (_request, reply) => {
     const groups = await Promise.all(
       Object.entries(TRASH).map(async ([key, model]) => {
         const entries = await model.list();
@@ -33,14 +33,12 @@ export async function trashRoutes(app: FastifyInstance): Promise<void> {
     );
 
     // Свежеудалённое сверху: если человек пришёл что-то вернуть, оно там.
-    const items = groups
-      .flat()
-      .sort((a, b) => b.deletedAt.localeCompare(a.deletedAt));
+    const items = groups.flat().sort((a, b) => b.deletedAt.localeCompare(a.deletedAt));
 
     return reply.send({ items, retentionDays: RETENTION_DAYS });
   });
 
-  app.post("/trash/restore", { preHandler: requireTeam }, async (request, reply) => {
+  app.post("/trash/restore", { preHandler: requireAdmin }, async (request, reply) => {
     const parsed = targetBody.safeParse(request.body);
     if (!parsed.success) return invalidInput(reply, parsed.error);
 
@@ -60,7 +58,7 @@ export async function trashRoutes(app: FastifyInstance): Promise<void> {
    * которым не место в базе лишний месяц: контакты человека, попросившего его
    * забыть, или доступ к сервису, с которым разошлись.
    */
-  app.post("/trash/purge", { preHandler: requireTeam }, async (request, reply) => {
+  app.post("/trash/purge", { preHandler: requireAdmin }, async (request, reply) => {
     const parsed = targetBody.safeParse(request.body);
     if (!parsed.success) return invalidInput(reply, parsed.error);
 
@@ -83,7 +81,7 @@ export async function trashRoutes(app: FastifyInstance): Promise<void> {
    * что старше нуля дней» — это и есть «удалить всё». Отдельной реализации
    * заводить незачем, иначе две логики удаления однажды разойдутся.
    */
-  app.post("/trash/empty", { preHandler: requireTeam }, async (request, reply) => {
+  app.post("/trash/empty", { preHandler: requireAdmin }, async (request, reply) => {
     const purged = await purgeDeleted(0);
 
     await audit(request, { entity: "trash", action: "empty", diff: { purged } });

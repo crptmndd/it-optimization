@@ -35,7 +35,9 @@ export function FilterToolbar({
   return (
     <div className={cn("mt-5 flex flex-wrap items-center gap-x-3 gap-y-2", className)}>
       {filters}
-      <div className="ml-auto flex min-w-0 items-center justify-end gap-2 max-sm:flex-1">
+      {/* Без нулевой основы: блок, который не влезает рядом со срезом, должен уйти на свою
+          строку, а не сжаться и лечь на него. */}
+      <div className="ml-auto flex min-w-0 items-center justify-end gap-2 max-sm:grow">
         {search}
         {view && (
           <Segmented

@@ -1,6 +1,6 @@
 import { HashRouter, Navigate, Route, Routes } from "react-router";
 import { Shell } from "@/components/shell";
-import { AuthProvider, useAuth } from "@/auth/auth-context";
+import { AuthProvider, isAdmin, useAuth } from "@/auth/auth-context";
 import { ClientsScreen } from "@/screens/clients/clients-screen";
 import { CredentialsScreen } from "@/screens/credentials/credentials-screen";
 import { LeadsScreen } from "@/screens/leads/leads-screen";
@@ -25,35 +25,27 @@ function Routed() {
 
   if (state.status === "anonymous") return <LoginScreen />;
 
-  // Маркетолог ведёт только лиды, и только ему они и нужны: команда раздела не
-  // видит. Маршруты остальных разделов ему просто не существуют — при попытке
-  // зайти по адресу он окажется на лидах. Настоящий запрет при этом стоит на
-  // сервере: сюда он бы всё равно упёрся в 403.
-  if (state.user.role === "marketing") {
-    return (
-      <Routes>
-        <Route element={<Shell />}>
-          <Route path="leads" element={<LeadsScreen />} />
-          <Route path="settings" element={<SettingsScreen />} />
-          <Route path="*" element={<Navigate to="/leads" replace />} />
-        </Route>
-      </Routes>
-    );
-  }
-
   return (
     <Routes>
       <Route element={<Shell />}>
         <Route index element={<TodayScreen />} />
         <Route path="projects" element={<ProjectsScreen />} />
         <Route path="tasks" element={<TasksScreen />} />
-        <Route path="clients" element={<ClientsScreen />} />
-        <Route path="invoices" element={<InvoicesScreen />} />
-        {/* Старый адрес раздела: он остался в закладках. */}
-        <Route path="money" element={<Navigate to="/invoices" replace />} />
-        <Route path="credentials" element={<CredentialsScreen />} />
-        <Route path="trash" element={<TrashScreen />} />
         <Route path="settings" element={<SettingsScreen />} />
+        {/* Разделов админа для сотрудника просто нет: по адресу он окажется на главной.
+            Настоящий запрет стоит на сервере, здесь он упёрся бы в 403. Лиды только по
+            адресу: раздел убран из меню, а данные и код остаются. */}
+        {isAdmin(state.user) && (
+          <>
+            <Route path="leads" element={<LeadsScreen />} />
+            <Route path="clients" element={<ClientsScreen />} />
+            <Route path="invoices" element={<InvoicesScreen />} />
+            {/* Старый адрес раздела: он остался в закладках. */}
+            <Route path="money" element={<Navigate to="/invoices" replace />} />
+            <Route path="credentials" element={<CredentialsScreen />} />
+            <Route path="trash" element={<TrashScreen />} />
+          </>
+        )}
         {/* Неизвестный адрес — не ошибка, а промах: возвращаем на главную. */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

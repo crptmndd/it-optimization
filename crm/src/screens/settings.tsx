@@ -11,14 +11,14 @@ import {
   Input,
   PageHeader,
 } from "@/components/ui";
-import { useCurrentUser } from "@/auth/auth-context";
+import { isAdmin, useCurrentUser } from "@/auth/auth-context";
+import { cn } from "@/lib/cn";
 import { TeamPanel } from "./settings/team-panel";
 import { TwoFactorPanel } from "./settings/two-factor-panel";
 
 export function SettingsScreen() {
   const user = useCurrentUser();
-  // Сводка бота — про проекты, задачи и деньги; маркетолог их не видит.
-  const canUseBot = user.role !== "marketing";
+  const admin = isAdmin(user);
   const [status, setStatus] = useState<TelegramStatus | null>(null);
   const [code, setCode] = useState<string | null>(null);
   /** Код выдаётся только по паролю: куки мало, чат читает сводку мимо сессий. */
@@ -28,14 +28,13 @@ export function SettingsScreen() {
   const [pending, setPending] = useState(false);
 
   const load = useCallback(() => {
-    if (!canUseBot) return;
     telegramApi
       .status()
       .then(setStatus)
       .catch((cause: unknown) => {
         setError(cause instanceof ApiError ? cause.message : "Не удалось загрузить");
       });
-  }, [canUseBot]);
+  }, []);
 
   useEffect(load, [load]);
 
@@ -70,19 +69,21 @@ export function SettingsScreen() {
   }
 
   return (
-    <section className="max-w-[720px]">
+    // Строке команды нужна вся ширина экрана. Личные блоки у админа встают в два столбца,
+    // иначе «Команда» уезжает за первый экран; сотруднику хватает одной узкой колонки.
+    <section className={admin ? undefined : "max-w-[720px]"}>
       <PageHeader title="Настройки" subtitle={user.email} />
 
       <div className="mt-5 space-y-6">
-        {/* Включение 2FA снимает привязку телеграма и выданный код: блок ниже устарел. */}
-        <TwoFactorPanel
-          onEnabled={() => {
-            setCode(null);
-            load();
-          }}
-        />
+        <div className={cn("grid gap-6", admin && "xl:grid-cols-2")}>
+          {/* Включение 2FA снимает привязку телеграма и выданный код: блок рядом устарел. */}
+          <TwoFactorPanel
+            onEnabled={() => {
+              setCode(null);
+              load();
+            }}
+          />
 
-        {canUseBot && (
           <Card className="p-5">
             <div className="flex items-start justify-between gap-3">
               <h2 className="text-[17px] leading-6 font-bold tracking-tight">
@@ -195,9 +196,9 @@ export function SettingsScreen() {
               </div>
             )}
           </Card>
-        )}
+        </div>
 
-        {user.role === "owner" && <TeamPanel />}
+        {admin && <TeamPanel />}
       </div>
     </section>
   );

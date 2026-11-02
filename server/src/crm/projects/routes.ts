@@ -2,11 +2,13 @@ import type { Prisma } from "@prisma/client";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { audit } from "../../audit.js";
-import { requireTeam } from "../../auth/guard.js";
+import { requireAdmin, requireTeam } from "../../auth/guard.js";
 import { prisma } from "../../db.js";
 import { env } from "../../env.js";
+import { projectScope } from "../access.js";
 import { invalidInput } from "../http.js";
 import { briefNotes, listNotes, noteRoutesFor } from "../notes.js";
+import { assertDevelopers } from "../people.js";
 import { invoiceRoutes } from "./invoices.js";
 import { rememberUnbilledMonth } from "./monthly-documents.js";
 import {
@@ -19,6 +21,8 @@ import {
   listProjectsQuery,
   OPEN_PROJECT_STATUSES,
   PROJECT_RELATIONS,
+  projectDtoFor,
+  projectRelationsFor,
   toProjectDto,
   updateProjectBody,
 } from "./dto.js";
@@ -49,6 +53,7 @@ function closedAtFor(
 async function assertReferences(input: {
   clientId?: string | null;
   leadId?: string | null;
+  developers?: string[];
 }): Promise<string | null> {
   if (input.clientId) {
     const found = await prisma.client.count({
@@ -62,7 +67,7 @@ async function assertReferences(input: {
     });
     if (!found) return "Лид не найден";
   }
-  return null;
+  return assertDevelopers(input.developers);
 }
 
 /**
@@ -105,7 +110,11 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
     if (!query.success) return invalidInput(reply, query.error);
 
     const { status, scope, clientId, archived, developer, overdue, search } = query.data;
-    const where: Prisma.ProjectWhereInput = { deletedAt: null };
+    // В AND: ниже есть `where.OR` поиска, а условие видимости сотрудника тоже с OR.
+    const where: Prisma.ProjectWhereInput = {
+      deletedAt: null,
+      AND: [projectScope(request.user!)],
+    };
 
     if (archived === "exclude") where.archivedAt = null;
     else if (archived === "only") where.archivedAt = { not: null };
@@ -140,20 +149,24 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
         archived === "only"
           ? [{ archivedAt: "desc" }]
           : [{ deadline: { sort: "asc", nulls: "last" } }, { createdAt: "desc" }],
-      include: PROJECT_RELATIONS,
+      include: projectRelationsFor(request.user!),
       take: 500,
     });
 
-    const notes = await briefNotes("project", projects.map((item) => item.id));
+    const notes = await briefNotes(
+      "project",
+      projects.map((item) => item.id),
+      request.user!,
+    );
     return reply.send({
       projects: projects.map((item) => ({
-        ...toProjectDto(item, env.TIMEZONE),
+        ...projectDtoFor(request.user!, item, env.TIMEZONE),
         note: notes.get(item.id) ?? null,
       })),
     });
   });
 
-  app.post("/projects", { preHandler: requireTeam }, async (request, reply) => {
+  app.post("/projects", { preHandler: requireAdmin }, async (request, reply) => {
     const parsed = createProjectBody.safeParse(request.body);
     if (!parsed.success) return invalidInput(reply, parsed.error);
 
@@ -198,19 +211,20 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
     const params = idParams.safeParse(request.params);
     if (!params.success) return invalidInput(reply, params.error);
 
+    // Чужой проект отвечает как несуществующий: 403 подтвердил бы, что он есть.
     const project = await prisma.project.findFirst({
-      where: { id: params.data.id, deletedAt: null },
-      include: PROJECT_RELATIONS,
+      where: { id: params.data.id, deletedAt: null, AND: [projectScope(request.user!)] },
+      include: projectRelationsFor(request.user!),
     });
     if (!project) return reply.code(404).send({ error: "Проект не найден" });
 
     return reply.send({
-      project: toProjectDto(project, env.TIMEZONE),
-      notes: await listNotes("project", project.id),
+      project: projectDtoFor(request.user!, project, env.TIMEZONE),
+      notes: await listNotes("project", project.id, request.user!),
     });
   });
 
-  app.patch("/projects/:id", { preHandler: requireTeam }, async (request, reply) => {
+  app.patch("/projects/:id", { preHandler: requireAdmin }, async (request, reply) => {
     const params = idParams.safeParse(request.params);
     if (!params.success) return invalidInput(reply, params.error);
 
@@ -299,7 +313,7 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /** Порядок внутри колонки на доске. Приходит целиком, как и у задач. */
-  app.put("/projects/reorder", { preHandler: requireTeam }, async (request, reply) => {
+  app.put("/projects/reorder", { preHandler: requireAdmin }, async (request, reply) => {
     const parsed = reorderProjectsBody.safeParse(request.body);
     if (!parsed.success) return invalidInput(reply, parsed.error);
 
@@ -326,19 +340,19 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
 
   app.post(
     "/projects/:id/archive",
-    { preHandler: requireTeam },
+    { preHandler: requireAdmin },
     archiveHandler("archive"),
   );
   app.post(
     "/projects/:id/unarchive",
-    { preHandler: requireTeam },
+    { preHandler: requireAdmin },
     archiveHandler("unarchive"),
   );
 
   await invoiceRoutes(app);
   await stageRoutes(app);
 
-  app.delete("/projects/:id", { preHandler: requireTeam }, async (request, reply) => {
+  app.delete("/projects/:id", { preHandler: requireAdmin }, async (request, reply) => {
     const params = idParams.safeParse(request.params);
     if (!params.success) return invalidInput(reply, params.error);
 
@@ -375,7 +389,10 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
     app,
     "project",
     "projects",
-    async (id) => (await prisma.project.count({ where: { id, deletedAt: null } })) > 0,
+    async (id, viewer) =>
+      (await prisma.project.count({
+        where: { id, deletedAt: null, AND: [projectScope(viewer)] },
+      })) > 0,
     "Проект не найден",
     requireTeam,
   );

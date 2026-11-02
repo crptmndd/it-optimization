@@ -9,9 +9,9 @@ interface Log {
 }
 
 /**
- * Сообщение о новом лиде. Уходит в общий чат, если он задан, иначе — всем, кто
- * подключил бота. Второй путь важен: заводить группу ради троих необязательно,
- * а знать о новом обращении должны все.
+ * Сообщение о новом лиде. Уходит в общий чат, если он задан, иначе — админам, которые
+ * подключили бота. Второй путь важен: заводить группу ради троих необязательно. Только
+ * админам, потому что лиды закрыты для сотрудника, а в сообщении контакт человека.
  */
 export async function notifyNewLead(lead: Lead, log: Log): Promise<void> {
   if (!canNotify) return;
@@ -33,7 +33,7 @@ export async function notifyNewLead(lead: Lead, log: Log): Promise<void> {
   }
 
   const users = await prisma.user.findMany({
-    where: { disabledAt: null, telegramChatId: { not: null } },
+    where: { role: "admin", disabledAt: null, telegramChatId: { not: null } },
     select: { telegramChatId: true },
   });
 
@@ -71,23 +71,29 @@ export function mention(
   return `<b>${escapeHtml(name)}</b>`;
 }
 
-/** Первое слово: в учётке бывает «Вадим Валеев», а исполнитель значится «Вадим». */
-function firstWord(value: string | null): string {
-  return value?.trim().split(/\s+/)[0] ?? "";
-}
-
 async function taskTags(people: string[]): Promise<string[]> {
   const unique = [...new Set(people)];
-  const [members, linked] = await Promise.all([
-    prisma.teamMember.findMany({ where: { name: { in: unique } } }),
-    prisma.user.findMany({
-      where: { disabledAt: null, telegramChatId: { not: null } },
-      select: { name: true, telegramChatId: true },
-    }),
-  ]);
-  const handles = new Map(members.map((row) => [row.name, row.telegramUsername]));
-  const chats = new Map(linked.map((row) => [firstWord(row.name), row.telegramChatId]));
-  return unique.map((name) => mention(name, handles.get(name), chats.get(name)));
+  const members = await prisma.teamMember.findMany({
+    where: { name: { in: unique } },
+    select: {
+      name: true,
+      telegramUsername: true,
+      user: { select: { telegramChatId: true, disabledAt: true } },
+    },
+  });
+  const byName = new Map(members.map((row) => [row.name, row]));
+  return unique.map((name) => {
+    const member = byName.get(name);
+    // Чат отключённой учётки не отмечаем: человек ушёл, а ссылка вела бы на него.
+    const chat = member?.user?.disabledAt ? null : member?.user?.telegramChatId;
+    return mention(name, member?.telegramUsername, chat);
+  });
+}
+
+/** Кто поставил задачу: подпись нужна по имени учётки, сравнение — по человеку. */
+export interface TaskActor {
+  name: string | null;
+  memberName: string | null;
 }
 
 export interface TaskNotice {
@@ -97,6 +103,8 @@ export interface TaskNotice {
   priority: string;
   dueAt: Date | null;
   project: { title: string } | null;
+  /** Есть у подзадачи: сообщение называет родителя, кнопка ведёт к нему. */
+  parent?: { id: string; title: string } | null;
 }
 
 /** Длиннее в чате не читают: подробности лежат в карточке, до неё одна кнопка. */
@@ -130,14 +138,15 @@ export function taskMessage(input: {
   const { task, tags, kind, actor, timeZone, now } = input;
   const urgent = task.priority === "high";
   const icon = urgent ? "🔥" : kind === "created" ? "📌" : "👋";
+  const noun = task.parent ? "подзадача" : "задача";
   const what =
     kind === "assigned"
       ? urgent
-        ? "назначена срочная задача"
-        : "назначена задача"
+        ? `назначена срочная ${noun}`
+        : `назначена ${noun}`
       : urgent
-        ? "новая срочная задача"
-        : "новая задача";
+        ? `новая срочная ${noun}`
+        : `новая ${noun}`;
 
   // Тэг в первой строке: это единственное, что видно в уведомлении на телефоне.
   const headline =
@@ -151,6 +160,7 @@ export function taskMessage(input: {
   }
 
   const facts: string[] = [];
+  if (task.parent) facts.push(`🧩 В задаче: ${escapeHtml(task.parent.title)}`);
   if (task.project) facts.push(`📁 ${escapeHtml(task.project.title)}`);
   if (task.dueAt) facts.push(`⏰ ${dueLine(task.dueAt, timeZone, now)}`);
   if (actor) facts.push(`👤 От: ${escapeHtml(actor)}`);
@@ -163,7 +173,10 @@ export function taskMessage(input: {
  * Кнопка в карточку. Телеграм принимает в ней только настоящий адрес и отвергает всё
  * сообщение за localhost, поэтому без боевого https кнопки просто нет.
  */
-export function taskButton(id: string, origin: string | undefined): LinkButton | undefined {
+export function taskButton(
+  id: string,
+  origin: string | undefined,
+): LinkButton | undefined {
   if (!origin?.startsWith("https://")) return undefined;
   return { text: "Открыть задачу", url: `${origin}/#/tasks?open=${id}` };
 }
@@ -172,7 +185,7 @@ async function notifyTask(
   task: TaskNotice,
   people: string[],
   kind: "created" | "assigned",
-  actor: string | null,
+  actor: TaskActor,
   log: Log,
 ): Promise<void> {
   // Запасного пути «всем лично», как у лидов, нет намеренно: тэг имеет смысл только
@@ -180,16 +193,22 @@ async function notifyTask(
   const chatId = env.TELEGRAM_TEAM_CHAT_ID;
   if (!canNotify || !chatId) return;
 
+  // Задачу без исполнителя показывают всем, чтобы её кто-то взял. Подзадачу без него
+  // никто не ждёт: это строка чек-листа внутри чужой карточки, а не работа без хозяина.
+  if (task.parent && people.length === 0) return;
+
   const text = taskMessage({
     task,
     tags: await taskTags(people),
     kind,
     // Поставил сам себе — подпись ничего не добавляет.
-    actor: actor && !people.includes(firstWord(actor)) ? actor : null,
+    actor: actor.memberName && people.includes(actor.memberName) ? null : actor.name,
     timeZone: env.TIMEZONE,
   });
 
-  await trySendMessage(chatId, text, log, 3, taskButton(task.id, env.CRM_ORIGIN));
+  // Своей карточки у подзадачи нет, открывается родитель.
+  const target = task.parent?.id ?? task.id;
+  await trySendMessage(chatId, text, log, 3, taskButton(target, env.CRM_ORIGIN));
 }
 
 /**
@@ -201,7 +220,7 @@ export function notifyTaskInBackground(
   task: TaskNotice,
   people: string[],
   kind: "created" | "assigned",
-  actor: string | null,
+  actor: TaskActor,
   log: Log,
 ): void {
   void notifyTask(task, people, kind, actor, log).catch((cause: unknown) => {

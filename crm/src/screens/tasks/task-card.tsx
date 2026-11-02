@@ -1,0 +1,127 @@
+import { Flame, ListChecks } from "lucide-react";
+import { TASK_STATUS_LABELS, type SubtaskProgress, type Task } from "@/api/tasks";
+import { NoteHint } from "@/components/note-hint";
+import { PersonChips } from "@/components/person-chip";
+import { Badge } from "@/components/ui";
+import { cn } from "@/lib/cn";
+import { describeDeadline, formatDate } from "@/lib/dates";
+
+export function isClosed(task: Pick<Task, "status">): boolean {
+  return task.status === "done" || task.status === "cancelled";
+}
+
+/** Раньше срок, потом срочное: две задачи на один день различает важность. */
+export function byUrgency(left: Task, right: Task): number {
+  const leftDue = left.dueAt ? new Date(left.dueAt).getTime() : Infinity;
+  const rightDue = right.dueAt ? new Date(right.dueAt).getTime() : Infinity;
+  if (leftDue !== rightDue) return leftDue - rightDue;
+  return (
+    Number(right.priority === "high") - Number(left.priority === "high") ||
+    left.position - right.position
+  );
+}
+
+/** Статус виден только когда он что-то добавляет: «К работе» — обычное состояние. */
+export function statusTone(task: Task): "accent" | "neutral" | null {
+  if (task.status === "in_progress") return "accent";
+  if (task.status === "backlog") return "neutral";
+  return null;
+}
+
+/** «2/5» на карточке и в строке. Без подзадач пусто: нулевой прогресс ничего не говорит. */
+export function SubtaskCount({ subtasks }: { subtasks: SubtaskProgress }) {
+  if (subtasks.total === 0) return null;
+
+  return (
+    <span
+      title={`Подзадачи: ${subtasks.done} из ${subtasks.total}`}
+      className="text-muted-foreground flex shrink-0 items-center gap-1 text-[13px] font-semibold tabular-nums"
+    >
+      <ListChecks size={15} strokeWidth={2.25} />
+      {subtasks.done}/{subtasks.total}
+    </span>
+  );
+}
+
+/**
+ * Карточка задачи на доске: название, проект, срок и люди. Остальное — внутри.
+ *
+ * `showStatus` — для доски по проектам: проект там уже в заголовке колонки, и вместо его
+ * строки полезнее видеть то, что на этой доске больше нигде не написано.
+ */
+export function TaskCard({
+  task,
+  onOpen,
+  showStatus = false,
+}: {
+  task: Task;
+  onOpen: () => void;
+  showStatus?: boolean;
+}) {
+  const done = isClosed(task);
+  const deadline = task.dueAt && !done ? describeDeadline(task.dueAt) : null;
+  const closedOn = done && task.completedAt ? formatDate(task.completedAt) : null;
+  const tone = showStatus ? statusTone(task) : null;
+  const hasFooter =
+    deadline || closedOn || task.developers.length > 0 || task.subtasks.total > 0;
+
+  return (
+    <button
+      type="button"
+      // Из «Сегодня» приходят посмотреть, где задача стоит, а открывается теперь доска.
+      data-card-id={task.id}
+      onClick={onOpen}
+      className="flex w-full flex-col gap-2 p-4 text-left"
+    >
+      {tone && (
+        <Badge tone={tone} className="self-start text-[13px]">
+          {TASK_STATUS_LABELS[task.status]}
+        </Badge>
+      )}
+      {!showStatus && task.project && (
+        <span className="text-muted-foreground truncate text-[13px] font-medium">
+          {task.project.title}
+        </span>
+      )}
+
+      {/* Заголовок не обрезается: на доске карточка — единственное место, где
+          видно, что за задача, и «Сверстать главную стр…» здесь бесполезно. */}
+      <span
+        className={cn(
+          "text-[15px] leading-snug font-semibold",
+          done && "text-muted-foreground line-through",
+        )}
+      >
+        {task.priority === "high" && !done && (
+          <Flame
+            size={14}
+            strokeWidth={2.5}
+            aria-label="Срочно"
+            className="text-danger mr-1 inline align-[-1px]"
+          />
+        )}
+        {task.title}
+      </span>
+
+      <NoteHint note={task.note} className="mt-0 text-[13px]" />
+
+      {hasFooter && (
+        <span className="mt-1 flex min-h-6 items-center justify-between gap-2">
+          <span className="flex min-w-0 items-center gap-2.5">
+            {deadline ? (
+              <Badge tone={deadline.tone} className="text-[13px]">
+                {deadline.label}
+              </Badge>
+            ) : (
+              closedOn && (
+                <span className="text-muted-foreground text-[13px]">{closedOn}</span>
+              )
+            )}
+            <SubtaskCount subtasks={task.subtasks} />
+          </span>
+          <PersonChips names={task.developers} />
+        </span>
+      )}
+    </button>
+  );
+}

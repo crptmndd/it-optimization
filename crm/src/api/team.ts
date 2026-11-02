@@ -26,6 +26,8 @@ export interface Account {
   email: string;
   name: string | null;
   role: UserRole;
+  /** Человек из команды, которым значится учётка. Ключ для общего списка в «Команде». */
+  memberName: string | null;
   twoFactorEnabled: boolean;
   lastLoginAt: string | null;
   disabledAt: string | null;
@@ -37,22 +39,36 @@ export interface AccountInput {
   name: string;
   role: UserRole;
   password: string;
+  telegramUsername?: string | null;
 }
 
 /**
- * Пароль владельца на каждое изменение учёток: иначе украденной куки хватило бы,
- * чтобы завести свою учётку и подключить на ней свою 2FA. Код нужен, только если у
- * владельца включена 2FA и нет открытого окна.
+ * Пароль админа на каждое изменение учёток: иначе украденной куки хватило бы, чтобы
+ * завести свою учётку и подключить на ней свою 2FA. Код нужен, только если у админа
+ * включена 2FA и нет открытого окна.
  */
-export interface OwnerConfirm {
+export interface AdminConfirm {
   password: string;
   code?: string;
 }
 
+/**
+ * Человек команды, в том числе без учётки: исполнителем бывает и он. `name` — ключ, его
+ * значение лежит в `developers` задач и проектов. Почт здесь нет: список читает вся
+ * команда.
+ */
 export interface TeamHandle {
   name: string;
   telegramUsername: string | null;
+  /** false — учётка отключена. Имя остаётся в истории, но новую работу не назначить. */
+  active: boolean;
+  /** `null` у человека без учётки. */
+  role: UserRole | null;
+  hasAccount: boolean;
 }
+
+/** Сервер меняет только присланных, остальных можно не отправлять. */
+export type HandleInput = Pick<TeamHandle, "name" | "telegramUsername">;
 
 export async function listAccounts(): Promise<Account[]> {
   const { accounts } = await api.get<{ accounts: Account[] }>("/team/accounts");
@@ -61,7 +77,7 @@ export async function listAccounts(): Promise<Account[]> {
 
 export async function createAccount(
   input: AccountInput,
-  confirm: OwnerConfirm,
+  confirm: AdminConfirm,
 ): Promise<Account> {
   const { account } = await api.post<{ account: Account }>("/team/accounts", {
     ...input,
@@ -73,10 +89,22 @@ export async function createAccount(
 export async function setAccountDisabled(
   id: string,
   disabled: boolean,
-  confirm: OwnerConfirm,
+  confirm: AdminConfirm,
 ): Promise<Account> {
   const { account } = await api.patch<{ account: Account }>(`/team/accounts/${id}`, {
     disabled,
+    confirm,
+  });
+  return account;
+}
+
+export async function setAccountRole(
+  id: string,
+  role: UserRole,
+  confirm: AdminConfirm,
+): Promise<Account> {
+  const { account } = await api.patch<{ account: Account }>(`/team/accounts/${id}`, {
+    role,
     confirm,
   });
   return account;
@@ -87,7 +115,7 @@ export async function listHandles(): Promise<TeamHandle[]> {
   return handles;
 }
 
-export async function saveHandles(handles: TeamHandle[]): Promise<TeamHandle[]> {
+export async function saveHandles(handles: HandleInput[]): Promise<TeamHandle[]> {
   const saved = await api.put<{ handles: TeamHandle[] }>("/team/handles", { handles });
   return saved.handles;
 }

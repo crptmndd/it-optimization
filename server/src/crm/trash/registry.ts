@@ -147,7 +147,15 @@ export const TRASH = {
         await prisma.task.findMany({
           // Задачи удалённого проекта не показываются отдельно: они вернутся
           // вместе с ним, а список иначе тонет в них после одного удаления.
-          where: { ...deleted, OR: [{ projectId: null }, { project: { deletedAt: null } }] },
+          // Подзадача удалённого родителя тоже: возвращать её некуда, карточки нет.
+          // Вернётся родитель, и она снова будет лежать здесь как отдельно удалённая.
+          where: {
+            ...deleted,
+            AND: [
+              { OR: [{ projectId: null }, { project: { deletedAt: null } }] },
+              { OR: [{ parentId: null }, { parent: { deletedAt: null } }] },
+            ],
+          },
           select: { id: true, title: true, deletedAt: true },
           orderBy: newestFirst,
         })
@@ -155,16 +163,27 @@ export const TRASH = {
     restore: async (id) => {
       await prisma.task.update({ where: { id }, data: { deletedAt: null } });
     },
+    // Подзадачи уходят с родителем, даже не удалённые: это сделал бы и каскад, но у
+    // заметок внешнего ключа нет, и без своих id подзадач они остались бы навсегда.
     purge: async (before) => {
       const rows = await prisma.task.findMany({
-        where: { deletedAt: { lt: before } },
+        where: {
+          OR: [{ deletedAt: { lt: before } }, { parent: { deletedAt: { lt: before } } }],
+        },
         select: { id: true },
       });
       await prisma.task.deleteMany({ where: { id: { in: rows.map((r) => r.id) } } });
       return rows.map((r) => r.id);
     },
     purgeOne: async (id) => {
+      const subtasks = await prisma.task.findMany({
+        where: { parentId: id },
+        select: { id: true },
+      });
       await prisma.task.delete({ where: { id } });
+      await prisma.note.deleteMany({
+        where: { entity: "task", entityId: { in: subtasks.map((r) => r.id) } },
+      });
     },
   },
 

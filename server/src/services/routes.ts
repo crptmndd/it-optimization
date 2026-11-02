@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { audit } from "../audit.js";
-import { requireTeam } from "../auth/guard.js";
+import { requireAdmin } from "../auth/guard.js";
 import { SERVICES_SCOPE, currentRevision, prisma } from "../db.js";
 import { canPublish } from "../env.js";
 import { commitSnapshot } from "../publish/github.js";
@@ -100,7 +100,9 @@ function validate(body: z.infer<typeof replaceBody>): string[] {
     slugs.add(service.slug);
 
     if (!categoryKeys.has(service.category)) {
-      problems.push(`У услуги «${service.key}» раздел «${service.category}», которого нет`);
+      problems.push(
+        `У услуги «${service.key}» раздел «${service.category}», которого нет`,
+      );
     }
   }
 
@@ -108,7 +110,7 @@ function validate(body: z.infer<typeof replaceBody>): string[] {
 }
 
 export async function serviceCatalogRoutes(app: FastifyInstance): Promise<void> {
-  app.get("/service-catalog", { preHandler: requireTeam }, async (_request, reply) => {
+  app.get("/service-catalog", { preHandler: requireAdmin }, async (_request, reply) => {
     const [catalog, version] = await Promise.all([
       readCatalog(),
       currentRevision(SERVICES_SCOPE),
@@ -116,7 +118,7 @@ export async function serviceCatalogRoutes(app: FastifyInstance): Promise<void> 
     return reply.send({ ...catalog, version: String(version) });
   });
 
-  app.put("/service-catalog", { preHandler: requireTeam }, async (request, reply) => {
+  app.put("/service-catalog", { preHandler: requireAdmin }, async (request, reply) => {
     const parsed = replaceBody.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({
@@ -208,13 +210,13 @@ export async function serviceCatalogRoutes(app: FastifyInstance): Promise<void> 
   /** То, что уедет в репозиторий. Полезно для отладки публикации. */
   app.get(
     "/service-catalog/snapshot",
-    { preHandler: requireTeam },
+    { preHandler: requireAdmin },
     async (_request, reply) => reply.send(await readCatalog()),
   );
 
   app.post(
     "/service-catalog/publish",
-    { preHandler: requireTeam },
+    { preHandler: requireAdmin },
     async (request, reply) => {
       const snapshot = await readCatalog();
 

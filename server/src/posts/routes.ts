@@ -2,7 +2,7 @@ import type { Prisma } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { audit } from "../audit.js";
-import { requireTeam } from "../auth/guard.js";
+import { requireAdmin } from "../auth/guard.js";
 import { BLOG_COVER, processCover } from "../assets/images.js";
 import { POSTS_SCOPE, bumpRevision, currentRevision, prisma } from "../db.js";
 import { env } from "../env.js";
@@ -23,7 +23,7 @@ function toDate(day: string): Date {
 }
 
 export async function postRoutes(app: FastifyInstance): Promise<void> {
-  app.get("/posts", { preHandler: requireTeam }, async (_request, reply) => {
+  app.get("/posts", { preHandler: requireAdmin }, async (_request, reply) => {
     const [posts, version] = await Promise.all([
       listPosts(),
       currentRevision(POSTS_SCOPE),
@@ -36,7 +36,7 @@ export async function postRoutes(app: FastifyInstance): Promise<void> {
    * целиком, и порядок статей такое же свойство контента, как заголовок.
    * Пришедшие id создаются или обновляются, пропавшие помечаются удалёнными.
    */
-  app.put("/posts", { preHandler: requireTeam }, async (request, reply) => {
+  app.put("/posts", { preHandler: requireAdmin }, async (request, reply) => {
     const parsed = replacePostsBody.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({
@@ -149,66 +149,70 @@ export async function postRoutes(app: FastifyInstance): Promise<void> {
    * sharp в тот WebP, который ждёт вёрстка, — присланному из браузера файлу
    * доверять нельзя, даже если панель его уже обработала.
    */
-  app.post("/posts/:postId/cover", { preHandler: requireTeam }, async (request, reply) => {
-    const params = coverParams.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: "Некорректный идентификатор статьи" });
-    }
-    const { postId } = params.data;
+  app.post(
+    "/posts/:postId/cover",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      const params = coverParams.safeParse(request.params);
+      if (!params.success) {
+        return reply.code(400).send({ error: "Некорректный идентификатор статьи" });
+      }
+      const { postId } = params.data;
 
-    const target = await prisma.post.findFirst({
-      where: { id: postId, deletedAt: null },
-    });
-    if (!target) return reply.code(404).send({ error: "Статья не найдена" });
-
-    const file = await request.file({ limits: { fileSize: env.MAX_UPLOAD_BYTES } });
-    if (!file) return reply.code(400).send({ error: "Файл не приложен" });
-
-    let raw: Buffer;
-    try {
-      raw = await file.toBuffer();
-    } catch {
-      return reply.code(413).send({
-        error: `Файл больше ${Math.round(env.MAX_UPLOAD_BYTES / 1024 / 1024)} МБ`,
+      const target = await prisma.post.findFirst({
+        where: { id: postId, deletedAt: null },
       });
-    }
+      if (!target) return reply.code(404).send({ error: "Статья не найдена" });
 
-    let processed;
-    try {
-      processed = await processCover(raw, target.slug);
-    } catch (cause) {
-      request.log.warn({ cause }, "не удалось обработать обложку");
-      return reply
-        .code(415)
-        .send({ error: "Не похоже на картинку — поддерживаются PNG, JPEG и WebP" });
-    }
+      const file = await request.file({ limits: { fileSize: env.MAX_UPLOAD_BYTES } });
+      if (!file) return reply.code(400).send({ error: "Файл не приложен" });
 
-    await prisma.post.update({
-      where: { id: postId },
-      data: { cover: processed.path },
-    });
+      let raw: Buffer;
+      try {
+        raw = await file.toBuffer();
+      } catch {
+        return reply.code(413).send({
+          error: `Файл больше ${Math.round(env.MAX_UPLOAD_BYTES / 1024 / 1024)} МБ`,
+        });
+      }
 
-    const version = await bumpRevision(POSTS_SCOPE);
-    await audit(request, {
-      entity: "post_covers",
-      entityId: postId,
-      action: "upload",
-      diff: { path: processed.path, bytes: processed.bytes },
-    });
+      let processed;
+      try {
+        processed = await processCover(raw, target.slug);
+      } catch (cause) {
+        request.log.warn({ cause }, "не удалось обработать обложку");
+        return reply
+          .code(415)
+          .send({ error: "Не похоже на картинку — поддерживаются PNG, JPEG и WebP" });
+      }
 
-    return reply.send({
-      cover: {
-        path: processed.path,
-        hash: processed.hash,
-        width: processed.width,
-        height: processed.height,
-        bytes: processed.bytes,
-      },
-      version: String(version),
-    });
-  });
+      await prisma.post.update({
+        where: { id: postId },
+        data: { cover: processed.path },
+      });
 
-  app.get("/posts/cover-spec", { preHandler: requireTeam }, async (_request, reply) =>
+      const version = await bumpRevision(POSTS_SCOPE);
+      await audit(request, {
+        entity: "post_covers",
+        entityId: postId,
+        action: "upload",
+        diff: { path: processed.path, bytes: processed.bytes },
+      });
+
+      return reply.send({
+        cover: {
+          path: processed.path,
+          hash: processed.hash,
+          width: processed.width,
+          height: processed.height,
+          bytes: processed.bytes,
+        },
+        version: String(version),
+      });
+    },
+  );
+
+  app.get("/posts/cover-spec", { preHandler: requireAdmin }, async (_request, reply) =>
     reply.send({
       width: BLOG_COVER.width,
       height: BLOG_COVER.height,

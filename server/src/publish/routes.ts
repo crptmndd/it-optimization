@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { audit } from "../audit.js";
-import { requireTeam } from "../auth/guard.js";
+import { requireAdmin } from "../auth/guard.js";
 import { BLOG_REPO_DIR, REPO_DIR } from "../assets/images.js";
 import { prisma } from "../db.js";
 import { canPublish, env } from "../env.js";
@@ -42,7 +42,7 @@ export async function publishRoutes(app: FastifyInstance): Promise<void> {
    * описанием и отзывом клиента, который ещё не согласован. Сборке сайта это
    * не мешает: она берёт кейсы из content/cases.json в репозитории.
    */
-  app.get("/cases/snapshot", { preHandler: requireTeam }, async (_request, reply) => {
+  app.get("/cases/snapshot", { preHandler: requireAdmin }, async (_request, reply) => {
     const items = await prisma.case.findMany({
       where: { deletedAt: null },
       orderBy: { position: "asc" },
@@ -51,7 +51,7 @@ export async function publishRoutes(app: FastifyInstance): Promise<void> {
     return reply.send(toSnapshot(items.map(toDto)));
   });
 
-  app.post("/cases/publish", { preHandler: requireTeam }, async (request, reply) => {
+  app.post("/cases/publish", { preHandler: requireAdmin }, async (request, reply) => {
     const items = await prisma.case.findMany({
       where: { deletedAt: null },
       orderBy: { position: "asc" },
@@ -149,7 +149,7 @@ function validateBlogForPublish(posts: PostDto[]): string[] {
 export async function blogPublishRoutes(app: FastifyInstance): Promise<void> {
   /** Отдаёт снапшот, ничего не отправляя. Закрыт авторизацией — как у кейсов:
    *  без неё черновик статьи стал бы публично читаемым до публикации. */
-  app.get("/posts/snapshot", { preHandler: requireTeam }, async (_request, reply) => {
+  app.get("/posts/snapshot", { preHandler: requireAdmin }, async (_request, reply) => {
     const items = await prisma.post.findMany({
       where: { deletedAt: null },
       orderBy: { position: "asc" },
@@ -157,7 +157,7 @@ export async function blogPublishRoutes(app: FastifyInstance): Promise<void> {
     return reply.send(toBlogSnapshot(items.map(toPostDto)));
   });
 
-  app.post("/posts/publish", { preHandler: requireTeam }, async (request, reply) => {
+  app.post("/posts/publish", { preHandler: requireAdmin }, async (request, reply) => {
     const items = await prisma.post.findMany({
       where: { deletedAt: null },
       orderBy: { position: "asc" },

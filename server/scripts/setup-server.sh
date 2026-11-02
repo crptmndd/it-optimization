@@ -109,7 +109,7 @@ cat <<'NEXT'
   5. docker compose -f docker-compose.prod.yml up -d --build
   6. docker compose -f docker-compose.prod.yml exec api npx prisma migrate deploy
   7. docker compose -f docker-compose.prod.yml exec api npm run seed
-  8. docker compose -f docker-compose.prod.yml exec -it api npm run user:create -- you@example.com owner
+  8. docker compose -f docker-compose.prod.yml exec -it api npm run user:create -- you@example.com admin
 
 Проверка:  curl https://api.it-optimization.ru/health
 

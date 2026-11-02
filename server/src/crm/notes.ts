@@ -1,8 +1,10 @@
 import type { Note, User } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { requireAuth } from "../auth/guard.js";
+import type { requireTeam } from "../auth/guard.js";
+import type { AuthenticatedUser } from "../auth/session.js";
 import { prisma } from "../db.js";
+import { isAdmin, type Viewer } from "./access.js";
 import { invalidInput } from "./http.js";
 
 /**
@@ -25,12 +27,21 @@ type NoteWithAuthor = Note & { author: Pick<User, "id" | "name" | "email"> | nul
 
 const AUTHOR_SELECT = { select: { id: true, name: true, email: true } } as const;
 
-function toNoteDto(note: NoteWithAuthor): NoteDto {
+/**
+ * Почта автора только админу: сотруднику список почт закрыт и в `GET /team`, и заметки не
+ * должны быть обходным путём к нему. Пустая строка, а не отсутствие поля: тип один, а
+ * автор без имени покажется экраном как «Кто-то».
+ */
+function toNoteDto(note: NoteWithAuthor, showEmail: boolean): NoteDto {
   return {
     id: note.id,
     body: note.body,
     author: note.author
-      ? { id: note.author.id, name: note.author.name, email: note.author.email }
+      ? {
+          id: note.author.id,
+          name: note.author.name,
+          email: showEmail ? note.author.email : "",
+        }
       : null,
     createdAt: note.createdAt.toISOString(),
   };
@@ -56,6 +67,7 @@ export interface NoteBrief {
 export async function briefNotes(
   entity: NoteEntity,
   ids: string[],
+  viewer: Pick<Viewer, "role">,
 ): Promise<Map<string, NoteBrief>> {
   const brief = new Map<string, NoteBrief>();
   if (ids.length === 0) return brief;
@@ -74,7 +86,10 @@ export async function briefNotes(
     }
     brief.set(note.entityId, {
       body: note.body,
-      author: note.author?.name?.trim() || note.author?.email || null,
+      author:
+        note.author?.name?.trim() ||
+        (isAdmin(viewer) ? note.author?.email : null) ||
+        null,
       createdAt: note.createdAt.toISOString(),
       count: 1,
     });
@@ -87,13 +102,14 @@ export async function briefNotes(
 export async function listNotes(
   entity: NoteEntity,
   entityId: string,
+  viewer: Pick<Viewer, "role">,
 ): Promise<NoteDto[]> {
   const notes = await prisma.note.findMany({
     where: { entity, entityId },
     orderBy: { createdAt: "asc" },
     include: { author: AUTHOR_SELECT },
   });
-  return notes.map(toNoteDto);
+  return notes.map((note) => toNoteDto(note, isAdmin(viewer)));
 }
 
 export async function createNote(
@@ -106,7 +122,8 @@ export async function createNote(
     data: { entity, entityId, authorId, body },
     include: { author: AUTHOR_SELECT },
   });
-  return toNoteDto(note);
+  // Автор только что написанной заметки — сам вызывающий, почта здесь его собственная.
+  return toNoteDto(note, true);
 }
 
 /** Заметки уходят вместе с записью: висеть в базе без владельца им незачем. */
@@ -120,20 +137,22 @@ export const createNoteBody = z.object({
 
 /**
  * Маршрут добавления заметки одинаков у всех сущностей — отличается двумя
- * вещами. Первая: проверка, что запись существует; без внешнего ключа (см.
- * выше) только она не даёт завести заметку в пустоту. Вторая: кому можно.
+ * вещами. Первая: проверка, что запись существует и видна этому человеку; без
+ * внешнего ключа (см. выше) только она не даёт завести заметку в пустоту, а чужая
+ * запись отвечает тем же 404, чтобы не подтверждать, что она есть. Вторая: кому
+ * можно.
  *
- * Права передаются снаружи намеренно. Заметки к лиду пишет и маркетолог, а к
- * проекту или задаче — только команда; общий `requireAuth` здесь стал бы
- * дырой, через которую маркетолог комментирует чужие разделы.
+ * Права передаются снаружи и обязательны: заметки клиентов только у админа, а к
+ * проекту или задаче пишет и сотрудник. Значение по умолчанию стало бы дырой, через
+ * которую он комментирует чужие разделы.
  */
 export async function noteRoutesFor(
   app: FastifyInstance,
   entity: NoteEntity,
   basePath: string,
-  exists: (id: string) => Promise<boolean>,
+  exists: (id: string, viewer: AuthenticatedUser) => Promise<boolean>,
   notFound: string,
-  guard: typeof requireAuth = requireAuth,
+  guard: typeof requireTeam,
 ): Promise<void> {
   const params = z.object({ id: z.string().uuid() });
 
@@ -144,7 +163,7 @@ export async function noteRoutesFor(
     const parsed = createNoteBody.safeParse(request.body);
     if (!parsed.success) return invalidInput(reply, parsed.error);
 
-    if (!(await exists(parsedParams.data.id))) {
+    if (!(await exists(parsedParams.data.id, request.user!))) {
       return reply.code(404).send({ error: notFound });
     }
 

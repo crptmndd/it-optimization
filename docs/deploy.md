@@ -91,10 +91,14 @@ curl https://api.it-optimization.ru/health          # {"ok":true}
 CO="docker compose -f docker-compose.prod.yml"
 $CO exec api npx prisma migrate deploy    # таблицы (при старте накатываются и сами)
 $CO exec api npm run seed:prod            # кейсы и статьи из content/*.json
-$CO exec -it api npm run user:create:prod -- ТВОЯ_ПОЧТА owner
+$CO exec -it api npm run user:create:prod -- ТВОЯ_ПОЧТА admin --name "Имя"
 ```
 
 Пароль вводится интерактивно, в историю команд не попадает. Минимум 12 символов.
+
+Роль `admin` или `employee`, без неё новая учётка станет `admin`. `--name` связывает учётку с
+человеком из команды: без связи сотрудник видит только созданное им самим. Остальных удобнее
+заводить в Настройках → Команда, подробности в `server/README.md`.
 
 Проверить, что данные на месте (снапшот без входа не отдаётся):
 
@@ -155,7 +159,143 @@ docker compose -f docker-compose.prod.yml exec api npx prisma migrate deploy
 
 Тома `db-data`, `uploads` и сертификаты переживают пересборку.
 
+### Выкат: две роли, люди из таблицы, подзадачи
+
+Роли `admin` и `employee`, в базе это по-прежнему `owner` и `editor`: enum не менялся. Люди
+теперь в `team_members`, подзадачи в `tasks.parent_id`. Миграция
+`20261102120000_roles_people_subtasks` идёт одной транзакцией. Схему она только дополняет, а
+данные меняет: копирует описания задач в заметки, заводит людей, связывает их с учётками и
+переставляет роли. Зависимости не менялись, поэтому сборка дешевле, чем на прошлом выкате, но
+тег старого образа всё равно нужен: это откат без сборки.
+
+**Порядок: API раньше CRM.** Новая CRM на старом API считает всех сотрудниками: она ждёт
+`role: "admin"`, старый API отдаёт `owner`, и разделы админа пропадают. Поэтому ветка
+`crm-redesign` сначала только пушится, workflow смотрят на `main`, а CRM уезжает последней,
+слиянием на шаге 5.
+
+В коммит должно попасть всё новое, иначе сборка упадёт или миграция не накатится:
+`server/prisma/migrations/20261102120000_roles_people_subtasks/`, `server/src/crm/access.ts`,
+`server/src/crm/people.ts`, `crm/src/lib/people.ts`, `crm/src/screens/projects/project-view.tsx`,
+`crm/src/screens/tasks/` файлы `project-board`, `subtasks`, `task-card`, `task-modal`.
+
+**1. Предполётный запрос, только чтение.** Итог миграции зависит от настоящих имён, поэтому
+вывод нужно посмотреть и сохранить вне сервера: другой записи прежних ролей нет.
+
+```bash
+cd /opt/it-optimization/server
+CO="docker compose -f docker-compose.prod.yml"
+cat > /tmp/preflight.sql <<'SQL'
+SELECT email, coalesce(name,'<пусто>') AS name, role, disabled_at IS NOT NULL AS off,
+  CASE
+    WHEN w IN ('вадим','егор') THEN 'станет owner, связь с '||w
+    WHEN w IN ('камиль','тимур') THEN 'editor (если останется owner), связь с '||w
+    WHEN w IS NULL THEN 'БЕЗ СВЯЗИ с человеком'
+    ELSE 'НОВЫЙ человек «'||substring(name FROM '\S+')||'», чужие задачи не увидит'
+  END AS "что будет"
+FROM (SELECT *, lower(substring(name FROM '\S+')) w FROM users) u ORDER BY role, email;
+SELECT 'tasks' t, d AS "имя вне списка", count(*) FROM tasks, unnest(developers) d
+  WHERE d NOT IN ('Егор','Вадим','Камиль','Тимур') GROUP BY 1,2
+UNION ALL
+SELECT 'projects', d, count(*) FROM projects, unnest(developers) d
+  WHERE d NOT IN ('Егор','Вадим','Камиль','Тимур') GROUP BY 1,2;
+SQL
+$CO exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < /tmp/preflight.sql | tee ~/roles-before.txt
+```
+
+Как читать вывод. Миграция сравнивает только первое слово имени, повышает всех с этим словом,
+включая отключённых, и связывает с человеком одну учётку на слово. `developers` к людям она не
+приводит, а видимость сравнивает строки точно.
+
+- Имена вида «Вадим …», «Егор …», «Камиль …», «Тимур …», и второй выборки нет: выкат без правок.
+- `NULL`, неполное имя, неразрывный пробел после первого слова или «НОВЫЙ человек» у своего
+  сотрудника: сначала `UPDATE users SET name = 'Камиль Иванов' WHERE email = '…';`.
+- Две учётки на одно первое слово или отключённая учётка Вадима либо Егора: то же, сменой имени
+  до выката.
+- Строка во второй выборке: заменить до запуска нового API, иначе человек не увидит своих задач,
+  а сохранение такой записи ответит 400 «Неизвестный исполнитель»:
+
+  ```sql
+  UPDATE tasks SET developers = array_replace(developers, 'Старая строка', 'Камиль');
+  UPDATE projects SET developers = array_replace(developers, 'Старая строка', 'Камиль');
+  ```
+
+**2. Бэкап и тег.** Требования к диску те же, что в разделе ниже.
+
+```bash
+docker image tag server-api:latest server-api:before-roles
+bash scripts/backup.sh
+df -h /
+```
+
+**3. API.** В нерабочее время: пока CRM старая, сотрудник видит сбой на «Проекты», потому что
+старая страница читает поля денег, которых в его ответе больше нет. У админа до шага 5 нет
+блока «Команда»: старая страница показывает его только роли `owner`. Остальное у админа
+работает. Миграция накатится при старте контейнера.
+
+```bash
+cd /opt/it-optimization && git fetch origin && git checkout crm-redesign
+cd server && $CO build api
+$CO up -d --no-deps --no-build api
+```
+
+**4. Проверить, что отвечает именно новый API.** `/health`, вход и `/auth/2fa/status` есть и у
+старого, поэтому проверка по ним ничего не значит. Войти в CRM и выполнить в консоли браузера:
+
+```js
+fetch("https://api.it-optimization.ru/auth/me", { credentials: "include" })
+  .then((r) => r.json())
+  .then(console.log);
+```
+
+Должно быть `role: "admin"` и `memberName` с именем того, кто вошёл. Старый API отвечает
+`role: "owner"` без `memberName`. Роли и связи в базе:
+
+```bash
+$CO exec db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT u.email, u.role, u.disabled_at IS NOT NULL AS off, m.name AS person FROM users u LEFT JOIN team_members m ON m.user_id = u.id ORDER BY 2, 1"'
+```
+
+Здесь `owner` значит админ, а `editor` сотрудник. Сравнить с `~/roles-before.txt`.
+
+Если миграция упала, API уходит в перезапуски с `P3009`. Она шла одной транзакцией, поэтому в
+базе ничего не поменялось. Убрать причину, снять отметку о сбое и поднять API. `exec` здесь не
+годится, контейнер всё время перезапускается:
+
+```bash
+$CO run --rm --no-deps --entrypoint npx api prisma migrate resolve \
+  --rolled-back 20261102120000_roles_people_subtasks
+$CO up -d --no-deps --no-build api
+```
+
+**5. Слить в `main`:** уедут CRM и сайт. `src/` не менялся, но в слиянии есть `CLAUDE.md` и
+`docs/`, а сайт не собирается только тогда, когда изменения целиком лежат в `crm/` и `server/`.
+Сервер вернуть на `main`: `cd /opt/it-optimization && git checkout main && git pull`.
+
+**6. Когда все вкладки обновились, перенести описания, записанные в окне выката.** Старая вкладка
+ещё пишет `tasks.description`, а новая CRM этого поля не показывает, и текст пропал бы с экрана.
+Это шаг 2 миграции отдельно, повторный запуск ничего не меняет. Тот же запрос нужен после любого
+возврата с отката.
+
+```bash
+cat > /tmp/descriptions.sql <<'SQL'
+INSERT INTO "notes" ("id", "entity", "entity_id", "body", "author_id", "created_at", "updated_at")
+SELECT gen_random_uuid(), 'task', t."id", btrim(t."description", E' \t\r\n'), t."created_by_id", t."created_at", t."created_at"
+FROM "tasks" t
+WHERE t."description" ~ '\S'
+  AND NOT EXISTS (SELECT 1 FROM "notes" n WHERE n."entity" = 'task' AND n."entity_id" = t."id" AND n."body" = btrim(t."description", E' \t\r\n'));
+SQL
+$CO exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < /tmp/descriptions.sql
+```
+
+**7. Завести входы.** Настройки → Команда: «Создать вход» в строке человека, а не «Новый
+сотрудник», иначе появится второй человек и старые задачи не откроются. Форма сама предложит
+это, если первое слово имени совпало. Ник вписывается там же, в строке человека. Когда выкат
+устоялся: `docker image rm server-api:before-roles`.
+
 ### Первый выкат с 2FA и паролями на сервере
+
+Выкат прошёл 02.11.2026, раздел оставлен как разбор и как опись требований к диску. Проверка
+новизны API по `/auth/2fa/status` в нём для следующих выкатов не годится: маршрут теперь есть и в
+`main`.
 
 `VAULT_KEY` должен оказаться в `.env` **до первого старта новой версии**. Без него API
 запустится, но пароли и 2FA работать не будут.
@@ -212,6 +352,7 @@ nano .env                             # там же CRM_ORIGIN=https://crm.it-op
    CRM на старом API не открывает «Сегодня» и «Проекты». Дальше проверить `/health` и вход.
    На первом тике планировщик создаст счета и акты за текущий месяц и напишет в чат. Это
    ожидаемо: заведённые вручную записи не дублируются.
+
 4. Слить в `main`: уедут CRM (быстро) и панель (около 15 минут). Пока CRM не уехала,
    «Подключить телеграм» в старой вкладке отвечает «Введите пароль»: кнопка заработает
    после обновления страницы.
@@ -256,8 +397,9 @@ nano .env                             # там же CRM_ORIGIN=https://crm.it-op
 | В логе `VAULT_KEY не подходит к записям в базе` | Опечатка в ключе. Новые пароли не сохранять, вернуть прежний ключ |
 | Потерян телефон и коды восстановления           | `$CO exec api npm run user:reset-2fa:prod -- ПОЧТА`               |
 | Бот молчит о задачах                            | `TELEGRAM_TEAM_CHAT_ID`, бот в чате, контейнер `tg-tunnel`        |
-| API в перезапусках, в логе `P3009`              | Дамп лёг поверх новой схемы. Повторить по `scripts/backup.sh`     |
+| API в перезапусках, в логе `P3009`              | Дамп поверх схемы (`backup.sh`) или упала миграция: шаг 4 выката  |
 | Сборка упала с `ENOSPC`                         | Сразу `docker builder prune -f`: рядом работает Postgres          |
+| У админа меню сотрудника                        | Новая CRM на старом API: сначала выкатить API                     |
 
 ---
 
@@ -267,6 +409,53 @@ nano .env                             # там же CRM_ORIGIN=https://crm.it-op
 переменную `NEXT_PUBLIC_ADMIN_API_URL` и пересобрать сайт. `/panel` снова
 попросит токен GitHub и будет коммитить напрямую. Публичные страницы не зависят
 от API вообще — они статические, и падение сервера на них не влияет.
+
+### Откат выката с ролями и подзадачами
+
+**Сначала CRM, потом API**, по той же причине, что ниже. База не откатывается: enum не менялся,
+колонки только добавлены, и старый код их не замечает. Данные миграции остаются на месте: люди,
+связи, заметки с описаниями и новые роли.
+
+1. Сделать revert в `main` и дождаться конца обоих workflow: revert задевает и `crm/`, и
+   `docs/`, поэтому запускаются CRM и сайт.
+2. Вернуть API из сохранённого образа:
+
+   ```bash
+   cd /opt/it-optimization && git checkout main && git pull
+   cd server
+   docker image tag server-api:before-roles server-api:latest
+   docker compose -f docker-compose.prod.yml up -d --no-deps --no-build api
+   ```
+
+3. **Вернуть роли из `~/roles-before.txt`.** Откат API их не трогает. На старом API `editor` — это
+   вся команда, поэтому бывший `marketing`, ставший `editor`, получит клиентов, счета и доступы, а
+   понижение Камиля и Тимура перестанет что-либо закрывать:
+
+   ```sql
+   UPDATE users SET role = 'marketing' WHERE email = '…';
+   ```
+
+После отката это не поломки, данные целы:
+
+- подзадачи выглядят обычными задачами на старой доске, в «Сегодня» и в сводке: о `parent_id`
+  старый API не знает;
+- задачу и проект с новым человеком старая форма не сохраняет, ответ 400: у старого API список
+  закрытый. Смена статуса проходит;
+- у старых задач текст виден дважды, в описании и в заметке: миграция скопировала его, а не
+  перенесла;
+- описания, записанные за это время, новая CRM не покажет: после возврата выполнить шаг 6 выката.
+
+**Корзину не чистить, пока идёт откат.** Старый API удаляет задачу насовсем, а внешний ключ
+`tasks_parent_id_fkey` с `ON DELETE CASCADE` уносит вместе с ней подзадачи, о которых старый
+экран ничего не показывал.
+
+**При возврате на новую версию роли не встанут сами:** миграция уже отмечена как пройденная и
+второй раз не запустится. Роль `marketing` новый API ни в один раздел не пускает, ответ 403,
+поэтому её сначала убрать, а остальные роли поправить в Настройки → Команда:
+
+```sql
+UPDATE users SET role = 'editor' WHERE role = 'marketing';
+```
 
 ### Откат выката с 2FA и паролями на сервере
 

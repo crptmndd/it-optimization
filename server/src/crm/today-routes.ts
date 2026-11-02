@@ -2,15 +2,14 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { env } from "../env.js";
 import { requireTeam } from "../auth/guard.js";
-import { DEVELOPERS } from "./developers.js";
 import { invalidInput } from "./http.js";
-import { toProjectDto } from "./projects/dto.js";
+import { projectDtoFor } from "./projects/dto.js";
 import { toCredentialDto } from "./credentials/dto.js";
 import { toTaskDto } from "./tasks/dto.js";
-import { collectToday, isEmptySnapshot } from "./today.js";
+import { collectTodayFor, isEmptySnapshot } from "./today.js";
 
 /** Срез по человеку. Пустой параметр интерфейс не передаёт, «Все» — это его отсутствие. */
-const todayQuery = z.object({ developer: z.enum(DEVELOPERS).optional() });
+const todayQuery = z.object({ developer: z.string().trim().min(1).max(120).optional() });
 
 /**
  * Главный экран CRM. Отдаёт ровно то же, что бот присылает утром, — оба берут
@@ -21,7 +20,10 @@ export async function todayRoutes(app: FastifyInstance): Promise<void> {
     const query = todayQuery.safeParse(request.query);
     if (!query.success) return invalidInput(reply, query.error);
 
-    const snapshot = await collectToday(query.data);
+    const viewer = request.user!;
+    const snapshot = await collectTodayFor(viewer, query.data.developer);
+    const toProject = (item: Parameters<typeof projectDtoFor>[1]) =>
+      projectDtoFor(viewer, item, env.TIMEZONE);
 
     return reply.send({
       empty: isEmptySnapshot(snapshot),
@@ -43,9 +45,9 @@ export async function todayRoutes(app: FastifyInstance): Promise<void> {
         ),
       },
       projects: {
-        urgent: snapshot.projects.urgent.map((item) => toProjectDto(item, env.TIMEZONE)),
-        soon: snapshot.projects.soon.map((item) => toProjectDto(item, env.TIMEZONE)),
-        unbilled: snapshot.projects.unbilled.map((item) => toProjectDto(item, env.TIMEZONE)),
+        urgent: snapshot.projects.urgent.map(toProject),
+        soon: snapshot.projects.soon.map(toProject),
+        unbilled: snapshot.projects.unbilled.map(toProject),
       },
       money: {
         // То же деление, что и у продлений: оно нужно боту, а экрану — один список.

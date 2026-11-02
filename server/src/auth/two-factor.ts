@@ -9,7 +9,7 @@ import { canNotify, env } from "../env.js";
 import { escapeHtml, trySendMessage } from "../notify/telegram.js";
 import { requireAuth } from "./guard.js";
 import { verifyPassword } from "./password.js";
-import { createSession, hashToken, toUserDto } from "./session.js";
+import { createSession, hashToken, toUserDto, WITH_MEMBER } from "./session.js";
 import {
   base32Decode,
   base32Encode,
@@ -356,25 +356,25 @@ export async function confirmSecondFactor(
 }
 
 /**
- * Подтверждение владельца для «Команды». Без него украденная кука заводит учётку с
+ * Подтверждение админа для «Команды». Без него украденная кука заводит учётку с
  * известным паролем, подключает на ней свою 2FA и открывает все пароли, хотя `setup` и
- * `reveal` самого владельца для неё закрыты. Без 2FA хватает пароля: она не принудительная.
+ * `reveal` самого админа для неё закрыты. Без 2FA хватает пароля: она не принудительная.
  */
-export async function confirmOwner(
+export async function confirmAdmin(
   request: FastifyRequest,
   reply: FastifyReply,
   confirm: { password: string; code?: string },
 ): Promise<boolean> {
-  const owner = await prisma.user.findUnique({
+  const admin = await prisma.user.findUnique({
     where: { id: request.user!.id },
     select: { passwordHash: true, totpEnabledAt: true },
   });
 
-  if (!owner || !(await verifyPassword(owner.passwordHash, confirm.password))) {
+  if (!admin || !(await verifyPassword(admin.passwordHash, confirm.password))) {
     await sendPasswordInvalid(reply);
     return false;
   }
-  if (!owner.totpEnabledAt) return true;
+  if (!admin.totpEnabledAt) return true;
   return confirmSecondFactor(request, reply, confirm.code);
 }
 
@@ -394,7 +394,7 @@ export async function twoFactorRoutes(app: FastifyInstance): Promise<void> {
     const { ticket, code } = parsed.data;
     const row = await prisma.loginTicket.findUnique({
       where: { tokenHash: hashToken(ticket) },
-      include: { user: true },
+      include: { user: { include: WITH_MEMBER } },
     });
 
     const now = new Date();

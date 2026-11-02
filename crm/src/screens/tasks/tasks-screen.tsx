@@ -7,14 +7,7 @@ import {
   Plus,
   X,
 } from "lucide-react";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  type FormEvent,
-  type KeyboardEvent,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError } from "@/api/client";
 import { FilterToolbar } from "@/components/filter-toolbar";
 import { useFocusFromLink } from "@/lib/focus-card";
@@ -22,7 +15,6 @@ import { useOpenFromSearch } from "@/lib/open-from-search";
 import { listProjects, type Project } from "@/api/projects";
 import {
   BOARD_COLUMNS,
-  addTaskNote,
   createTask,
   deleteTask,
   getTask,
@@ -30,12 +22,13 @@ import {
   reorderTasks,
   TASK_STATUS_LABELS,
   updateTask,
+  type SubtaskProgress,
   type Task,
   type TaskFilters,
   type TaskStatus,
 } from "@/api/tasks";
+import { isAdmin, useCurrentUser } from "@/auth/auth-context";
 import { Board, type BoardColumn, type ColumnTone } from "@/components/board";
-import { NotesPanel } from "@/components/notes-panel";
 import { PeopleFilter } from "@/components/people-filter";
 import { PersonChip, PersonChips } from "@/components/person-chip";
 import { MonthCalendar } from "@/components/month-calendar";
@@ -46,7 +39,6 @@ import {
   ErrorNote,
   List,
   LoadingRows,
-  Modal,
   PageHeader,
   SearchField,
   SectionTitle,
@@ -54,19 +46,42 @@ import {
 } from "@/components/ui";
 import { daysFromToday, describeDeadline, formatDate } from "@/lib/dates";
 import { cn } from "@/lib/cn";
-import { NoteHint } from "@/components/note-hint";
+import { ProjectBoard } from "./project-board";
+import { saveDraftSubtasks } from "./subtasks";
+import { byUrgency, isClosed, statusTone, SubtaskCount, TaskCard } from "./task-card";
 import {
   emptyTaskValues,
-  TaskFields,
   taskToValues,
   valuesToTaskInput,
   type TaskFormValues,
 } from "./task-form";
+import { TaskModal } from "./task-modal";
 
 type TabKey = "open" | "overdue" | "done";
+type TaskView = "list" | "board" | "calendar";
+type BoardBy = "status" | "projects";
 
-function isClosed(task: Task): boolean {
-  return task.status === "done" || task.status === "cancelled";
+const BOARD_BY_KEY = "crm.tasks.boardBy";
+
+/** Перетаскивания на телефоне нет, поэтому там первым открывается список. */
+function defaultView(): TaskView {
+  return window.matchMedia("(min-width: 768px)").matches ? "board" : "list";
+}
+
+function readBoardBy(): BoardBy {
+  try {
+    return localStorage.getItem(BOARD_BY_KEY) === "projects" ? "projects" : "status";
+  } catch {
+    return "status";
+  }
+}
+
+function writeBoardBy(value: BoardBy) {
+  try {
+    localStorage.setItem(BOARD_BY_KEY, value);
+  } catch {
+    // Хранилище закрыто: выбор продержится до обновления страницы, и это не беда.
+  }
 }
 
 function isOverdue(task: Task): boolean {
@@ -98,17 +113,6 @@ function groupOf(task: Task): GroupKey {
   return days <= 7 ? "week" : "later";
 }
 
-/** Раньше срок, потом срочное: две задачи на один день различает важность. */
-function byUrgency(left: Task, right: Task): number {
-  const leftDue = left.dueAt ? new Date(left.dueAt).getTime() : Infinity;
-  const rightDue = right.dueAt ? new Date(right.dueAt).getTime() : Infinity;
-  if (leftDue !== rightDue) return leftDue - rightDue;
-  return (
-    Number(right.priority === "high") - Number(left.priority === "high") ||
-    left.position - right.position
-  );
-}
-
 /** Цвет колонки — по смыслу: что ждёт, что в работе, что закрыто. */
 const COLUMN_TONE: Record<string, ColumnTone> = {
   backlog: "neutral",
@@ -117,81 +121,28 @@ const COLUMN_TONE: Record<string, ColumnTone> = {
   done: "success",
 };
 
-/** Карточка задачи на доске: название, проект, срок и люди. Остальное — внутри. */
-function TaskCard({ task, onOpen }: { task: Task; onOpen: () => void }) {
-  const done = isClosed(task);
-  const deadline = task.dueAt && !done ? describeDeadline(task.dueAt) : null;
-  const closedOn = done && task.completedAt ? formatDate(task.completedAt) : null;
-
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="flex w-full flex-col gap-1.5 p-3 text-left"
-    >
-      {task.project && (
-        <span className="text-muted-foreground truncate text-xs font-medium">
-          {task.project.title}
-        </span>
-      )}
-
-      {/* Заголовок не обрезается: на доске карточка — единственное место, где
-          видно, что за задача, и «Сверстать главную стр…» здесь бесполезно. */}
-      <span
-        className={cn(
-          "text-sm leading-snug font-semibold",
-          done && "text-muted-foreground line-through",
-        )}
-      >
-        {task.priority === "high" && !done && (
-          <Flame
-            size={13}
-            strokeWidth={2.5}
-            aria-label="Срочно"
-            className="text-danger mr-1 inline align-[-1px]"
-          />
-        )}
-        {task.title}
-      </span>
-
-      {/* Одна строка описания: часто в ней и лежит суть. */}
-      {task.description && (
-        <span className="text-muted-foreground truncate text-xs">{task.description}</span>
-      )}
-
-      <NoteHint note={task.note} className="mt-0" />
-
-      {(deadline || closedOn || task.developers.length > 0) && (
-        <span className="mt-1 flex min-h-6 items-center justify-between gap-2">
-          {deadline ? (
-            <Badge tone={deadline.tone}>{deadline.label}</Badge>
-          ) : closedOn ? (
-            <span className="text-muted-foreground text-xs">{closedOn}</span>
-          ) : (
-            <span />
-          )}
-          <PersonChips names={task.developers} />
-        </span>
-      )}
-    </button>
-  );
-}
-
 export function TasksScreen() {
-  const [view, setView] = useState<"list" | "board" | "calendar">("list");
+  const user = useCurrentUser();
+  const [view, setView] = useState<TaskView>(defaultView);
+  const [boardBy, setBoardBy] = useState<BoardBy>(readBoardBy);
   const [tab, setTab] = useState<TabKey>("open");
   const [developer, setDeveloper] = useState("");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [tasks, setTasks] = useState<Task[] | null>(null);
-  const [projects, setProjects] = useState<Project[]>([]);
+  /** `null` — неизвестно: ещё не загрузились или не загрузились вовсе. */
+  const [projects, setProjects] = useState<Project[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
-  /** Дата из календаря — подставляется в срок новой задачи. */
-  const [prefillDate, setPrefillDate] = useState("");
-  /** Колонка, из которой нажали «+» — новая задача заводится сразу в ней. */
-  const [prefillStatus, setPrefillStatus] = useState<TaskStatus | null>(null);
+  /**
+   * Открытое окно новой задачи и что в нём уже заполнено: дата из календаря или колонка,
+   * из которой нажали «+». `null` — окно закрыто.
+   */
+  const [creating, setCreating] = useState<Partial<TaskFormValues> | null>(null);
   const [editing, setEditing] = useState<Task | null>(null);
+  /** С чем открыть правку: задача создалась, а её подзадачи нет. */
+  const [editingNotice, setEditingNotice] = useState<string | null>(null);
+  /** Человека переключают быстро: ответ за прошлого не должен лечь поверх нового. */
+  const request = useRef(0);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(search.trim()), 300);
@@ -210,28 +161,50 @@ export function TasksScreen() {
     // Двумя запросами: у сервера потолок в 1000 строк, и общим списком он срезал бы
     // свежие закрытые, потому что они идут в конце.
     setError(null);
+    const current = (request.current += 1);
     Promise.all([
       listTasks({ ...filters, scope: "open" }),
       listTasks({ ...filters, scope: "closed" }),
     ])
-      .then(([open, closed]) => setTasks([...open, ...closed]))
+      .then(([open, closed]) => {
+        if (current === request.current) setTasks([...open, ...closed]);
+      })
       .catch((cause: unknown) => {
+        if (current !== request.current) return;
         setError(cause instanceof ApiError ? cause.message : "Не удалось загрузить");
-        setTasks([]);
+        // Уже показанное остаётся: сбой связи не значит, что задач больше нет.
+        setTasks((shown) => shown ?? []);
       });
   }, [developer, debouncedSearch]);
 
-  useEffect(load, [load]); // Переход из глобального поиска: ?open=<id> открывает нужную карточку.
-  useOpenFromSearch(tasks, setEditing);
+  useEffect(load, [load]);
+
+  /**
+   * Запись ждёт ответ сервера, и за это время срез могли переключить. Перезагрузка идёт
+   * по текущему: прежняя функция вернула бы на экран задачи того, кого уже сняли с выбора.
+   */
+  const latestLoad = useRef(load);
+  latestLoad.current = load;
+
+  // Задачи может не быть в загруженном списке: её скрывает срез по человеку.
+  const fetchTask = useCallback(
+    (id: string) =>
+      getTask(id)
+        .then(({ task }) => task)
+        .catch(() => null),
+    [],
+  );
+  // Переход из глобального поиска: ?open=<id> открывает нужную карточку.
+  useOpenFromSearch(tasks, setEditing, fetchTask);
   // Из «Сегодня» приходят не открывать, а показать, где карточка стоит.
   useFocusFromLink(tasks !== null);
 
   useEffect(() => {
-    // Список проектов нужен только для выпадающего списка в форме, поэтому
-    // берём открытые: закрытому проекту новые задачи не заводят.
+    // Открытые: в выборе формы закрытого проекта нет. Его колонка на доске бывает, и окно
+    // из её «+» получает проект через `current`.
     listProjects({ scope: "open" })
       .then(setProjects)
-      .catch(() => setProjects([]));
+      .catch(() => setProjects(null));
   }, []);
 
   /**
@@ -260,11 +233,29 @@ export function TasksScreen() {
     try {
       if (moved) await updateTask(moved.id, { status });
       await reorderTasks(status, ids);
-      load();
+      latestLoad.current();
     } catch (cause) {
       // Откат: на экране должно остаться то, что в базе. Именно в таком порядке:
       // `load` сбрасывает ошибку, и наоборот она бы исчезла, не показавшись.
-      load();
+      latestLoad.current();
+      setError(cause instanceof ApiError ? cause.message : "Не удалось перенести");
+    }
+  }
+
+  /** Перенос между проектами. Подзадачи сервер переведёт в новый проект сам. */
+  async function moveToProject(moved: Task, project: Task["project"]) {
+    setTasks(
+      (current) =>
+        current?.map((task) => (task.id === moved.id ? { ...task, project } : task)) ??
+        null,
+    );
+
+    try {
+      await updateTask(moved.id, { projectId: project?.id ?? null });
+      latestLoad.current();
+    } catch (cause) {
+      // Тот же порядок, что в `moveTask`: `load` сбрасывает ошибку.
+      latestLoad.current();
       setError(cause instanceof ApiError ? cause.message : "Не удалось перенести");
     }
   }
@@ -281,11 +272,34 @@ export function TasksScreen() {
     );
     try {
       await updateTask(task.id, { status: next });
-      load();
+      latestLoad.current();
     } catch (cause) {
-      load();
+      latestLoad.current();
       setError(cause instanceof ApiError ? cause.message : "Не удалось сохранить");
     }
+  }
+
+  /** Постоянная: окно подзадач зовёт её из эффекта, а новая функция звала бы его снова. */
+  const showProgress = useCallback((taskId: string, subtasks: SubtaskProgress) => {
+    setTasks(
+      (current) =>
+        current?.map((task) => (task.id === taskId ? { ...task, subtasks } : task)) ??
+        null,
+    );
+  }, []);
+
+  /** Родитель, потом подзадачи: если они не сохранятся, задача останется и откроется. */
+  async function createWithSubtasks(values: TaskFormValues, subtasks: string[]) {
+    const task = await createTask(valuesToTaskInput(values));
+    const lost = await saveDraftSubtasks(task.id, subtasks);
+
+    setCreating(null);
+    if (lost.length > 0) {
+      const titles = lost.map((title) => `«${title}»`).join(", ");
+      setEditingNotice(`Задача создана, но подзадачи не сохранились: ${titles}.`);
+      setEditing(task);
+    }
+    latestLoad.current();
   }
 
   const counts = useMemo(
@@ -323,10 +337,17 @@ export function TasksScreen() {
   // На доске и в календаре видно всё сразу, срез там ничего бы не значил.
   const nothing = view === "list" ? shown.length === 0 : tasks?.length === 0;
 
+  /** Открыт срез по человеку — на него. Сотрудник видит только своё — на себя. */
+  const assignees = developer
+    ? [developer]
+    : !isAdmin(user) && user.memberName
+      ? [user.memberName]
+      : [];
+
   return (
     <section>
       <PageHeader title="Задачи">
-        <Button onClick={() => setCreating(true)}>
+        <Button onClick={() => setCreating({})}>
           <Plus size={17} strokeWidth={2.5} />
           Новая задача
         </Button>
@@ -347,13 +368,27 @@ export function TasksScreen() {
                 ]}
               />
             )}
+            {view === "board" && (
+              <Segmented
+                value={boardBy}
+                onChange={(value) => {
+                  setBoardBy(value as BoardBy);
+                  writeBoardBy(value as BoardBy);
+                }}
+                ariaLabel="Как разложить доску"
+                options={[
+                  { value: "status", label: "По статусам" },
+                  { value: "projects", label: "По проектам" },
+                ]}
+              />
+            )}
             <PeopleFilter value={developer} onChange={setDeveloper} />
           </>
         }
         search={<SearchField value={search} onChange={setSearch} />}
         view={{
           value: view,
-          onChange: (value) => setView(value as "list" | "board" | "calendar"),
+          onChange: (value) => setView(value as TaskView),
           ariaLabel: "Вид списка задач",
           options: [
             { value: "list", label: "Список", icon: ListIcon },
@@ -372,7 +407,7 @@ export function TasksScreen() {
       <div className="mt-5">
         {tasks === null ? (
           <LoadingRows />
-        ) : nothing ? (
+        ) : nothing && error ? null : nothing ? (
           <EmptyState
             title={
               debouncedSearch || developer
@@ -393,10 +428,7 @@ export function TasksScreen() {
           <MonthCalendar
             items={tasks}
             dateOf={(task) => task.dueAt}
-            onPickDay={(isoDate) => {
-              setPrefillDate(isoDate);
-              setCreating(true);
-            }}
+            onPickDay={(dueDate) => setCreating({ dueDate })}
             renderItem={(task) => {
               const done = task.status === "done" || task.status === "cancelled";
               const late = !done && task.dueAt && describeDeadline(task.dueAt).tone;
@@ -428,18 +460,26 @@ export function TasksScreen() {
               );
             }}
           />
+        ) : view === "board" && boardBy === "projects" ? (
+          <ProjectBoard
+            tasks={tasks}
+            onMove={(task, project) => void moveToProject(task, project)}
+            onAdd={(projectId) => setCreating({ projectId: projectId ?? "" })}
+            onOpen={setEditing}
+          />
         ) : view === "board" ? (
           <Board
-            onAdd={(columnKey) => {
-              setPrefillStatus(columnKey as TaskStatus);
-              setCreating(true);
-            }}
+            onAdd={(columnKey) => setCreating({ status: columnKey as TaskStatus })}
             columns={
               BOARD_COLUMNS.map((status) => ({
                 key: status,
                 label: TASK_STATUS_LABELS[status],
                 tone: COLUMN_TONE[status],
-                items: tasks.filter((task) => task.status === status),
+                // По `position`: перенос меняет его сразу, а порядок ответа сервера
+                // устарел бы до следующей загрузки, и карточка отскочила бы назад.
+                items: tasks
+                  .filter((task) => task.status === status)
+                  .sort((left, right) => left.position - right.position),
               })) satisfies BoardColumn<Task>[]
             }
             onMove={(columnKey, ids) => void moveTask(columnKey as TaskStatus, ids)}
@@ -487,58 +527,59 @@ export function TasksScreen() {
         <TaskModal
           title="Новая задача"
           submitLabel="Создать задачу"
-          projects={projects}
-          initial={{
-            // Открыт срез по человеку: задачу почти наверняка заводят на него.
-            ...emptyTaskValues({ developers: developer ? [developer] : [] }),
-            dueDate: prefillDate,
-            ...(prefillStatus ? { status: prefillStatus } : {}),
-          }}
-          onClose={() => {
-            setCreating(false);
-            setPrefillDate("");
-            setPrefillStatus(null);
-          }}
-          onSubmit={async (values) => {
-            await createTask(valuesToTaskInput(values));
-            setCreating(false);
-            setPrefillDate("");
-            setPrefillStatus(null);
-            load();
-          }}
+          projects={projects ?? []}
+          // Колонка закрытого проекта есть на доске, а в списке открытых его нет.
+          current={
+            creating.projectId
+              ? (tasks?.find((task) => task.project?.id === creating.projectId)
+                  ?.project ?? null)
+              : null
+          }
+          initial={{ ...emptyTaskValues({ developers: assignees }), ...creating }}
+          onClose={() => setCreating(null)}
+          onSubmit={createWithSubtasks}
+          onProgress={showProgress}
         />
       )}
 
       {editing && (
         <TaskModal
           title="Задача"
-          projects={projects}
+          projects={projects ?? []}
           current={editing.project}
           taskId={editing.id}
           editing
+          notice={editingNotice}
           initial={taskToValues(editing)}
-          onClose={() => setEditing(null)}
-          onSubmit={async (values) => {
-            await updateTask(editing.id, valuesToTaskInput(values));
+          onClose={() => {
             setEditing(null);
-            load();
+            setEditingNotice(null);
+            // В окне всё сохраняется сразу: подзадачи и заметки уже изменили карточку.
+            latestLoad.current();
+          }}
+          onSubmit={async (values) => {
+            try {
+              await updateTask(editing.id, valuesToTaskInput(values));
+            } catch (cause) {
+              // Сотрудник снял себя с подзадачи, через которую видел задачу: сохранять
+              // больше нечего, и это не ошибка, а исчезнувшая из списка карточка.
+              if (!(cause instanceof ApiError) || cause.status !== 404) throw cause;
+            }
+            setEditing(null);
+            setEditingNotice(null);
+            latestLoad.current();
           }}
           onDelete={async () => {
             await deleteTask(editing.id);
             setEditing(null);
-            load();
+            setEditingNotice(null);
+            latestLoad.current();
           }}
+          onProgress={showProgress}
         />
       )}
     </section>
   );
-}
-
-/** Статус в строке только когда он что-то добавляет: «К работе» — обычное состояние. */
-function statusTone(task: Task): "accent" | "neutral" | null {
-  if (task.status === "in_progress") return "accent";
-  if (task.status === "backlog") return "neutral";
-  return null;
 }
 
 /**
@@ -609,6 +650,7 @@ function TaskRow({
           >
             {task.title}
           </span>
+          <SubtaskCount subtasks={task.subtasks} />
           {tone && !done && (
             <Badge tone={tone} className="hidden xl:inline-flex">
               {TASK_STATUS_LABELS[task.status]}
@@ -647,114 +689,5 @@ function TaskRow({
         </span>
       </button>
     </li>
-  );
-}
-
-function TaskModal({
-  title,
-  submitLabel = "Сохранить",
-  initial,
-  projects,
-  current,
-  taskId,
-  editing,
-  onClose,
-  onSubmit,
-  onDelete,
-}: {
-  title: string;
-  submitLabel?: string;
-  initial: TaskFormValues;
-  projects: Project[];
-  current?: { id: string; title: string } | null;
-  /** Есть только у сохранённой задачи — заметки вешать не на что, пока её нет. */
-  taskId?: string;
-  editing?: boolean;
-  onClose: () => void;
-  onSubmit: (values: TaskFormValues) => Promise<void>;
-  onDelete?: () => Promise<void>;
-}) {
-  const [values, setValues] = useState<TaskFormValues>(initial);
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  async function handleSubmit(event: FormEvent) {
-    event.preventDefault();
-    setError(null);
-    setSaving(true);
-    try {
-      await onSubmit(values);
-    } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Не удалось сохранить");
-      setSaving(false);
-    }
-  }
-
-  async function handleDelete() {
-    if (!onDelete) return;
-    if (!confirm("Удалить задачу?")) return;
-    setError(null);
-    setSaving(true);
-    try {
-      await onDelete();
-    } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Не удалось удалить");
-      setSaving(false);
-    }
-  }
-
-  // Из поля подробностей Enter переносит строку, поэтому отправка там по ⌘Enter.
-  function onKeyDown(event: KeyboardEvent<HTMLFormElement>) {
-    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-      event.preventDefault();
-      event.currentTarget.requestSubmit();
-    }
-  }
-
-  return (
-    <Modal title={title} onClose={onClose}>
-      <form onSubmit={handleSubmit} onKeyDown={onKeyDown}>
-        <TaskFields
-          values={values}
-          onChange={setValues}
-          projects={projects}
-          current={current}
-          editing={editing}
-        />
-
-        {taskId && (
-          <div className="mt-5">
-            <NotesPanel
-              load={async () => (await getTask(taskId)).notes}
-              add={(body) => addTaskNote(taskId, body)}
-              hint="Пока пусто. Сюда — что выяснилось по ходу и почему сделано так."
-            />
-          </div>
-        )}
-
-        {error && (
-          <div className="mt-4">
-            <ErrorNote>{error}</ErrorNote>
-          </div>
-        )}
-
-        <div className="mt-6 flex items-center gap-2">
-          <Button type="submit" disabled={saving} className="h-11 flex-1">
-            {saving ? "Сохраняем…" : submitLabel}
-          </Button>
-          {onDelete && (
-            <Button
-              type="button"
-              variant="danger"
-              className="h-11"
-              onClick={() => void handleDelete()}
-              disabled={saving}
-            >
-              Удалить
-            </Button>
-          )}
-        </div>
-      </form>
-    </Modal>
   );
 }

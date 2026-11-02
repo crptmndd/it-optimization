@@ -1,5 +1,7 @@
 import type { Prisma } from "@prisma/client";
-import { isDeveloper } from "../crm/developers.js";
+import { WITH_MEMBER } from "../auth/session.js";
+import { memberNameOf } from "../crm/access.js";
+import { collectTodayFor } from "../crm/today.js";
 import { prisma } from "../db.js";
 import { env } from "../env.js";
 import { buildDigest } from "./digest.js";
@@ -43,6 +45,8 @@ const HELP = [
   "Если писать не о чем — молчу.",
 ].join("\n");
 
+const NOTHING_BURNS = "Ничего не горит. Свободны.";
+
 /** Привязка открывает `/today` мимо сессий, поэтому оставляет след в журнале. */
 async function auditLink(
   userId: string,
@@ -61,25 +65,23 @@ async function auditLink(
 
 /**
  * Подключение бота заодно сообщает ник: человек не вписывает его дважды. Заполняется
- * только пустое поле, ник из Настроек сильнее: его ставил владелец осознанно.
+ * только пустое поле, ник из Настроек сильнее: его ставил админ осознанно.
  */
 async function rememberHandle(
-  userName: string | null,
+  userId: string,
   username: string | undefined,
   log: Log,
 ): Promise<void> {
-  const name = userName?.trim().split(/\s+/)[0] ?? "";
-  if (!username || !isDeveloper(name)) return;
+  if (!username) return;
 
-  const existing = await prisma.teamMember.findUnique({ where: { name } });
-  if (existing?.telegramUsername) return;
+  const member = await prisma.teamMember.findUnique({ where: { userId } });
+  if (!member || member.telegramUsername) return;
 
-  await prisma.teamMember.upsert({
-    where: { name },
-    create: { name, telegramUsername: username },
-    update: { telegramUsername: username },
+  await prisma.teamMember.update({
+    where: { name: member.name },
+    data: { telegramUsername: username },
   });
-  log.info({ name }, "ник исполнителя взят из телеграма");
+  log.info({ name: member.name }, "ник исполнителя взят из телеграма");
 }
 
 async function linkByCode(
@@ -123,7 +125,7 @@ async function linkByCode(
     { chatId, previousChatId: user.telegramChatId },
     log,
   );
-  await rememberHandle(user.name, username, log);
+  await rememberHandle(user.id, username, log);
   log.info({ email: user.email }, "телеграм привязан");
   await trySendMessage(
     chatId,
@@ -143,7 +145,24 @@ async function handleCommand(
   const command = rawCommand.split("@", 1)[0]?.toLowerCase() ?? "";
 
   if (command === "/start") {
-    if (argument) return linkByCode(chatId, argument, username, log);
+    if (argument) {
+      // У групп идентификатор отрицательный, как и в `mention`. Привязка в группе дала бы
+      // её участникам личную сводку. Код там уже прочитан всеми, поэтому он гаснет: иначе
+      // любой из них прислал бы его боту в личку и привязал свой телеграм к чужой учётке.
+      if (!/^\d+$/.test(chatId)) {
+        await prisma.user.updateMany({
+          where: { telegramLinkCode: argument.toUpperCase() },
+          data: { telegramLinkCode: null, telegramLinkExpiresAt: null },
+        });
+        await trySendMessage(
+          chatId,
+          "Привязка делается в личном чате с ботом. Этот код больше не действует: запросите в CRM новый и пришлите его сюда лично.",
+          log,
+        );
+        return;
+      }
+      return linkByCode(chatId, argument, username, log);
+    }
     await trySendMessage(
       chatId,
       `Чтобы смотреть сводку здесь, откройте CRM → «Подключить телеграм» и пришлите мне выданный код.\n\n${HELP}`,
@@ -164,29 +183,47 @@ async function handleCommand(
     return;
   }
 
-  const user = await prisma.user.findFirst({ where: { telegramChatId: chatId } });
+  const user = await prisma.user.findFirst({
+    where: { telegramChatId: chatId },
+    include: WITH_MEMBER,
+  });
 
   if (command === "/stop") {
     if (user) {
-      await prisma.user.update({ where: { id: user.id }, data: { telegramChatId: null } });
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { telegramChatId: null },
+      });
       await auditLink(user.id, "telegram_unlink", { reason: "stop" }, log);
     }
-    await trySendMessage(chatId, "Чат отвязан. Вернуть — командой /start с кодом из CRM.", log);
+    await trySendMessage(
+      chatId,
+      "Чат отвязан. Вернуть — командой /start с кодом из CRM.",
+      log,
+    );
     return;
   }
 
   if (command === "/today") {
-    // Сводка про деньги и клиентов: только рабочий чат и действующая команда.
-    // Бот отвечает любому аккаунту телеграма, поэтому проверка нужна здесь:
-    // маркетолог и отключённая учётка до этих данных в CRM не дойдут.
-    const member = user && !user.disabledAt && user.role !== "marketing";
-    if (chatId !== env.TELEGRAM_TEAM_CHAT_ID && !member) {
+    // Общий чат получает общую сводку, кто бы ни спросил: утром туда приходит она же.
+    if (chatId === env.TELEGRAM_TEAM_CHAT_ID) {
+      await trySendMessage(chatId, (await buildDigest()) ?? NOTHING_BURNS, log);
+      return;
+    }
+
+    // Бот отвечает любому аккаунту телеграма, поэтому проверка нужна здесь: отключённая
+    // учётка до этих данных в CRM не дойдёт. Роль читается на каждой команде, и
+    // понижение действует на привязанный чат сразу, как и на сессии.
+    const role = user && !user.disabledAt ? user.role : null;
+    if (role !== "admin" && role !== "employee") {
       await trySendMessage(chatId, "Сводка доступна только команде.", log);
       return;
     }
 
-    const digest = await buildDigest();
-    await trySendMessage(chatId, digest ?? "Ничего не горит. Свободны.", log);
+    const digest = await buildDigest(
+      await collectTodayFor({ id: user!.id, role, memberName: memberNameOf(user!) }),
+    );
+    await trySendMessage(chatId, digest ?? NOTHING_BURNS, log);
     return;
   }
 
@@ -232,7 +269,10 @@ export function startBot(log: Log): () => Promise<void> {
   }
 
   void poll();
-  log.info({ digestAt: env.DIGEST_TIME, timeZone: env.TIMEZONE }, "бот уведомлений запущен");
+  log.info(
+    { digestAt: env.DIGEST_TIME, timeZone: env.TIMEZONE },
+    "бот уведомлений запущен",
+  );
 
   return async () => {
     controller.abort();

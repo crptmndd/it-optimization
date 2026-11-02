@@ -23,7 +23,7 @@ npm install
 openssl rand -base64 32               # вписать в .env как VAULT_KEY, см. ниже
 npx prisma migrate deploy             # накатить готовую миграцию (таблицы)
 npm run seed                          # перенести content/cases.json и content/blog.json в базу
-npm run user:create -- you@example.com owner   # пароль спросит интерактивно
+npm run user:create -- you@example.com admin   # пароль спросит интерактивно
 npm run dev                           # API на http://localhost:4000
 ```
 
@@ -74,8 +74,8 @@ curl http://localhost:4000/health          # {"ok":true}
 ```
 
 Снапшоты `/cases/snapshot`, `/posts/snapshot` и `/service-catalog/snapshot` закрыты
-входом (`requireTeam`), без куки ответ 401. Посмотреть их можно из открытой сессии
-панели.
+ролью (`requireAdmin`): без куки ответ 401, сотруднику 403. Посмотреть их можно из
+открытой сессии панели.
 
 ## Публикация
 
@@ -91,9 +91,17 @@ curl http://localhost:4000/health          # {"ok":true}
 
 ## Маршруты
 
-Кто может: «все» — без входа, «вошедшие» — любая действующая сессия, в том числе
-`marketing`, «команда» — `owner` и `editor`, `owner` — только владелец. Проверка стоит на
-сервере: скрытый пункт меню от прямого запроса не защищает.
+Кто может: «все» — без входа, «вошедшие» — любая действующая сессия, «команда» — `admin` и
+`employee`, `admin` — только админ. Проверка стоит на сервере: скрытый пункт меню от прямого
+запроса не защищает. В базе роли лежат старыми значениями `owner` и `editor`, чтобы откат API
+обходился без SQL; в коде и API их нет.
+
+Сотрудник видит своё. Задача своя, если он исполнитель, автор задачи верхнего уровня или
+исполнитель её подзадачи. Проект свой, если он его ведёт или в нём есть его задача. Чужая запись
+отвечает 404, а не 403: ответ не подтверждает, что она есть. Правило одно, в
+`src/crm/access.ts`, на нём стоят маршруты, поиск, заметки и «Сегодня». Проект приходит сотруднику
+без денег, договора, хостинга и лида, а `taskCount` и `openTaskCount` считают только его задачи.
+Почта автора заметки у него пустая.
 
 **Вход и 2FA**
 
@@ -114,67 +122,70 @@ curl http://localhost:4000/health          # {"ok":true}
 
 | Метод | Путь                 | Кто может | Лимит    |
 | ----- | -------------------- | --------- | -------- |
-| GET   | `/team`              | вошедшие  |          |
-| GET   | `/team/accounts`     | `owner`   |          |
-| POST  | `/team/accounts`     | `owner`   | 10/5 мин |
-| PATCH | `/team/accounts/:id` | `owner`   | 10/5 мин |
-| GET   | `/team/handles`      | `owner`   |          |
-| PUT   | `/team/handles`      | `owner`   |          |
+| GET   | `/team`              | `admin`   |          |
+| GET   | `/team/accounts`     | `admin`   |          |
+| POST  | `/team/accounts`     | `admin`   | 10/5 мин |
+| PATCH | `/team/accounts/:id` | `admin`   | 10/5 мин |
+| GET   | `/team/handles`      | команда   |          |
+| PUT   | `/team/handles`      | `admin`   |          |
 
 **CRM**
 
 | Метод              | Путь                                  | Кто может |
 | ------------------ | ------------------------------------- | --------- |
 | GET                | `/today`, `?developer=<имя>`          | команда   |
-| GET, POST          | `/projects`                           | команда   |
-| GET, PATCH, DELETE | `/projects/:id`                       | команда   |
-| PUT                | `/projects/reorder`                   | команда   |
-| POST               | `/projects/:id/archive`, `/unarchive` | команда   |
-| GET, PUT           | `/projects/:id/stages`                | команда   |
-| PATCH              | `/projects/:id/stages/:position`      | команда   |
-| GET                | `/invoices?scope=due\|paid\|all`      | команда   |
-| GET, POST          | `/projects/:id/invoices`              | команда   |
-| PATCH, DELETE      | `/projects/:id/invoices/:invoiceId`   | команда   |
+| GET                | `/projects`, `/projects/:id`          | команда   |
+| POST               | `/projects`                           | `admin`   |
+| PATCH, DELETE      | `/projects/:id`                       | `admin`   |
+| PUT                | `/projects/reorder`                   | `admin`   |
+| POST               | `/projects/:id/archive`, `/unarchive` | `admin`   |
+| GET, PUT           | `/projects/:id/stages`                | `admin`   |
+| PATCH              | `/projects/:id/stages/:position`      | `admin`   |
+| GET                | `/invoices?scope=due\|paid\|all`      | `admin`   |
+| GET, POST          | `/projects/:id/invoices`              | `admin`   |
+| PATCH, DELETE      | `/projects/:id/invoices/:invoiceId`   | `admin`   |
 | GET, POST          | `/tasks`                              | команда   |
 | GET, PATCH, DELETE | `/tasks/:id`                          | команда   |
 | PUT                | `/tasks/reorder`                      | команда   |
-| GET, POST          | `/clients`                            | команда   |
-| GET, PATCH, DELETE | `/clients/:id`                        | команда   |
+| GET, POST          | `/clients`                            | `admin`   |
+| GET, PATCH, DELETE | `/clients/:id`                        | `admin`   |
 | GET                | `/search`                             | команда   |
-| GET                | `/trash`                              | команда   |
-| POST               | `/trash/restore`, `/purge`, `/empty`  | команда   |
+| GET                | `/trash`                              | `admin`   |
+| POST               | `/trash/restore`, `/purge`, `/empty`  | `admin`   |
 | GET                | `/telegram/status`                    | команда   |
 | POST               | `/telegram/link-code`                 | команда   |
 | POST               | `/telegram/unlink`                    | команда   |
-| GET, POST          | `/leads`                              | вошедшие  |
-| GET, PATCH, DELETE | `/leads/:id`                          | вошедшие  |
-| POST               | `/leads/:id/notes`                    | вошедшие  |
+| GET, POST          | `/leads`                              | `admin`   |
+| GET, PATCH, DELETE | `/leads/:id`                          | `admin`   |
+| POST               | `/leads/:id/notes`                    | `admin`   |
 
 `GET /projects` принимает ещё `archived=exclude|only|include` (по умолчанию без архива)
-и `clientId=<uuid>|none`, где `none` даёт проекты без клиента. Заметки проектов, задач
-и клиентов — `POST /<раздел>/:id/notes`, те же права, что у раздела.
+и `clientId=<uuid>|none`, где `none` даёт проекты без клиента. Заметки проектов и задач —
+`POST /<раздел>/:id/notes`, команда, только на видимую запись. Заметки клиентов только у
+админа. `GET /tasks?developer=<имя>` находит и задачу, где человек исполнитель подзадачи.
+`POST /tasks` принимает `parentId`, а `GET /tasks/:id` кроме задачи отдаёт `subtaskList`.
 
 **Доступы**
 
 | Метод         | Путь                      | Кто может | Лимит     |
 | ------------- | ------------------------- | --------- | --------- |
-| GET, POST     | `/credentials`            | команда   |           |
-| PATCH, DELETE | `/credentials/:id`        | команда   |           |
-| POST          | `/credentials/:id/reveal` | команда   | 60/5 мин  |
-| POST          | `/credentials/legacy`     | команда   | 10/5 мин  |
-| POST          | `/credentials/migrate`    | команда   | 10/5 мин  |
-| GET           | `/vault`                  | команда   |           |
-| POST          | `/vault`, `/vault/reset`  | команда   | ответ 410 |
+| GET, POST     | `/credentials`            | `admin`   |           |
+| PATCH, DELETE | `/credentials/:id`        | `admin`   |           |
+| POST          | `/credentials/:id/reveal` | `admin`   | 60/5 мин  |
+| POST          | `/credentials/legacy`     | `admin`   | 10/5 мин  |
+| POST          | `/credentials/migrate`    | `admin`   | 10/5 мин  |
+| GET           | `/vault`                  | `admin`   |           |
+| POST          | `/vault`, `/vault/reset`  | `admin`   | ответ 410 |
 
 **Контент сайта**
 
 | Метод    | Путь                                                              | Кто может |
 | -------- | ----------------------------------------------------------------- | --------- |
-| GET, PUT | `/cases`, `/posts`, `/service-catalog`                            | команда   |
-| POST     | `/cases/:caseId/assets/:slot`, `/posts/:postId/cover`             | команда   |
-| GET      | `/cases/slots`, `/posts/cover-spec`                               | команда   |
-| GET      | `/cases/snapshot`, `/posts/snapshot`, `/service-catalog/snapshot` | команда   |
-| POST     | `/cases/publish`, `/posts/publish`, `/service-catalog/publish`    | команда   |
+| GET, PUT | `/cases`, `/posts`, `/service-catalog`                            | `admin`   |
+| POST     | `/cases/:caseId/assets/:slot`, `/posts/:postId/cover`             | `admin`   |
+| GET      | `/cases/slots`, `/posts/cover-spec`                               | `admin`   |
+| GET      | `/cases/snapshot`, `/posts/snapshot`, `/service-catalog/snapshot` | `admin`   |
+| POST     | `/cases/publish`, `/posts/publish`, `/service-catalog/publish`    | `admin`   |
 | GET      | `/health`                                                         | все       |
 
 `PUT /cases` заменяет список целиком и требует `version` — ту, что вернул
@@ -184,17 +195,37 @@ curl http://localhost:4000/health          # {"ok":true}
 Что важно знать о маршрутах CRM:
 
 - `POST /tasks` и новые исполнители в `PATCH /tasks/:id` шлют сообщение в общий чат в
-  фоне. Ошибка телеграма на ответ не влияет.
+  фоне. Ошибка телеграма на ответ не влияет. Подзадача без исполнителя молчит, а кнопка в
+  сообщении о подзадаче ведёт на родителя.
+- Подзадача берёт проект родителя и уровень у неё один: подзадача подзадачи отвечает 400,
+  чужой родитель 404, а `PATCH` с другим проектом у самой подзадачи 400. Смена проекта у
+  родителя переводит и подзадачи. `GET /tasks` отдаёт только верхний уровень и
+  `subtasks: { total, done }`.
+- `developers` в задачах и проектах сверяются с `team_members`: другое имя отвечает 400
+  «Неизвестный исполнитель». Фильтры `developer` — обычная строка.
+- `PUT /tasks/reorder` применяет только видимые задачи этой колонки, и они меняются
+  местами, которые уже занимали: чужие задачи не сдвигаются.
+- `GET /today` сотруднику всегда отдаёт его самого: параметр `developer` не действует, блоки
+  денег и продлений пустые, а учётка без связанного человека получает пустой срез.
+- `GET /search` сотруднику ищет только по видимым задачам, проектам и заметкам к ним.
+  Подзадача в выдаче ведёт на родителя.
 - `POST /telegram/link-code` принимает `{ password }`, лимит 10/5 мин, только из CRM:
   привязанный чат читает `/today` мимо сессий. Привязка и отвязка видны в `audit_log`
-  (`telegram_link`, `telegram_unlink`), смена пароля и включение 2FA снимают её.
+  (`telegram_link`, `telegram_unlink`), смена пароля и включение 2FA снимают её. Команда
+  `/today` в общем чате даёт общую сводку, в личном чате админа тоже, а в личном чате
+  сотрудника только его работу без денег. Утренняя сводка в общий чат по ролям не делится.
 - `PATCH /projects/:id/stages/:position` проверяет порядок оплаты под блокировкой
   строки проекта: этап N+1 нельзя отметить раньше N, снять N при оплаченном N+1 нельзя,
   ответ 409. `PUT /projects/:id/stages` принимает `{ totalMinor }` или `{ amounts }`.
 - `POST /projects/:id/invoices` с `kind: "invoice"` у договора отвечает 409: договор
   платится этапами. Акты разрешены.
-- `POST` и `PATCH /team/accounts` требуют `confirm`: пароль владельца и, если у него
-  включена 2FA, код или действующее окно подтверждения.
+- `POST` и `PATCH /team/accounts` требуют `confirm`: пароль админа и, если у него
+  включена 2FA, код или действующее окно подтверждения. `POST` создаёт учётку и человека одной
+  транзакцией, а если человек уже связан с другой учёткой, отвечает 409. `PATCH` принимает
+  `disabled` и `role`: себя и последнего действующего админа нельзя понизить или отключить,
+  ответ 409.
+- `GET /team/handles` отдаёт `name`, `telegramUsername`, `active`, `role`, `hasAccount`, без
+  почт. `PUT /team/handles` меняет только присланных людей и подтверждения не требует.
 - `GET /today` с ключом `leads`, `GET /invoices?scope=unpaid` и поле `secret` в
   `/credentials` остаются только ради старой вкладки CRM на время выката. Удаляются
   следующим релизом.
@@ -225,14 +256,19 @@ curl http://localhost:4000/health          # {"ok":true}
 в куку уходит случайный секрет, в базу — только его SHA-256, поэтому доступ
 отзывается мгновенно (`revokedAt`), а дамп базы не даёт войти.
 
-`npm run user:create -- <почта> [роль] [--enable]` создаёт учётку или меняет пароль
-существующей, и правила у него такие:
+`npm run user:create -- <почта> [admin|employee] [--name "Имя"] [--enable]` создаёт учётку
+или меняет пароль существующей, и правила у него такие:
 
 - смена пароля закрывает все открытые сессии, удаляет билеты входа и снимает привязку
   телеграма: чат читает сводку мимо сессий, и подключать его надо заново;
-- роль меняется только при явном втором аргументе. Без него сброс пароля роль не трогает;
+- роль меняется только при явном втором аргументе. Без него сброс пароля роль не трогает, но
+  новая учётка без него становится `admin`, поэтому при создании роль указывать всегда;
 - отключённая учётка включается только с флагом `--enable`;
-- последнего действующего владельца понизить нельзя;
+- `--name` связывает учётку с человеком так же, как экран «Команда»: человека нет — заводит,
+  есть без учётки — связывает. Без связи сотрудник видит только созданное им самим. Человек
+  уже связан с другой учёткой — отказ, ничего не меняется. Учётка уже связана с другим
+  человеком — связь остаётся, скрипт предупреждает и завершается с ошибкой;
+- последнего действующего админа понизить нельзя;
 - 2FA скрипт не снимает: забытый пароль не повод. Если учётка переходит к другому
   человеку, нужен ещё `user:reset-2fa`, иначе вход останется за старым телефоном.
 
@@ -263,7 +299,7 @@ npm run user:reset-2fa:prod -- <почта>            # в контейнере
 ```
 
 Экрана для этого нет намеренно: кнопка стала бы способом обойти второй фактор с украденной
-сессией владельца.
+сессией админа.
 
 ## Пароли сервисов
 
@@ -272,7 +308,7 @@ npm run user:reset-2fa:prod -- <почта>            # в контейнере
 Списки и карточки пароль не отдают никогда. Открыть его можно только через
 `POST /credentials/:id/reveal`: нужна включённая 2FA и код либо действующее окно
 подтверждения, 10 минут в рамках этой сессии. Каждый просмотр пишется в `audit_log`, запись
-идёт раньше расшифровки. Роль `marketing` к паролям доступа не имеет.
+идёт раньше расшифровки. Сотруднику раздел закрыт.
 
 - Нет `VAULT_KEY` — API работает, `reveal` отвечает 503 `vault_unavailable`, вход с 2FA
   закрыт для всех, кроме кодов восстановления.

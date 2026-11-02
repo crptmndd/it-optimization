@@ -1,6 +1,6 @@
 import { formatMoney } from "../crm/currency.js";
 import type { BillDto } from "../crm/projects/bills.js";
-import { collectToday, isQuietSnapshot } from "../crm/today.js";
+import { collectToday, isQuietSnapshot, type TodaySnapshot } from "../crm/today.js";
 import { env } from "../env.js";
 import { escapeHtml, fitMessage, sendMessage, TelegramError } from "./telegram.js";
 import { daysOverdue, daysUntil, periodTitle, pluralDays } from "./zone.js";
@@ -8,9 +8,9 @@ import { daysOverdue, daysUntil, periodTitle, pluralDays } from "./zone.js";
 /**
  * Утренняя сводка в общий чат.
  *
- * Личных дайджестов нет: исполнители значатся именами, а не учётками, так что
- * «что делать мне» система вычислить не может. Зато у каждой строки указано, на
- * ком она висит, — в общем чате команды это и нужно.
+ * Личной рассылки нет: у каждой строки указано, на ком она висит, и в общем чате
+ * команды этого хватает. Личный срез бывает только по запросу, `/today` сотрудника в
+ * своём чате: тот же текст из меньшего снимка.
  *
  * Если напоминать не о чем, сообщение не отправляется вовсе. Ежедневное «всё
  * чисто» приучает не открывать бота, и тогда важное сообщение тоже пролистают.
@@ -28,9 +28,7 @@ const MAX_LINES = 15;
 
 /** «· Егор, Вадим» или «· ничья» — кто отвечает, приписью в конце строки. */
 function who(names: string[], nobody: string): string {
-  return names.length
-    ? ` · ${names.map(escapeHtml).join(", ")}`
-    : ` · <i>${nobody}</i>`;
+  return names.length ? ` · ${names.map(escapeHtml).join(", ")}` : ` · <i>${nobody}</i>`;
 }
 
 function lateSuffix(date: Date | null): string {
@@ -52,8 +50,8 @@ function block(title: string, lines: string[]): string[] {
   ];
 }
 
-export async function buildDigest(): Promise<string | null> {
-  const snapshot = await collectToday();
+export async function buildDigest(source?: TodaySnapshot): Promise<string | null> {
+  const snapshot = source ?? (await collectToday());
   // Не `isEmptySnapshot`: далёкое продление — не повод писать в чат. Разницу
   // между двумя проверками см. у них самих.
   if (isQuietSnapshot(snapshot)) return null;
@@ -63,11 +61,12 @@ export async function buildDigest(): Promise<string | null> {
   const credentialLine = (item: (typeof credentials.urgent)[number]) => {
     const left = item.renewsAt ? daysUntil(item.renewsAt, env.TIMEZONE) : 0;
     const late = item.renewsAt ? daysOverdue(item.renewsAt, env.TIMEZONE) : 0;
-    const when = late > 0
-      ? ` — <b>истёк ${pluralDays(late)} назад</b>`
-      : left === 0
-        ? " — <b>сегодня</b>"
-        : ` — через ${pluralDays(left)}`;
+    const when =
+      late > 0
+        ? ` — <b>истёк ${pluralDays(late)} назад</b>`
+        : left === 0
+          ? " — <b>сегодня</b>"
+          : ` — через ${pluralDays(left)}`;
     // Сумма прямо в напоминании: «пора продлить» без цены заставляет лезть
     // в CRM ровно за одной цифрой.
     const price = item.amountMinor

@@ -5,7 +5,7 @@ import { updateCredential, type Credential } from "@/api/credentials";
 import type { Bill, Project } from "@/api/projects";
 import { updateTask, type Task } from "@/api/tasks";
 import { getToday, type TodaySnapshot } from "@/api/today";
-import { useCurrentUser } from "@/auth/auth-context";
+import { isAdmin, useCurrentUser } from "@/auth/auth-context";
 import { PeopleFilter } from "@/components/people-filter";
 import { PersonChips } from "@/components/person-chip";
 import {
@@ -50,6 +50,10 @@ import { Link } from "react-router";
  * Порядок блоков не случаен: сверху работа, которая уже просрочена, снизу то,
  * что ещё можно успеть, и отдельно деньги — у них другой вопрос: не «что
  * делать», а «кто кому должен».
+ *
+ * Сотруднику сервер отдаёт только свои задачи и проекты, а блоки денег и продлений
+ * пустыми. Блоки скрываются сами, а плитки с нулями остались бы, поэтому их убирает
+ * уже экран.
  */
 
 /**
@@ -99,6 +103,7 @@ function todayInWords(): string {
 
 export function TodayScreen() {
   const user = useCurrentUser();
+  const admin = isAdmin(user);
   /** Пустая строка — вся команда, так считает `PeopleFilter`. В запрос она не уходит. */
   const [person, setPerson] = useState("");
   const [snapshot, setSnapshot] = useState<TodaySnapshot | null>(null);
@@ -121,6 +126,10 @@ export function TodayScreen() {
 
   useEffect(load, [load]);
 
+  /** Запись ждёт сервер, и за это время человека могли переключить: см. экран задач. */
+  const latestLoad = useRef(load);
+  latestLoad.current = load;
+
   async function completeTask(task: Task) {
     const without = (items: Task[]) => items.filter((item) => item.id !== task.id);
     setSnapshot((current) =>
@@ -139,10 +148,11 @@ export function TodayScreen() {
       await updateTask(task.id, { status: "done" });
       // Последняя закрытая задача должна привести к пустому состоянию, а его
       // считает сервер.
-      load();
+      latestLoad.current();
     } catch (cause) {
+      // Именно в таком порядке: `load` сбрасывает ошибку.
+      latestLoad.current();
       setError(cause instanceof ApiError ? cause.message : "Не удалось сохранить");
-      load();
     }
   }
 
@@ -158,7 +168,7 @@ export function TodayScreen() {
     const next = nextRenewalDate(toDateInputValue(item.renewsAt));
     try {
       await updateCredential(item.id, { renewsAt: fromDateInputValue(next) });
-      load();
+      latestLoad.current();
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Не удалось продлить");
     }
@@ -192,12 +202,16 @@ export function TodayScreen() {
         <div className="mt-5">
           <EmptyState
             title="Ничего не горит"
-            note="Ни просроченных задач, ни денег, которые ждут. Свободны."
+            note={
+              admin
+                ? "Ни просроченных задач, ни денег, которые ждут. Свободны."
+                : "Ни просроченных задач, ни горящих сроков. Свободны."
+            }
           />
         </div>
       ) : (
         <>
-          <Tiles snapshot={snapshot} />
+          <Tiles snapshot={snapshot} admin={admin} />
 
           <div className="mt-6 space-y-6">
             <Block
@@ -304,11 +318,13 @@ export function TodayScreen() {
  * лежат на несколько экранов ниже первой задачи. Без красного на нуле: красный здесь
  * значит «есть что разбирать», а не название плитки.
  */
-function Tiles({ snapshot }: { snapshot: TodaySnapshot }) {
+function Tiles({ snapshot, admin }: { snapshot: TodaySnapshot; admin: boolean }) {
   const { tasks, projects, credentials, money: bills } = snapshot;
 
   return (
-    <div className="mt-5 grid grid-cols-3 gap-2 sm:gap-2.5 xl:grid-cols-6">
+    <div
+      className={cn("mt-5 grid grid-cols-3 gap-2 sm:gap-2.5", admin && "xl:grid-cols-6")}
+    >
       <Tile
         label="Просрочено"
         count={tasks.overdue.length}
@@ -321,22 +337,26 @@ function Tiles({ snapshot }: { snapshot: TodaySnapshot }) {
         count={projects.urgent.length + projects.soon.length}
         target={projects.urgent.length > 0 ? BLOCK.urgent : BLOCK.soon}
       />
-      <Tile
-        label="Продлить"
-        count={credentials.expiring.length}
-        target={BLOCK.renewals}
-      />
-      <Tile
-        label="Не выставлено"
-        count={projects.unbilled.length}
-        target={BLOCK.unbilled}
-        danger
-      />
-      <Tile
-        label="К оплате"
-        count={bills.unpaid.length + bills.nextStages.length}
-        target={bills.unpaid.length > 0 ? BLOCK.unpaid : BLOCK.nextStages}
-      />
+      {admin && (
+        <>
+          <Tile
+            label="Продлить"
+            count={credentials.expiring.length}
+            target={BLOCK.renewals}
+          />
+          <Tile
+            label="Не выставлено"
+            count={projects.unbilled.length}
+            target={BLOCK.unbilled}
+            danger
+          />
+          <Tile
+            label="К оплате"
+            count={bills.unpaid.length + bills.nextStages.length}
+            target={bills.unpaid.length > 0 ? BLOCK.unpaid : BLOCK.nextStages}
+          />
+        </>
+      )}
     </div>
   );
 }

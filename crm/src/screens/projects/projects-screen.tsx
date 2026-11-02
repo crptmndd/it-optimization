@@ -30,6 +30,7 @@ import {
   type ProjectFilters,
   type ProjectStatus,
 } from "@/api/projects";
+import { isAdmin, useCurrentUser } from "@/auth/auth-context";
 import { Board, type BoardColumn, type ColumnTone } from "@/components/board";
 import { NotesPanel } from "@/components/notes-panel";
 import { PersonChips } from "@/components/person-chip";
@@ -59,7 +60,8 @@ import {
 import { ProjectBilling, type PaymentBlock } from "./project-billing";
 import { ProjectInvoices } from "./project-invoices";
 import { ProjectStages } from "./project-stages";
-import { PAYMENT_TEXT_CLASS, paymentSummary } from "./payment-summary";
+import { ProjectView } from "./project-view";
+import { hasMoney, PAYMENT_TEXT_CLASS, paymentSummary } from "./payment-summary";
 
 const TABS = [
   { key: "all", label: "Все", filters: { scope: "all" } },
@@ -180,8 +182,19 @@ function PaymentState({ project }: { project: Project }) {
   ) : null;
 }
 
-/** Карточка проекта на доске: кто, что, деньги, срок и люди. Остальное — внутри. */
-function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void }) {
+/**
+ * Карточка проекта на доске: кто, что, деньги, срок и люди. Остальное — внутри.
+ * `showMoney` выключен у сотрудника: денег в его ответе нет.
+ */
+function ProjectCard({
+  project,
+  showMoney,
+  onOpen,
+}: {
+  project: Project;
+  showMoney: boolean;
+  onOpen: () => void;
+}) {
   const closed = isClosed(project);
   const deadline =
     project.deadline && !closed ? describeDeadline(project.deadline) : null;
@@ -217,9 +230,11 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void
 
       <NoteHint note={project.note} className="mt-0" />
 
-      <span className="flex flex-wrap items-center gap-x-2 gap-y-1 empty:hidden">
-        <PaymentState project={project} />
-      </span>
+      {showMoney && (
+        <span className="flex flex-wrap items-center gap-x-2 gap-y-1 empty:hidden">
+          <PaymentState project={project} />
+        </span>
+      )}
 
       <span className="mt-1 flex min-h-6 flex-wrap items-center justify-between gap-x-2 gap-y-1">
         {deadline ? (
@@ -238,6 +253,13 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void
 }
 
 export function ProjectsScreen() {
+  /** Сотрудник только смотрит: запись и деньги закрыты сервером, здесь их просто нет. */
+  const admin = isAdmin(useCurrentUser());
+  /**
+   * Правит и видит деньги тот, кому их прислал сервер. Одной роли мало: в открытой вкладке
+   * она остаётся прежней после понижения, а форма на проекте без денег роняет экран.
+   */
+  const manages = (project: Project) => admin && hasMoney(project);
   const [view, setView] = useState<"list" | "board">("list");
   const [tab, setTab] = useState<TabKey>("all");
   const [clientFilter, setClientFilter] = useState(ALL_CLIENTS);
@@ -288,6 +310,10 @@ export function ProjectsScreen() {
 
   useEffect(load, [load]);
 
+  /** Запись ждёт сервер, и за это время срез могли переключить: см. экран задач. */
+  const latestLoad = useRef(load);
+  latestLoad.current = load;
+
   // Архивный проект в загруженный список не входит, а из поиска, «Счетов» и
   // карточки клиента открываться обязан.
   const fetchProject = useCallback(
@@ -304,25 +330,24 @@ export function ProjectsScreen() {
    * Блок оплаты сохраняется сам, без общей кнопки, и окно при этом остаётся
    * открытым. Форма не сбрасывается: `initial` читается только при монтировании.
    */
-  const refreshOpened = useCallback(
-    (id: string) => {
-      load();
-      getProject(id)
-        .then(({ project }) =>
-          // Окно могли успеть закрыть, и ответ не должен открывать его заново.
-          setEditing((current) => (current?.id === id ? project : current)),
-        )
-        .catch(() => {});
-    },
-    [load],
-  );
+  const refreshOpened = useCallback((id: string) => {
+    latestLoad.current();
+    getProject(id)
+      .then(({ project }) =>
+        // Окно могли успеть закрыть, и ответ не должен открывать его заново.
+        setEditing((current) => (current?.id === id ? project : current)),
+      )
+      .catch(() => {});
+  }, []);
   useFocusFromLink(projects !== null);
 
   useEffect(() => {
+    // Клиенты закрыты для сотрудника: запрос только дал бы 403, а срез ему не нужен.
+    if (!admin) return;
     listClients()
       .then(setClients)
       .catch(() => setClients([]));
-  }, []);
+  }, [admin]);
 
   /**
    * Перенос карточки: сначала статус, потом порядок колонки — сервер при смене
@@ -350,20 +375,23 @@ export function ProjectsScreen() {
     try {
       if (moved) await updateProject(moved.id, { status });
       await reorderProjects(status, ids);
-      load();
+      latestLoad.current();
     } catch (cause) {
+      // Именно в таком порядке: `load` сбрасывает ошибку.
+      latestLoad.current();
       setError(cause instanceof ApiError ? cause.message : "Не удалось перенести");
-      load();
     }
   }
 
   return (
     <section>
       <PageHeader title="Проекты">
-        <Button onClick={() => setCreating(true)}>
-          <Plus size={17} strokeWidth={2.5} />
-          Новый проект
-        </Button>
+        {admin && (
+          <Button onClick={() => setCreating(true)}>
+            <Plus size={17} strokeWidth={2.5} />
+            Новый проект
+          </Button>
+        )}
       </PageHeader>
 
       <FilterToolbar
@@ -375,18 +403,20 @@ export function ProjectsScreen() {
               ariaLabel="Какие проекты показать"
               options={TABS.map((item) => ({ value: item.key, label: item.label }))}
             />
-            <Select
-              value={clientFilter}
-              onChange={setClientFilter}
-              ariaLabel="Фильтр по клиенту"
-              icon={<Building2 size={15} strokeWidth={2.25} />}
-              className="bg-background shadow-card w-full rounded-xl sm:w-52"
-              options={[
-                { value: ALL_CLIENTS, label: "Все клиенты" },
-                { value: NO_CLIENT, label: "Без клиента" },
-                ...clients.map((client) => ({ value: client.id, label: client.name })),
-              ]}
-            />
+            {admin && (
+              <Select
+                value={clientFilter}
+                onChange={setClientFilter}
+                ariaLabel="Фильтр по клиенту"
+                icon={<Building2 size={15} strokeWidth={2.25} />}
+                className="bg-background shadow-card w-full rounded-xl sm:w-52"
+                options={[
+                  { value: ALL_CLIENTS, label: "Все клиенты" },
+                  { value: NO_CLIENT, label: "Без клиента" },
+                  ...clients.map((client) => ({ value: client.id, label: client.name })),
+                ]}
+              />
+            )}
           </>
         }
         search={<SearchField value={search} onChange={setSearch} />}
@@ -415,13 +445,18 @@ export function ProjectsScreen() {
         {projects === null ? (
           <LoadingRows />
         ) : projects.length === 0 ? (
-          <EmptyState {...emptyState(tab, clientFilter, debouncedSearch)} />
+          <EmptyState {...emptyState(tab, clientFilter, debouncedSearch, admin)} />
         ) : shownView === "board" ? (
           <Board
-            onAdd={(columnKey) => {
-              setPrefillStatus(columnKey as ProjectStatus);
-              setCreating(true);
-            }}
+            readOnly={!admin}
+            onAdd={
+              admin
+                ? (columnKey) => {
+                    setPrefillStatus(columnKey as ProjectStatus);
+                    setCreating(true);
+                  }
+                : undefined
+            }
             columns={
               PROJECT_STATUSES.map((status) => ({
                 key: status,
@@ -430,9 +465,17 @@ export function ProjectsScreen() {
                 items: projects.filter((project) => project.status === status),
               })) satisfies BoardColumn<Project>[]
             }
-            onMove={(columnKey, ids) => void moveProject(columnKey as ProjectStatus, ids)}
+            onMove={
+              admin
+                ? (columnKey, ids) => void moveProject(columnKey as ProjectStatus, ids)
+                : undefined
+            }
             renderCard={(project) => (
-              <ProjectCard project={project} onOpen={() => setEditing(project)} />
+              <ProjectCard
+                project={project}
+                showMoney={manages(project)}
+                onOpen={() => setEditing(project)}
+              />
             )}
           />
         ) : (
@@ -441,6 +484,7 @@ export function ProjectsScreen() {
               <ProjectRow
                 key={project.id}
                 project={project}
+                showMoney={manages(project)}
                 onOpen={() => setEditing(project)}
               />
             ))}
@@ -470,12 +514,27 @@ export function ProjectsScreen() {
               setEditing(project);
               setRevealFor(project.id);
             }
-            load();
+            latestLoad.current();
           }}
         />
       )}
 
-      {editing && (
+      {editing && !manages(editing) && (
+        <ProjectView
+          project={editing}
+          badge={
+            <>
+              <Badge tone={STATUS_TONE[editing.status] ?? "neutral"}>
+                {PROJECT_STATUS_LABELS[editing.status]}
+              </Badge>
+              {editing.archivedAt && <Badge>архив</Badge>}
+            </>
+          }
+          onClose={() => setEditing(null)}
+        />
+      )}
+
+      {editing && manages(editing) && (
         <ProjectModal
           title="Проект"
           badge={editing.archivedAt ? <Badge>архив</Badge> : undefined}
@@ -497,17 +556,17 @@ export function ProjectsScreen() {
               project.payment.mode !== editing.payment.mode;
             setEditing(opened ? project : null);
             setRevealFor(opened ? project.id : null);
-            load();
+            latestLoad.current();
           }}
           onArchive={async () => {
             await (editing.archivedAt ? unarchiveProject : archiveProject)(editing.id);
             setEditing(null);
-            load();
+            latestLoad.current();
           }}
           onDelete={async () => {
             await deleteProject(editing.id);
             setEditing(null);
-            load();
+            latestLoad.current();
           }}
         />
       )}
@@ -520,6 +579,7 @@ function emptyState(
   tab: TabKey,
   clientFilter: string,
   search: string,
+  admin: boolean,
 ): { title: string; note: string } {
   if (tab === "archive") {
     return {
@@ -530,13 +590,26 @@ function emptyState(
   if (tab !== "all" || clientFilter !== ALL_CLIENTS || search) {
     return { title: "Ничего не нашлось", note: "Попробуйте другой срез или клиента." };
   }
-  return {
-    title: "Пока пусто",
-    note: "Проект — это работа, у которой есть начало и конец. Заведите первый.",
-  };
+  return admin
+    ? {
+        title: "Пока пусто",
+        note: "Проект — это работа, у которой есть начало и конец. Заведите первый.",
+      }
+    : {
+        title: "Пока пусто",
+        note: "Здесь будут проекты, которые вы ведёте или в которых у вас есть задачи.",
+      };
 }
 
-function ProjectRow({ project, onOpen }: { project: Project; onOpen: () => void }) {
+function ProjectRow({
+  project,
+  showMoney,
+  onOpen,
+}: {
+  project: Project;
+  showMoney: boolean;
+  onOpen: () => void;
+}) {
   // Срок убранного проекта никого не торопит, поэтому в архиве красной плашки нет.
   const deadline =
     project.deadline && !isClosed(project) && !project.archivedAt
@@ -547,12 +620,18 @@ function ProjectRow({ project, onOpen }: { project: Project; onOpen: () => void 
     <li>
       {/* Колонки с xl, а не с sm: боковое меню отнимает ширину, и на меньшем экране пять
           столбцов сжали бы название до пары букв. До этого плашки идут вторым рядом.
-          Столбец задан у каждой ячейки: пустой срок не должен сдвигать соседние. */}
+          Столбец задан у каждой ячейки: пустой срок не должен сдвигать соседние.
+          У сотрудника колонки оплаты нет: пустая съедала бы ширину названия. */}
       <button
         type="button"
         onClick={onOpen}
         data-card-id={project.id}
-        className="hover:bg-muted/60 grid min-h-14 w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 px-4 py-2.5 text-left transition-colors xl:grid-cols-[minmax(0,1fr)_6.5rem_6rem_10rem_11rem]"
+        className={cn(
+          "hover:bg-muted/60 grid min-h-14 w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 px-4 py-2.5 text-left transition-colors",
+          showMoney
+            ? "xl:grid-cols-[minmax(0,1fr)_6.5rem_6rem_10rem_11rem]"
+            : "xl:grid-cols-[minmax(0,1fr)_6.5rem_6rem_10rem]",
+        )}
       >
         <span className="min-w-0 xl:col-start-1 xl:row-start-1">
           <span className="flex min-w-0 items-center gap-2">
@@ -581,9 +660,11 @@ function ProjectRow({ project, onOpen }: { project: Project; onOpen: () => void 
             </span>
           )}
 
-          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 empty:hidden xl:col-start-5 xl:row-start-1 xl:flex-col xl:items-end xl:justify-self-end">
-            <PaymentState project={project} />
-          </span>
+          {showMoney && (
+            <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 empty:hidden xl:col-start-5 xl:row-start-1 xl:flex-col xl:items-end xl:justify-self-end">
+              <PaymentState project={project} />
+            </span>
+          )}
         </span>
       </button>
     </li>

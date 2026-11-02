@@ -186,13 +186,18 @@ model ContentRevision {
 
 // ------------------------------------------------------------------- Доступ
 
+/// Две роли. Ограничение проверяется на каждом маршруте, а не прячется в меню:
+/// скрытая кнопка защищает от случайности, а не от человека с консолью.
+///
+/// Значения в базе прежние (`owner`, `editor`): DDL enum не менялся, поэтому откат
+/// API на старый образ работает без SQL. В сыром SQL писать старые значения.
 enum UserRole {
-  owner
-  editor
-  /// Только раздел лидов. Заведена под маркетолога, который приводит
-  /// обращения и ведёт их сам, но к проектам, задачам и сайту отношения не
-  /// имеет. Ограничение проверяется на каждом маршруте, а не прячется в меню:
-  /// скрытая кнопка защищает от случайности, а не от человека с консолью.
+  /// Видит всё: команду, деньги, доступы, панель сайта.
+  admin    @map("owner")
+  /// Видит только своё: см. `src/crm/access.ts`.
+  employee @map("editor")
+  /// Устарело, строк нет. Осталось только потому, что Postgres не умеет удалять
+  /// значение enum.
   marketing
 }
 
@@ -202,7 +207,7 @@ model User {
   /// Argon2id. Открытый пароль не хранится и не логируется.
   passwordHash String    @map("password_hash")
   name         String?
-  role         UserRole  @default(editor)
+  role         UserRole  @default(employee)
   lastLoginAt  DateTime? @map("last_login_at")
 
   /// Чат, который бот считает этой учёткой: там работает `/today`, а без общего чата
@@ -236,6 +241,8 @@ model User {
   actions       AuditLog[]
   recoveryCodes RecoveryCode[]
   loginTickets  LoginTicket[]
+  /// Человек из команды, которым значится эта учётка. Есть не у каждой.
+  member        TeamMember?
 
   ownedLeads   Lead[] @relation("LeadOwner")
   createdTasks Task[] @relation("TaskAuthor")
@@ -298,11 +305,18 @@ model RecoveryCode {
   @@map("recovery_codes")
 }
 
-/// Telegram-ники исполнителей. Ключ — имя из DEVELOPERS: исполнители значатся
-/// именами, а не учётками. Строки нет — ника нет, это нормальное состояние.
+/// Люди команды: кто может значиться исполнителем проекта или задачи.
+///
+/// Ключ — имя: оно и лежит в `developers[]`. Исполнители значатся именами, а не
+/// учётками, потому что учётка есть не у каждого, а её отключение не должно стирать
+/// человека из истории. Связь с учёткой отдельная и необязательная; SetNull, потому
+/// что люди из `developers[]` переживают удаление учётки.
 model TeamMember {
   name             String   @id
   telegramUsername String?  @map("telegram_username")
+  userId           String?  @unique @map("user_id") @db.Uuid
+  user             User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  createdAt        DateTime @default(now()) @map("created_at")
   updatedAt        DateTime @updatedAt @map("updated_at")
 
   @@map("team_members")
@@ -446,7 +460,7 @@ model Project {
   /// стирать его из истории проектов. Список — проект нередко тянут вдвоём, и в
   /// утренней сводке должно быть видно обоих.
   ///
-  /// Допустимые значения проверяются по DEVELOPERS в src/crm/developers.ts:
+  /// Допустимые значения проверяются по таблице `team_members` (см. src/crm/people.ts):
   /// свободная строка означала бы «Вадим», «вадим» и «Вадик» как трёх разных
   /// людей, и любая группировка по имени сразу бы врала.
   developers String[]
@@ -620,12 +634,18 @@ model Task {
   projectId String?  @map("project_id") @db.Uuid
   project   Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
+  /// Родитель подзадачи. Вложенность в один уровень держит API, а не база. Cascade
+  /// срабатывает только при физическом удалении: мягкое подзадачи не трогает.
+  parentId String? @map("parent_id") @db.Uuid
+  parent   Task?   @relation("Subtasks", fields: [parentId], references: [id], onDelete: Cascade)
+  subtasks Task[]  @relation("Subtasks")
+
   status   TaskStatus   @default(todo)
   priority TaskPriority @default(normal)
   /// Порядок внутри колонки на доске.
   position Int          @default(0)
 
-  /// Кто делает. Имена из DEVELOPERS, как и у проекта, — по той же причине.
+  /// Кто делает. Имена из `team_members`, как и у проекта, — по той же причине.
   developers  String[]
   createdById String?  @map("created_by_id") @db.Uuid
   createdBy   User?    @relation("TaskAuthor", fields: [createdById], references: [id], onDelete: SetNull)
@@ -639,6 +659,7 @@ model Task {
 
   @@index([status, position])
   @@index([dueAt])
+  @@index([parentId])
   @@map("tasks")
 }
 
@@ -656,7 +677,7 @@ model Credential {
   /// Логин или адрес почты, под которым заходят.
   login            String?
   url              String?
-  /// На кого оформлено — имя из DEVELOPERS или название компании.
+  /// На кого оформлено — имя человека из команды или название компании.
   owner            String?
   /// К какому проекту относится доступ. Пусто — общий: почта, GitHub, хостинг.
   ///

@@ -2,7 +2,7 @@ import type { Currency, Prisma, ProjectStage } from "@prisma/client";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import { audit } from "../../audit.js";
-import { requireTeam } from "../../auth/guard.js";
+import { requireAdmin } from "../../auth/guard.js";
 import { prisma } from "../../db.js";
 import { sumByCurrency } from "../currency.js";
 import { MAX_AMOUNT_MINOR, optionalDate, optionalText } from "../fields.js";
@@ -209,104 +209,112 @@ const stageBody = z.object({
 });
 
 export async function stageRoutes(app: FastifyInstance): Promise<void> {
-  app.get("/projects/:id/stages", { preHandler: requireTeam }, async (request, reply) => {
-    const params = projectParams.safeParse(request.params);
-    if (!params.success) return invalidInput(reply, params.error);
+  app.get(
+    "/projects/:id/stages",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      const params = projectParams.safeParse(request.params);
+      if (!params.success) return invalidInput(reply, params.error);
 
-    const project = await prisma.project.findFirst({
-      where: { id: params.data.id, deletedAt: null },
-      select: {
-        workType: true,
-        billingMonthly: true,
-        stages: { orderBy: { position: "asc" } },
-      },
-    });
-    if (!project) return reply.code(404).send({ error: "Проект не найден" });
-
-    return reply.send(stagesPayload(project.stages, billingMode(project)));
-  });
-
-  /** Суммы этапов: общая с разбивкой поровну или каждая своя. */
-  app.put("/projects/:id/stages", { preHandler: requireTeam }, async (request, reply) => {
-    const params = projectParams.safeParse(request.params);
-    if (!params.success) return invalidInput(reply, params.error);
-
-    const parsed = stagesBody.safeParse(request.body);
-    if (!parsed.success) return invalidInput(reply, parsed.error);
-
-    const projectId = params.data.id;
-    const { totalMinor, amounts, currency } = parsed.data;
-
-    try {
-      const result = await prisma.$transaction(async (tx) => {
-        const locked = await lockProject(tx, projectId);
-        if (locked.mode !== "stages") {
-          throw new StageRefusal(409, "Проект платится не этапами");
-        }
-
-        // Договор, заведённый старым API при откате, мог остаться без этапов.
-        await ensureStages(tx, projectId, locked.currency);
-        const stages = await tx.projectStage.findMany({
-          where: { projectId },
-          orderBy: { position: "asc" },
-        });
-
-        if (currency && stages.some((it) => it.paidAt && it.currency !== currency)) {
-          throw new StageRefusal(409, "Есть оплаченный этап в другой валюте");
-        }
-
-        const next =
-          amounts !== undefined
-            ? checkAmounts(stages, amounts)
-            : amountsFromTotal(stages, totalMinor ?? null);
-
-        const updated: ProjectStage[] = [];
-        for (const [index, stage] of stages.entries()) {
-          updated.push(
-            await tx.projectStage.update({
-              where: { id: stage.id },
-              data: {
-                amountMinor: next[index] ?? null,
-                ...(currency && !stage.paidAt && { currency }),
-              },
-            }),
-          );
-        }
-
-        // Блока оплаты у договора нет, другого способа сменить валюту проекта не
-        // осталось, а от неё зависит значение по умолчанию в «Счета и акты».
-        if (currency) {
-          await tx.project.updateMany({
-            where: { id: projectId, currency: { not: currency } },
-            data: { currency },
-          });
-        }
-
-        return { mode: locked.mode, stages: updated, before: stages };
-      });
-
-      await audit(request, {
-        entity: "project_stages",
-        entityId: projectId,
-        action: "update",
-        diff: {
-          amountMinor: {
-            from: result.before.map((stage) => stage.amountMinor),
-            to: result.stages.map((stage) => stage.amountMinor),
-          },
-          ...(currency && { currency }),
+      const project = await prisma.project.findFirst({
+        where: { id: params.data.id, deletedAt: null },
+        select: {
+          workType: true,
+          billingMonthly: true,
+          stages: { orderBy: { position: "asc" } },
         },
       });
+      if (!project) return reply.code(404).send({ error: "Проект не найден" });
 
-      return reply.send(stagesPayload(result.stages, result.mode));
-    } catch (cause) {
-      return refuse(reply, cause);
-    }
-  });
+      return reply.send(stagesPayload(project.stages, billingMode(project)));
+    },
+  );
+
+  /** Суммы этапов: общая с разбивкой поровну или каждая своя. */
+  app.put(
+    "/projects/:id/stages",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      const params = projectParams.safeParse(request.params);
+      if (!params.success) return invalidInput(reply, params.error);
+
+      const parsed = stagesBody.safeParse(request.body);
+      if (!parsed.success) return invalidInput(reply, parsed.error);
+
+      const projectId = params.data.id;
+      const { totalMinor, amounts, currency } = parsed.data;
+
+      try {
+        const result = await prisma.$transaction(async (tx) => {
+          const locked = await lockProject(tx, projectId);
+          if (locked.mode !== "stages") {
+            throw new StageRefusal(409, "Проект платится не этапами");
+          }
+
+          // Договор, заведённый старым API при откате, мог остаться без этапов.
+          await ensureStages(tx, projectId, locked.currency);
+          const stages = await tx.projectStage.findMany({
+            where: { projectId },
+            orderBy: { position: "asc" },
+          });
+
+          if (currency && stages.some((it) => it.paidAt && it.currency !== currency)) {
+            throw new StageRefusal(409, "Есть оплаченный этап в другой валюте");
+          }
+
+          const next =
+            amounts !== undefined
+              ? checkAmounts(stages, amounts)
+              : amountsFromTotal(stages, totalMinor ?? null);
+
+          const updated: ProjectStage[] = [];
+          for (const [index, stage] of stages.entries()) {
+            updated.push(
+              await tx.projectStage.update({
+                where: { id: stage.id },
+                data: {
+                  amountMinor: next[index] ?? null,
+                  ...(currency && !stage.paidAt && { currency }),
+                },
+              }),
+            );
+          }
+
+          // Блока оплаты у договора нет, другого способа сменить валюту проекта не
+          // осталось, а от неё зависит значение по умолчанию в «Счета и акты».
+          if (currency) {
+            await tx.project.updateMany({
+              where: { id: projectId, currency: { not: currency } },
+              data: { currency },
+            });
+          }
+
+          return { mode: locked.mode, stages: updated, before: stages };
+        });
+
+        await audit(request, {
+          entity: "project_stages",
+          entityId: projectId,
+          action: "update",
+          diff: {
+            amountMinor: {
+              from: result.before.map((stage) => stage.amountMinor),
+              to: result.stages.map((stage) => stage.amountMinor),
+            },
+            ...(currency && { currency }),
+          },
+        });
+
+        return reply.send(stagesPayload(result.stages, result.mode));
+      } catch (cause) {
+        return refuse(reply, cause);
+      }
+    },
+  );
 
   app.patch(
     "/projects/:id/stages/:position",
-    { preHandler: requireTeam },
+    { preHandler: requireAdmin },
     async (request, reply) => {
       const params = stageParams.safeParse(request.params);
       if (!params.success) return invalidInput(reply, params.error);
@@ -357,8 +365,7 @@ export async function stageRoutes(app: FastifyInstance): Promise<void> {
           // «выставлен» у этапа, который никто не выставлял. Введённую руками дату
           // снятие не трогает.
           const issuedByPayment =
-            stage.paidAt !== null &&
-            stage.issuedAt?.getTime() === stage.paidAt.getTime();
+            stage.paidAt !== null && stage.issuedAt?.getTime() === stage.paidAt.getTime();
           const issuedAt =
             input.issuedAt !== undefined
               ? input.issuedAt

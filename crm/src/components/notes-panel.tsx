@@ -1,10 +1,27 @@
-import { useCallback, useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type Ref,
+} from "react";
 import { ApiError } from "@/api/client";
 import type { Note } from "@/api/leads";
 import { memberLabel } from "@/api/team";
 import { Button, ErrorNote, LoadingRows, Textarea } from "@/components/ui";
 import { formatDateTime } from "@/lib/dates";
 import { PersonChip } from "./person-chip";
+
+export interface NotesHandle {
+  /**
+   * Добавить то, что вписано в поле, но не отправлено. Вызывается перед сохранением окна:
+   * человек видит текст и считает, что он никуда не денется. `false` — не вышло, ошибка
+   * уже на экране.
+   */
+  flush: () => Promise<boolean>;
+}
 
 /**
  * Заметки к записи — одинаково у лида, проекта, задачи и клиента.
@@ -14,10 +31,12 @@ import { PersonChip } from "./person-chip";
  * Загрузка и отправка приходят снаружи — компонент не знает, к чему привязан.
  */
 export function NotesPanel({
+  ref,
   load,
   add,
   hint,
 }: {
+  ref?: Ref<NotesHandle>;
   load: () => Promise<Note[]>;
   add: (body: string) => Promise<Note>;
   hint?: string;
@@ -26,6 +45,8 @@ export function NotesPanel({
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  /** Заметка в пути: «Сохранить» сразу за «Добавить заметку» не должно завести вторую. */
+  const sending = useRef<Promise<boolean> | null>(null);
 
   const refresh = useCallback(() => {
     setError(null);
@@ -39,10 +60,7 @@ export function NotesPanel({
 
   useEffect(refresh, [refresh]);
 
-  async function submit() {
-    const body = draft.trim();
-    if (!body) return;
-
+  async function send(body: string): Promise<boolean> {
     setSaving(true);
     setError(null);
     try {
@@ -51,12 +69,25 @@ export function NotesPanel({
       // ответ сервера уже содержит автора и время.
       setNotes((current) => [...(current ?? []), note]);
       setDraft("");
+      return true;
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Не удалось сохранить");
+      return false;
     } finally {
+      sending.current = null;
       setSaving(false);
     }
   }
+
+  function submit(): Promise<boolean> {
+    if (sending.current) return sending.current;
+    const body = draft.trim();
+    if (!body) return Promise.resolve(true);
+    sending.current = send(body);
+    return sending.current;
+  }
+
+  useImperativeHandle(ref, () => ({ flush: submit }));
 
   return (
     <NotesView
@@ -95,6 +126,17 @@ export function NotesView({
   hint?: string;
   placeholder?: string;
 }) {
+  /*
+   * ⌘Enter здесь добавляет заметку и дальше не идёт: у окна вокруг он значит «сохранить
+   * и закрыть», а человек в этом поле говорит о заметке.
+   */
+  function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Enter" || (!event.metaKey && !event.ctrlKey)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (draft.trim() && !saving) onSubmit();
+  }
+
   return (
     <div>
       <h3 className="text-[15px] font-bold tracking-tight">Заметки</h3>
@@ -139,6 +181,7 @@ export function NotesView({
         <Textarea
           value={draft}
           onChange={(event) => onDraftChange(event.target.value)}
+          onKeyDown={onKeyDown}
           rows={2}
           placeholder={placeholder}
           aria-label="Новая заметка"

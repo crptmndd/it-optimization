@@ -2,7 +2,7 @@ import type { Prisma } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { audit } from "../../audit.js";
-import { requireAuth } from "../../auth/guard.js";
+import { requireAdmin } from "../../auth/guard.js";
 import { notifyNewLeadInBackground } from "../../notify/notifications.js";
 import { prisma } from "../../db.js";
 import { invalidInput } from "../http.js";
@@ -76,7 +76,7 @@ async function findLead(id: string): Promise<LeadDto | null> {
 }
 
 export async function leadRoutes(app: FastifyInstance): Promise<void> {
-  app.get("/leads", { preHandler: requireAuth }, async (request, reply) => {
+  app.get("/leads", { preHandler: requireAdmin }, async (request, reply) => {
     const query = listLeadsQuery.safeParse(request.query);
     if (!query.success) return invalidInput(reply, query.error);
 
@@ -120,7 +120,11 @@ export async function leadRoutes(app: FastifyInstance): Promise<void> {
 
     // Последняя заметка едет вместе со списком: без неё «о чём мы вообще
     // договорились» видно только внутри карточки, а туда лишний раз не ходят.
-    const notes = await briefNotes("lead", leads.map((item) => item.id));
+    const notes = await briefNotes(
+      "lead",
+      leads.map((item) => item.id),
+      request.user!,
+    );
     return reply.send({
       leads: leads.map((item) => ({
         ...toLeadDto(item),
@@ -129,7 +133,7 @@ export async function leadRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  app.post("/leads", { preHandler: requireAuth }, async (request, reply) => {
+  app.post("/leads", { preHandler: requireAdmin }, async (request, reply) => {
     const parsed = createLeadBody.safeParse(request.body);
     if (!parsed.success) return invalidInput(reply, parsed.error);
 
@@ -161,17 +165,17 @@ export async function leadRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(201).send({ lead: toLeadDto(lead) });
   });
 
-  app.get("/leads/:id", { preHandler: requireAuth }, async (request, reply) => {
+  app.get("/leads/:id", { preHandler: requireAdmin }, async (request, reply) => {
     const params = idParams.safeParse(request.params);
     if (!params.success) return invalidInput(reply, params.error);
 
     const lead = await findLead(params.data.id);
     if (!lead) return reply.code(404).send({ error: "Лид не найден" });
 
-    return reply.send({ lead, notes: await listNotes("lead", lead.id) });
+    return reply.send({ lead, notes: await listNotes("lead", lead.id, request.user!) });
   });
 
-  app.patch("/leads/:id", { preHandler: requireAuth }, async (request, reply) => {
+  app.patch("/leads/:id", { preHandler: requireAdmin }, async (request, reply) => {
     const params = idParams.safeParse(request.params);
     if (!params.success) return invalidInput(reply, params.error);
 
@@ -196,7 +200,9 @@ export async function leadRoutes(app: FastifyInstance): Promise<void> {
     if (input.lostReason !== undefined) data.lostReason = input.lostReason;
     if (input.service !== undefined) data.service = input.service;
     if (input.ownerId !== undefined) {
-      data.owner = input.ownerId ? { connect: { id: input.ownerId } } : { disconnect: true };
+      data.owner = input.ownerId
+        ? { connect: { id: input.ownerId } }
+        : { disconnect: true };
     }
     if (input.clientId !== undefined) {
       data.client = input.clientId
@@ -204,7 +210,10 @@ export async function leadRoutes(app: FastifyInstance): Promise<void> {
         : { disconnect: true };
     }
 
-    Object.assign(data, nextStepFor(input.status, input.nextActionAt, input.nextActionNote));
+    Object.assign(
+      data,
+      nextStepFor(input.status, input.nextActionAt, input.nextActionNote),
+    );
 
     const lead = await prisma.lead.update({
       where: { id: params.data.id },
@@ -223,7 +232,7 @@ export async function leadRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ lead: after });
   });
 
-  app.delete("/leads/:id", { preHandler: requireAuth }, async (request, reply) => {
+  app.delete("/leads/:id", { preHandler: requireAdmin }, async (request, reply) => {
     const params = idParams.safeParse(request.params);
     if (!params.success) return invalidInput(reply, params.error);
 
@@ -247,7 +256,7 @@ export async function leadRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(204).send();
   });
 
-  app.post("/leads/:id/notes", { preHandler: requireAuth }, async (request, reply) => {
+  app.post("/leads/:id/notes", { preHandler: requireAdmin }, async (request, reply) => {
     const params = idParams.safeParse(request.params);
     if (!params.success) return invalidInput(reply, params.error);
 

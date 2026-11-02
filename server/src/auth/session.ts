@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { User } from "@prisma/client";
+import { memberNameOf } from "../crm/access.js";
 import { canVault } from "../crypto/sealed.js";
 import { prisma } from "../db.js";
 import { env } from "../env.js";
@@ -73,12 +74,17 @@ export interface AuthenticatedUser {
   name: string | null;
   role: User["role"];
   totpEnabledAt: Date | null;
+  /** Человек из команды, которым значится учётка. Нет связи — null, «своего» у неё нет. */
+  memberName: string | null;
 }
 
 export interface AuthContext {
   user: AuthenticatedUser;
   session: { id: string; twoFactorConfirmedUntil: Date | null };
 }
+
+/** Что подгружать к строке `users`, чтобы `memberNameOf` и `toUserDto` знали человека. */
+export const WITH_MEMBER = { member: { select: { name: true } } } as const;
 
 /** Пользователь и сессия текущего запроса или null. Просроченные сессии не проходят. */
 export async function resolveAuth(request: FastifyRequest): Promise<AuthContext | null> {
@@ -87,7 +93,7 @@ export async function resolveAuth(request: FastifyRequest): Promise<AuthContext 
 
   const session = await prisma.session.findUnique({
     where: { tokenHash: hashToken(token) },
-    include: { user: true },
+    include: { user: { include: WITH_MEMBER } },
   });
 
   if (!session || session.revokedAt || session.expiresAt < new Date()) return null;
@@ -95,7 +101,14 @@ export async function resolveAuth(request: FastifyRequest): Promise<AuthContext 
 
   const { id, email, name, role, totpEnabledAt } = session.user;
   return {
-    user: { id, email, name, role, totpEnabledAt },
+    user: {
+      id,
+      email,
+      name,
+      role,
+      totpEnabledAt,
+      memberName: memberNameOf(session.user),
+    },
     session: {
       id: session.id,
       twoFactorConfirmedUntil: session.twoFactorConfirmedUntil,
@@ -113,18 +126,21 @@ export async function resolveUser(
  * Что наружу уходит о вошедшем. Перечень явный и один на все ответы: сессия читает
  * строку `users` целиком, вместе с `passwordHash` и `totpSecretEnc`.
  */
-export function toUserDto(user: {
-  id: string;
-  email: string;
-  name: string | null;
-  role: User["role"];
-  totpEnabledAt: Date | null;
-}) {
+export function toUserDto(
+  user: {
+    id: string;
+    email: string;
+    name: string | null;
+    role: User["role"];
+    totpEnabledAt: Date | null;
+  } & Parameters<typeof memberNameOf>[0],
+) {
   return {
     id: user.id,
     email: user.email,
     name: user.name,
     role: user.role,
+    memberName: memberNameOf(user),
     twoFactorEnabled: user.totpEnabledAt !== null,
     twoFactorAvailable: canVault,
   };

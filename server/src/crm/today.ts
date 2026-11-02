@@ -1,12 +1,17 @@
-import type { Prisma, Project, Task } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import type { CredentialWithProject } from "./credentials/dto.js";
 import { prisma } from "../db.js";
 import { env } from "../env.js";
 import { startOfToday, startOfTomorrow } from "../notify/zone.js";
-import type { Developer } from "./developers.js";
+import { isAdmin, memberNameOf, type Viewer } from "./access.js";
 import { listBills, type BillDto } from "./projects/bills.js";
-import { OPEN_PROJECT_STATUSES, PROJECT_RELATIONS, unbilled } from "./projects/dto.js";
-import { OPEN_TASK_STATUSES } from "./tasks/dto.js";
+import {
+  OPEN_PROJECT_STATUSES,
+  PROJECT_RELATIONS,
+  projectRelationsFor,
+  unbilled,
+} from "./projects/dto.js";
+import { OPEN_TASK_STATUSES, TASK_RELATIONS } from "./tasks/dto.js";
 
 /**
  * Один источник правды для «что горит»: и утренний дайджест бота, и экран
@@ -20,19 +25,14 @@ import { OPEN_TASK_STATUSES } from "./tasks/dto.js";
  * доступов — намеренно попадают: сайт архивного проекта продолжает работать.
  */
 
-type TaskFull = Task & {
-  project: Pick<Project, "id" | "title"> | null;
-};
+type TaskFull = Prisma.TaskGetPayload<{ include: typeof TASK_RELATIONS }>;
 
 type ProjectFull = Prisma.ProjectGetPayload<{ include: typeof PROJECT_RELATIONS }>;
 
 /**
- * Срез «что горит» — общий для всей команды.
- *
- * Раньше он делился на личный и командный, но личного нет: исполнители значатся
- * именами, а не учётками, так что «мои задачи» выразить нечем. Вместо этого
- * экран может попросить срез по имени (`collectToday({ developer })`), а бот
- * всегда берёт общий.
+ * Срез «что горит». Без фильтра это вся команда: его видят админ и общий чат.
+ * Экран может попросить срез по имени (`collectToday({ developer })`), а что положено
+ * конкретному человеку, решает `collectTodayFor`.
  */
 export interface TodaySnapshot {
   tasks: {
@@ -76,7 +76,11 @@ export interface TodaySnapshot {
 
 /** Фильтр отвечает на «что на мне»; без него — вся команда. */
 export interface TodayFilter {
-  developer?: Developer;
+  developer?: string;
+  /** Только работа: без денег, счетов, продлений и «не выставлено». */
+  workOnly?: boolean;
+  /** Чьими глазами смотрим: счётчики задач у проектов считаются по видимому ему. */
+  viewer?: Viewer;
 }
 
 const DAY_MS = 86_400_000;
@@ -107,12 +111,9 @@ const RENEWAL_WARNING_DAYS = 14;
  */
 const RENEWAL_URGENT_DAYS = 3;
 
-const TASK_INCLUDE = {
-  project: { select: { id: true, title: true } },
-} as const;
-
 export async function collectToday(filter: TodayFilter = {}): Promise<TodaySnapshot> {
-  const { developer } = filter;
+  const { developer, workOnly, viewer } = filter;
+  const projectRelations = projectRelationsFor(viewer);
   const from = startOfToday(env.TIMEZONE);
   const until = startOfTomorrow(env.TIMEZONE);
 
@@ -126,8 +127,10 @@ export async function collectToday(filter: TodayFilter = {}): Promise<TodaySnaps
 
   // Задача архивного проекта остаётся на экране «Задачи», но никого не торопит.
   // В AND, потому что OR по сроку стоит рядом и иначе перезаписал бы это условие.
+  // Подзадачи здесь не считаются: сводка говорит о задачах верхнего уровня.
   const liveTask: Prisma.TaskWhereInput = {
     deletedAt: null,
+    parentId: null,
     AND: [{ OR: [{ projectId: null }, { project: { archivedAt: null } }] }],
   };
   const liveProject: Prisma.ProjectWhereInput = {
@@ -150,7 +153,7 @@ export async function collectToday(filter: TodayFilter = {}): Promise<TodaySnaps
     prisma.task.findMany({
       where: { ...liveTask, ...onDeveloper, status: openTasks, dueAt: { lt: from } },
       orderBy: { dueAt: "asc" },
-      include: TASK_INCLUDE,
+      include: TASK_RELATIONS,
     }),
     prisma.task.findMany({
       where: {
@@ -160,7 +163,7 @@ export async function collectToday(filter: TodayFilter = {}): Promise<TodaySnaps
         dueAt: { gte: from, lt: until },
       },
       orderBy: [{ priority: "desc" }, { position: "asc" }],
-      include: TASK_INCLUDE,
+      include: TASK_RELATIONS,
     }),
     // Ничьи: фильтр отвечает на «что на мне», а на человеке их нет по определению.
     // Бэклог не входит: «когда-нибудь» без исполнителя — норма, иначе блок не
@@ -175,42 +178,46 @@ export async function collectToday(filter: TodayFilter = {}): Promise<TodaySnaps
             OR: [{ dueAt: null }, { dueAt: { gte: until } }],
           },
           orderBy: [{ priority: "desc" }, { position: "asc" }],
-          include: TASK_INCLUDE,
+          include: TASK_RELATIONS,
         }),
     prisma.project.findMany({
       where: { ...liveProject, deadline: { lt: until } },
       orderBy: { deadline: "asc" },
-      include: PROJECT_RELATIONS,
+      include: projectRelations,
     }),
     prisma.project.findMany({
       where: { ...liveProject, deadline: { gte: until, lt: soonUntil } },
       orderBy: { deadline: "asc" },
-      include: PROJECT_RELATIONS,
+      include: projectRelations,
     }),
-    prisma.credential.findMany({
-      include: { project: { select: { id: true, title: true } } },
-      where: {
-        deletedAt: null,
-        renewsAt: { lt: renewalHorizon },
-        // Владелец доступа — свободная строка, поэтому без учёта регистра.
-        ...(developer && { owner: { equals: developer, mode: "insensitive" } }),
-      },
-      orderBy: { renewsAt: "asc" },
-    }),
+    workOnly
+      ? []
+      : prisma.credential.findMany({
+          include: { project: { select: { id: true, title: true } } },
+          where: {
+            deletedAt: null,
+            renewsAt: { lt: renewalHorizon },
+            // Владелец доступа — свободная строка, поэтому без учёта регистра.
+            ...(developer && { owner: { equals: developer, mode: "insensitive" } }),
+          },
+          orderBy: { renewsAt: "asc" },
+        }),
     // Пробелы считаются в коде, а не запросом: «нет счёта за любой месяц с
     // начала работ» через SQL выражается плохо, а помесячных проектов у
     // команды десятки, не тысячи. Условие то же, что в `unbilled()`: проект в
     // работе, billingMode === "monthly".
-    prisma.project.findMany({
-      where: {
-        ...liveProject,
-        status: "active",
-        OR: [{ billingMonthly: true }, { workType: "support" }],
-      },
-      orderBy: { title: "asc" },
-      include: PROJECT_RELATIONS,
-    }),
-    listBills("due", { developer, activeOnly: true }),
+    workOnly
+      ? []
+      : prisma.project.findMany({
+          where: {
+            ...liveProject,
+            status: "active",
+            OR: [{ billingMonthly: true }, { workType: "support" }],
+          },
+          orderBy: { title: "asc" },
+          include: projectRelations,
+        }),
+    workOnly ? [] : listBills("due", { developer, activeOnly: true }),
   ]);
 
   const unbilledProjects = monthlyProjects
@@ -219,7 +226,9 @@ export async function collectToday(filter: TodayFilter = {}): Promise<TodaySnaps
       ...unbilled(project, project.invoices, env.TIMEZONE),
     }))
     .filter(
-      (project): project is (typeof monthlyProjects)[number] & {
+      (
+        project,
+      ): project is (typeof monthlyProjects)[number] & {
         period: string;
         count: number;
       } => project.period !== null,
@@ -264,6 +273,32 @@ export async function collectToday(filter: TodayFilter = {}): Promise<TodaySnaps
     credentials: { urgent: urgentCredentials, later: laterCredentials },
     projects: { urgent: urgentProjects, soon: soonProjects, unbilled: unbilledProjects },
     money: { unpaidUrgent, unpaidLater, nextStages },
+  };
+}
+
+/**
+ * Срез, положенный этому человеку. Админ видит всё и может сузить до любого имени.
+ * Сотруднику параметр не важен: только он сам, только работа. Учётка без связанного
+ * человека ни на ком не значится, поэтому срез пустой: показать вместо него общий
+ * значило бы открыть то, что закрыто ролью.
+ */
+export async function collectTodayFor(
+  viewer: Viewer,
+  developer?: string,
+): Promise<TodaySnapshot> {
+  if (isAdmin(viewer)) return collectToday({ developer });
+
+  const member = memberNameOf(viewer);
+  if (!member) return emptySnapshot();
+  return collectToday({ developer: member, workOnly: true, viewer });
+}
+
+function emptySnapshot(): TodaySnapshot {
+  return {
+    tasks: { overdue: [], today: [], unassigned: [] },
+    credentials: { urgent: [], later: [] },
+    projects: { urgent: [], soon: [], unbilled: [] },
+    money: { unpaidUrgent: [], unpaidLater: [], nextStages: [] },
   };
 }
 

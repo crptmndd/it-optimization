@@ -1,6 +1,6 @@
 import type { Client, Currency, Lead, Project } from "@prisma/client";
 import { z } from "zod";
-import { DEVELOPERS } from "../developers.js";
+import { isAdmin, taskScope, type Viewer } from "../access.js";
 import {
   MAX_AMOUNT_MINOR,
   optionalDate,
@@ -8,6 +8,7 @@ import {
   optionalUuid,
   requiredTitle,
 } from "../fields.js";
+import { MAX_DEVELOPERS } from "../people.js";
 
 export const PROJECT_STATUSES = [
   "planned",
@@ -30,7 +31,8 @@ const projectFields = {
   /// Кто ведёт. Список целиком: приходит новый состав, а не «добавь этого».
   /// Частичные операции над множеством порождают гонки, когда двое правят
   /// проект одновременно.
-  developers: z.array(z.enum(DEVELOPERS)).max(10),
+  /// Имена сверяются с командой в маршруте: список живёт в базе, а не в коде.
+  developers: z.array(z.string().trim().min(1).max(120)).max(MAX_DEVELOPERS),
   startedAt: optionalDate,
   deadline: optionalDate,
 
@@ -92,7 +94,7 @@ export const listProjectsQuery = z.object({
   /// По умолчанию архива нет: все старые вызовы и доска не видят его сами.
   archived: z.enum(["exclude", "only", "include"]).default("exclude"),
   /// Проекты одного человека — «что на мне висит».
-  developer: z.enum(DEVELOPERS).optional(),
+  developer: z.string().trim().min(1).max(120).optional(),
   /** Только те, у кого срок уже прошёл, а проект ещё не закрыт. */
   overdue: z
     .enum(["true", "false"])
@@ -231,7 +233,10 @@ function periodsBetween(from: string, to: string): string[] {
   let year = fromYear;
   let month = fromMonth;
   // Ограничение сверху: порченая дата начала не должна крутить цикл вечно.
-  while ((year < toYear || (year === toYear && month <= toMonth)) && result.length < 120) {
+  while (
+    (year < toYear || (year === toYear && month <= toMonth)) &&
+    result.length < 120
+  ) {
     result.push(`${year}-${String(month).padStart(2, "0")}`);
     month += 1;
     if (month > 12) {
@@ -344,8 +349,61 @@ function projectPayment(item: ProjectWithRelations, timeZone: string): ProjectPa
   return { mode, stages: null, monthly: null };
 }
 
-export function toProjectDto(item: ProjectWithRelations, timeZone: string): ProjectDto {
+/**
+ * Проект глазами сотрудника. Перечень явный, а не `toProjectDto` минус лишнее: поле с
+ * деньгами, добавленное в полный DTO, само сюда не попадёт. Денег нет вовсе, ни нулями,
+ * ни пустыми значениями: сумма, валюта, оплата, этапы, счета, договор, вид работы и
+ * хостинг. Лид тоже убран: это контакт человека из раздела только для админа.
+ */
+export interface EmployeeProjectDto {
+  id: string;
+  title: string;
+  description: string | null;
+  status: (typeof PROJECT_STATUSES)[number];
+  client: { id: string; name: string } | null;
+  developers: string[];
+  startedAt: string | null;
+  deadline: string | null;
+  closedAt: string | null;
+  archivedAt: string | null;
+  position: number;
+  /** Только его задачи: связи приходят из `projectRelationsFor`. */
+  openTaskCount: number;
+  taskCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function taskCounts(item: ProjectWithRelations) {
   const tasks = item.tasks ?? [];
+  return {
+    openTaskCount: tasks.filter(
+      (task) => task.status !== "done" && task.status !== "cancelled",
+    ).length,
+    taskCount: tasks.length,
+  };
+}
+
+export function toEmployeeProjectDto(item: ProjectWithRelations): EmployeeProjectDto {
+  return {
+    id: item.id,
+    title: item.title,
+    description: item.description,
+    status: item.status,
+    client: item.client ? { id: item.client.id, name: item.client.name } : null,
+    developers: item.developers,
+    startedAt: item.startedAt?.toISOString() ?? null,
+    deadline: item.deadline?.toISOString() ?? null,
+    closedAt: item.closedAt?.toISOString() ?? null,
+    archivedAt: item.archivedAt?.toISOString() ?? null,
+    position: item.position,
+    ...taskCounts(item),
+    createdAt: item.createdAt.toISOString(),
+    updatedAt: item.updatedAt.toISOString(),
+  };
+}
+
+export function toProjectDto(item: ProjectWithRelations, timeZone: string): ProjectDto {
   // Акты в расчёт не входят: напоминание про деньги, а не про документы.
   const missing = unbilled(item, item.invoices ?? [], timeZone);
   return {
@@ -374,19 +432,26 @@ export function toProjectDto(item: ProjectWithRelations, timeZone: string): Proj
     archivedAt: item.archivedAt?.toISOString() ?? null,
     payment: projectPayment(item, timeZone),
     caseId: item.caseId,
-    openTaskCount: tasks.filter(
-      (task) => task.status !== "done" && task.status !== "cancelled",
-    ).length,
-    taskCount: tasks.length,
+    ...taskCounts(item),
     createdAt: item.createdAt.toISOString(),
     updatedAt: item.updatedAt.toISOString(),
   };
 }
 
+/** Проект в том виде, который положен этому человеку. Деньги уходят только админу. */
+export function projectDtoFor(
+  viewer: Pick<Viewer, "role">,
+  item: ProjectWithRelations,
+  timeZone: string,
+): ProjectDto | EmployeeProjectDto {
+  return isAdmin(viewer) ? toProjectDto(item, timeZone) : toEmployeeProjectDto(item);
+}
+
 export const PROJECT_RELATIONS = {
   client: { select: { id: true, name: true } },
   lead: { select: { id: true, contact: true, name: true } },
-  tasks: { where: { deletedAt: null }, select: { status: true } },
+  // Подзадачи не считаются: «3 из 5» на карточке говорит о задачах верхнего уровня.
+  tasks: { where: { deletedAt: null, parentId: null }, select: { status: true } },
   // Без сумм: для списка они не нужны, а строк на проект за год набегает две
   // дюжины. Отметка оплаты нужна состоянию оплаты за текущий месяц.
   invoices: { select: { kind: true, period: true, paidAt: true } },
@@ -395,3 +460,21 @@ export const PROJECT_RELATIONS = {
     select: { position: true, amountMinor: true, currency: true, paidAt: true },
   },
 } as const;
+
+/**
+ * Связи проекта для того, кто его читает. Счётчики задач считаются по видимому: число на
+ * карточке сотрудника совпадает с его списком, а чужая работа не просачивается хотя бы
+ * своим количеством. Правило видимости одно, а отдельного запроса ради значка нет.
+ *
+ * Без `viewer` считается вся команда: так сводка уходит в общий чат.
+ */
+export function projectRelationsFor(viewer?: Viewer) {
+  const { tasks } = PROJECT_RELATIONS;
+  return {
+    ...PROJECT_RELATIONS,
+    tasks: {
+      ...tasks,
+      where: { ...tasks.where, AND: viewer ? [taskScope(viewer)] : [] },
+    },
+  };
+}

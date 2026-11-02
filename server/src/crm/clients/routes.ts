@@ -3,7 +3,7 @@ import { Prisma } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { audit } from "../../audit.js";
-import { requireTeam } from "../../auth/guard.js";
+import { requireAdmin } from "../../auth/guard.js";
 import { prisma } from "../../db.js";
 import { invalidInput } from "../http.js";
 import { briefNotes, listNotes, noteRoutesFor } from "../notes.js";
@@ -22,7 +22,7 @@ const WITH_PROJECT_STATUSES = {
 } as const;
 
 export async function clientRoutes(app: FastifyInstance): Promise<void> {
-  app.get("/clients", { preHandler: requireTeam }, async (request, reply) => {
+  app.get("/clients", { preHandler: requireAdmin }, async (request, reply) => {
     const query = listClientsQuery.safeParse(request.query);
     if (!query.success) return invalidInput(reply, query.error);
 
@@ -44,7 +44,11 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
       take: 500,
     });
 
-    const notes = await briefNotes("client", clients.map((item) => item.id));
+    const notes = await briefNotes(
+      "client",
+      clients.map((item) => item.id),
+      request.user!,
+    );
     return reply.send({
       clients: clients.map((item) => ({
         ...toClientDto(item),
@@ -53,7 +57,7 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  app.post("/clients", { preHandler: requireTeam }, async (request, reply) => {
+  app.post("/clients", { preHandler: requireAdmin }, async (request, reply) => {
     const parsed = createClientBody.safeParse(request.body);
     if (!parsed.success) return invalidInput(reply, parsed.error);
 
@@ -73,7 +77,7 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(201).send({ client: toClientDto(client) });
   });
 
-  app.get("/clients/:id", { preHandler: requireTeam }, async (request, reply) => {
+  app.get("/clients/:id", { preHandler: requireAdmin }, async (request, reply) => {
     const params = idParams.safeParse(request.params);
     if (!params.success) return invalidInput(reply, params.error);
 
@@ -85,11 +89,11 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
 
     return reply.send({
       client: toClientDto(client),
-      notes: await listNotes("client", client.id),
+      notes: await listNotes("client", client.id, request.user!),
     });
   });
 
-  app.patch("/clients/:id", { preHandler: requireTeam }, async (request, reply) => {
+  app.patch("/clients/:id", { preHandler: requireAdmin }, async (request, reply) => {
     const params = idParams.safeParse(request.params);
     if (!params.success) return invalidInput(reply, params.error);
 
@@ -123,7 +127,7 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ client: toClientDto(client) });
   });
 
-  app.delete("/clients/:id", { preHandler: requireTeam }, async (request, reply) => {
+  app.delete("/clients/:id", { preHandler: requireAdmin }, async (request, reply) => {
     const params = idParams.safeParse(request.params);
     if (!params.success) return invalidInput(reply, params.error);
 
@@ -155,9 +159,8 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
     app,
     "client",
     "clients",
-    async (id) =>
-      (await prisma.client.count({ where: { id, deletedAt: null } })) > 0,
+    async (id) => (await prisma.client.count({ where: { id, deletedAt: null } })) > 0,
     "Клиент не найден",
-    requireTeam,
+    requireAdmin,
   );
 }

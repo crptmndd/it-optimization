@@ -2,12 +2,13 @@ import { Prisma } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { audit } from "../audit.js";
-import { requireAuth, requireOwner, requireTeam } from "../auth/guard.js";
+import { requireAdmin, requireTeam } from "../auth/guard.js";
 import { hashPassword, validatePasswordStrength } from "../auth/password.js";
-import { confirmOwner, totpCode } from "../auth/two-factor.js";
+import { confirmAdmin, totpCode } from "../auth/two-factor.js";
 import { prisma } from "../db.js";
-import { DEVELOPERS } from "./developers.js";
+import { memberNameOf } from "./access.js";
 import { invalidInput } from "./http.js";
+import { assertDevelopers, linkPerson } from "./people.js";
 
 /**
  * Учётки только через этот перечень: в строке `users` лежат `passwordHash` и
@@ -22,6 +23,7 @@ const ACCOUNT_FIELDS = {
   lastLoginAt: true,
   disabledAt: true,
   createdAt: true,
+  member: { select: { name: true } },
 } as const;
 
 type AccountRow = Prisma.UserGetPayload<{ select: typeof ACCOUNT_FIELDS }>;
@@ -32,6 +34,7 @@ function toAccountDto(row: AccountRow) {
     email: row.email,
     name: row.name,
     role: row.role,
+    memberName: memberNameOf(row),
     twoFactorEnabled: row.totpEnabledAt !== null,
     lastLoginAt: row.lastLoginAt?.toISOString() ?? null,
     disabledAt: row.disabledAt?.toISOString() ?? null,
@@ -41,21 +44,14 @@ function toAccountDto(row: AccountRow) {
 
 const idParams = z.object({ id: z.string().uuid() });
 
-/** Подтверждение владельца: см. `confirmOwner`. Без него куки хватило бы на всё. */
+/** Что можно назначить. `marketing` живёт только в enum базы: удалить значение нельзя. */
+const ACCOUNT_ROLES = ["admin", "employee"] as const;
+
+/** Подтверждение админа: см. `confirmAdmin`. Без него куки хватило бы на всё. */
 const confirmField = z.object({
   password: z.string().min(1).max(200),
   code: totpCode.optional(),
 });
-
-const createBody = z.object({
-  email: z.string().trim().toLowerCase().email().max(254),
-  name: z.string().trim().min(1).max(120),
-  role: z.enum(["owner", "editor", "marketing"]),
-  password: z.string().min(1).max(200),
-  confirm: confirmField,
-});
-
-const updateBody = z.object({ disabled: z.boolean(), confirm: confirmField });
 
 const handleField = z.union([
   z.null(),
@@ -69,33 +65,86 @@ const handleField = z.union([
     ),
 ]);
 
-const handlesBody = z.object({
-  handles: z
-    .array(z.object({ name: z.enum(DEVELOPERS), telegramUsername: handleField }))
-    .max(DEVELOPERS.length),
+const createBody = z.object({
+  email: z.string().trim().toLowerCase().email().max(254),
+  name: z.string().trim().min(1).max(120),
+  role: z.enum(ACCOUNT_ROLES).default("employee"),
+  password: z.string().min(1).max(200),
+  telegramUsername: handleField.optional(),
+  confirm: confirmField,
 });
 
+const updateBody = z
+  .object({
+    disabled: z.boolean().optional(),
+    role: z.enum(ACCOUNT_ROLES).optional(),
+    confirm: confirmField,
+  })
+  .refine(
+    (body) => body.disabled !== undefined || body.role !== undefined,
+    "Нужно указать, что менять",
+  );
+
+const handlesBody = z.object({
+  handles: z
+    .array(
+      z.object({
+        name: z.string().trim().min(1).max(120),
+        telegramUsername: handleField,
+      }),
+    )
+    .max(200),
+});
+
+/**
+ * Вся команда, включая людей без учётки: они тоже бывают исполнителями. `active` —
+ * можно ли выбрать человека на новую работу: отключена только учётка, а имя остаётся в
+ * истории. Сортировка с именем, иначе у заведённых в одну транзакцию порядок плавал бы.
+ */
 async function listHandles() {
-  const rows = await prisma.teamMember.findMany();
-  const byName = new Map(rows.map((row) => [row.name, row.telegramUsername]));
-  // Все имена, а не только сохранённые: строки нет — ника нет, и это обычное
-  // состояние, а экрану нужен полный список полей.
-  return DEVELOPERS.map((name) => ({
-    name,
-    telegramUsername: byName.get(name) ?? null,
+  const rows = await prisma.teamMember.findMany({
+    orderBy: [{ createdAt: "asc" }, { name: "asc" }],
+    select: {
+      name: true,
+      telegramUsername: true,
+      user: { select: { role: true, disabledAt: true } },
+    },
+  });
+  return rows.map((row) => ({
+    name: row.name,
+    telegramUsername: row.telegramUsername,
+    active: !row.user?.disabledAt,
+    role: row.user?.role ?? null,
+    hasAccount: row.user !== null,
   }));
 }
 
-/** Лимит как у входа: оба маршрута принимают пароль владельца. */
+/** Лимит как у входа: оба маршрута принимают пароль админа. */
 const STRICT_LIMIT = { rateLimit: { max: 10, timeWindow: "5 minutes" } };
 
+const PERSON_TAKEN = "Такой сотрудник уже есть";
+
+/** Откатывает транзакцию: учётка без человека осталась бы без единой своей задачи. */
+class PersonTaken extends Error {}
+
+/** На какой уникальности сорвалась запись: почта и имя отвечают разными текстами. */
+function uniqueTarget(cause: unknown): string | null {
+  if (
+    !(cause instanceof Prisma.PrismaClientKnownRequestError) ||
+    cause.code !== "P2002"
+  ) {
+    return null;
+  }
+  return String(cause.meta?.target ?? "");
+}
+
 /**
- * `GET /team` — справочник для выпадающих «кто ведёт» и «исполнитель»: только имя и
- * почта, ролей и дат входа там быть не должно. Управление учётками отдельно и только
- * у владельца.
+ * `GET /team` — почты всех учёток для выбора ответственного за лид, поэтому только
+ * админу: лиды его раздел, а сотрудникам чужие адреса незачем. Людей для «Кто делает»
+ * отдаёт `GET /team/handles`, он без почт.
  */
 export async function teamRoutes(app: FastifyInstance): Promise<void> {
-  app.get("/team", { preHandler: requireAuth }, async (_request, reply) => {
+  app.get("/team", { preHandler: requireAdmin }, async (_request, reply) => {
     const users = await prisma.user.findMany({
       where: { disabledAt: null },
       select: { id: true, name: true, email: true },
@@ -104,7 +153,7 @@ export async function teamRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ team: users });
   });
 
-  app.get("/team/accounts", { preHandler: requireOwner }, async (_request, reply) => {
+  app.get("/team/accounts", { preHandler: requireAdmin }, async (_request, reply) => {
     const accounts = await prisma.user.findMany({
       select: ACCOUNT_FIELDS,
       orderBy: [{ disabledAt: { sort: "asc", nulls: "first" } }, { createdAt: "asc" }],
@@ -112,15 +161,20 @@ export async function teamRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ accounts: accounts.map(toAccountDto) });
   });
 
+  /**
+   * Новый сотрудник: учётка и человек вместе, одной транзакцией. Если человек с таким
+   * именем уже есть и учётки у него нет, он её получает; так появляется вход у того,
+   * кто давно значится в задачах.
+   */
   app.post(
     "/team/accounts",
-    { preHandler: requireOwner, config: STRICT_LIMIT },
+    { preHandler: requireAdmin, config: STRICT_LIMIT },
     async (request, reply) => {
       const parsed = createBody.safeParse(request.body ?? {});
       if (!parsed.success) return invalidInput(reply, parsed.error);
 
-      const { email, name, role, password, confirm } = parsed.data;
-      if (!(await confirmOwner(request, reply, confirm))) return reply;
+      const { email, name, role, password, telegramUsername, confirm } = parsed.data;
+      if (!(await confirmAdmin(request, reply, confirm))) return reply;
 
       const weak = validatePasswordStrength(password);
       if (weak) return reply.code(400).send({ error: weak });
@@ -129,18 +183,28 @@ export async function teamRoutes(app: FastifyInstance): Promise<void> {
 
       let account: AccountRow;
       try {
-        account = await prisma.user.create({
-          data: { email, name, role, passwordHash },
-          select: ACCOUNT_FIELDS,
+        account = await prisma.$transaction(async (tx) => {
+          const { id } = await tx.user.create({
+            data: { email, name, role, passwordHash },
+            select: { id: true },
+          });
+          if (!(await linkPerson(tx, { userId: id, name, telegramUsername }))) {
+            throw new PersonTaken();
+          }
+          return tx.user.findUniqueOrThrow({ where: { id }, select: ACCOUNT_FIELDS });
         });
       } catch (cause) {
-        if (
-          cause instanceof Prisma.PrismaClientKnownRequestError &&
-          cause.code === "P2002"
-        ) {
-          return reply.code(409).send({ error: "Такая почта уже заведена" });
+        if (cause instanceof PersonTaken) {
+          return reply.code(409).send({ error: PERSON_TAKEN });
         }
-        throw cause;
+        const target = uniqueTarget(cause);
+        if (target === null) throw cause;
+        // Имя занято, если двое завели одного человека одновременно: проверка в
+        // `linkPerson` пропустила обоих, а первичный ключ — нет.
+        const error = target.includes("email")
+          ? "Такая почта уже заведена"
+          : PERSON_TAKEN;
+        return reply.code(409).send({ error });
       }
 
       await audit(request, {
@@ -154,13 +218,17 @@ export async function teamRoutes(app: FastifyInstance): Promise<void> {
   );
 
   /**
-   * Отключить или включить учётку. Владельцы блокируются целиком: два владельца,
-   * отключающие друг друга одновременно, иначе оба прошли бы проверку «последний» и
-   * оставили бы систему без хозяина.
+   * Отключить, включить или сменить роль. Админы блокируются целиком: два админа,
+   * отключающие или понижающие друг друга одновременно, иначе оба прошли бы проверку
+   * «последний» и оставили бы систему без хозяина. Роль в сыром SQL старая, `owner`:
+   * enum в базе не менялся.
+   *
+   * Сессии при смене роли не отзываются: роль читается на каждом запросе, и понижение
+   * действует сразу, а выбрасывать человека из работы незачем.
    */
   app.patch(
     "/team/accounts/:id",
-    { preHandler: requireOwner, config: STRICT_LIMIT },
+    { preHandler: requireAdmin, config: STRICT_LIMIT },
     async (request, reply) => {
       const params = idParams.safeParse(request.params);
       if (!params.success) return invalidInput(reply, params.error);
@@ -168,12 +236,17 @@ export async function teamRoutes(app: FastifyInstance): Promise<void> {
       const parsed = updateBody.safeParse(request.body ?? {});
       if (!parsed.success) return invalidInput(reply, parsed.error);
 
-      const { disabled, confirm } = parsed.data;
-      if (!(await confirmOwner(request, reply, confirm))) return reply;
+      const { disabled, role, confirm } = parsed.data;
+      if (!(await confirmAdmin(request, reply, confirm))) return reply;
 
       const outcome = await prisma.$transaction(
-        async (tx): Promise<{ error: [404 | 409, string] } | { account: AccountRow }> => {
-          const owners = await tx.$queryRaw<{ id: string }[]>`
+        async (
+          tx,
+        ): Promise<
+          | { error: [404 | 409, string] }
+          | { account: AccountRow; previousRole: AccountRow["role"] }
+        > => {
+          const admins = await tx.$queryRaw<{ id: string }[]>`
             SELECT id FROM users WHERE role = 'owner' AND disabled_at IS NULL FOR UPDATE`;
 
           const target = await tx.user.findUnique({
@@ -182,37 +255,40 @@ export async function teamRoutes(app: FastifyInstance): Promise<void> {
           });
           if (!target) return { error: [404, "Учётка не найдена"] };
 
-          if (!disabled) {
-            const account = await tx.user.update({
-              where: { id: target.id },
-              data: { disabledAt: null },
-              select: ACCOUNT_FIELDS,
-            });
-            return { account };
+          const self = target.id === request.user!.id;
+          const lastAdmin =
+            admins.length === 1 && admins.some((admin) => admin.id === target.id);
+          const data: Prisma.UserUpdateInput = {};
+
+          if (role !== undefined && role !== target.role) {
+            if (self) return { error: [409, "Нельзя менять свою роль"] };
+            if (lastAdmin) return { error: [409, "Нельзя понизить последнего админа"] };
+            data.role = role;
           }
 
-          if (target.id === request.user!.id) {
-            return { error: [409, "Нельзя отключить свою учётку"] };
-          }
-          const isActiveOwner = owners.some((owner) => owner.id === target.id);
-          if (isActiveOwner && owners.length === 1) {
-            return { error: [409, "Нельзя отключить последнего владельца"] };
+          if (disabled === false) data.disabledAt = null;
+          if (disabled === true) {
+            if (self) return { error: [409, "Нельзя отключить свою учётку"] };
+            if (lastAdmin) return { error: [409, "Нельзя отключить последнего админа"] };
+            data.disabledAt = target.disabledAt ?? new Date();
           }
 
-          const now = new Date();
           const account = await tx.user.update({
             where: { id: target.id },
-            data: { disabledAt: target.disabledAt ?? now },
+            data,
             select: ACCOUNT_FIELDS,
           });
-          // Сессии отзываются, а не только перестают проходить проверку: иначе
-          // обратное включение оживило бы украденную сессию.
-          await tx.session.updateMany({
-            where: { userId: target.id, revokedAt: null },
-            data: { revokedAt: now },
-          });
-          await tx.loginTicket.deleteMany({ where: { userId: target.id } });
-          return { account };
+
+          if (disabled === true) {
+            // Сессии отзываются, а не только перестают проходить проверку: иначе
+            // обратное включение оживило бы украденную сессию.
+            await tx.session.updateMany({
+              where: { userId: target.id, revokedAt: null },
+              data: { revokedAt: new Date() },
+            });
+            await tx.loginTicket.deleteMany({ where: { userId: target.id } });
+          }
+          return { account, previousRole: target.role };
         },
       );
 
@@ -221,35 +297,48 @@ export async function teamRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(status).send({ error });
       }
 
-      await audit(request, {
-        entity: "users",
-        entityId: outcome.account.id,
-        action: disabled ? "disable" : "enable",
-        diff: { email: outcome.account.email, role: outcome.account.role },
-      });
-      return reply.send({ account: toAccountDto(outcome.account) });
+      const { account, previousRole } = outcome;
+      if (disabled !== undefined) {
+        await audit(request, {
+          entity: "users",
+          entityId: account.id,
+          action: disabled ? "disable" : "enable",
+          diff: { email: account.email, role: account.role },
+        });
+      }
+      if (account.role !== previousRole) {
+        await audit(request, {
+          entity: "users",
+          entityId: account.id,
+          action: "role",
+          diff: { email: account.email, role: { from: previousRole, to: account.role } },
+        });
+      }
+      return reply.send({ account: toAccountDto(account) });
     },
   );
 
-  // Читать может вся команда: форма задачи показывает, кого бот сможет отметить.
-  // Менять — только владелец.
+  // Читать может вся команда: выбор «Кто делает» строится отсюда, и форма задачи
+  // показывает, кого бот сможет отметить. Менять — только админ.
   app.get("/team/handles", { preHandler: requireTeam }, async (_request, reply) => {
     return reply.send({ handles: await listHandles() });
   });
 
-  app.put("/team/handles", { preHandler: requireOwner }, async (request, reply) => {
+  app.put("/team/handles", { preHandler: requireAdmin }, async (request, reply) => {
     const parsed = handlesBody.safeParse(request.body ?? {});
     if (!parsed.success) return invalidInput(reply, parsed.error);
 
+    const { handles } = parsed.data;
+    const problem = await assertDevelopers(handles.map((item) => item.name));
+    if (problem) return reply.code(400).send({ error: problem });
+
     await prisma.$transaction(
-      parsed.data.handles.map(({ name, telegramUsername }) => {
-        const username = telegramUsername || null;
-        return prisma.teamMember.upsert({
+      handles.map(({ name, telegramUsername }) =>
+        prisma.teamMember.update({
           where: { name },
-          create: { name, telegramUsername: username },
-          update: { telegramUsername: username },
-        });
-      }),
+          data: { telegramUsername: telegramUsername || null },
+        }),
+      ),
     );
 
     await audit(request, { entity: "team_members", action: "update" });

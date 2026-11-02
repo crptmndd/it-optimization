@@ -3,7 +3,7 @@ import type { Prisma } from "@prisma/client";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import { audit } from "../../audit.js";
-import { requireCrmOrigin, requireTeam } from "../../auth/guard.js";
+import { requireCrmOrigin, requireAdmin } from "../../auth/guard.js";
 import { confirmSecondFactor, totpCode } from "../../auth/two-factor.js";
 import { canVault, open, seal } from "../../crypto/sealed.js";
 import { prisma } from "../../db.js";
@@ -44,7 +44,7 @@ const MIGRATE_LIMIT = { rateLimit: { max: 10, timeWindow: "5 minutes" } };
 /** Столько записей браузер расшифровывает за один проход. Остальные — следующим. */
 const MIGRATE_BATCH = 500;
 
-const REVEAL_GUARDS = [requireTeam, requireCrmOrigin];
+const REVEAL_GUARDS = [requireAdmin, requireCrmOrigin];
 
 const idParams = z.object({ id: z.string().uuid() });
 
@@ -115,7 +115,7 @@ function passwordDiff(password: string | null | undefined) {
 }
 
 export async function credentialRoutes(app: FastifyInstance): Promise<void> {
-  app.get("/credentials", { preHandler: requireTeam }, async (request, reply) => {
+  app.get("/credentials", { preHandler: requireAdmin }, async (request, reply) => {
     const query = listQuery.safeParse(request.query);
     if (!query.success) return invalidInput(reply, query.error);
 
@@ -141,7 +141,7 @@ export async function credentialRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ credentials: credentials.map(toDto) });
   });
 
-  app.post("/credentials", { preHandler: requireTeam }, async (request, reply) => {
+  app.post("/credentials", { preHandler: requireAdmin }, async (request, reply) => {
     const parsed = createBody.safeParse(request.body);
     if (!parsed.success) return invalidInput(reply, parsed.error);
 
@@ -179,7 +179,7 @@ export async function credentialRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(201).send({ credential: toDto(credential) });
   });
 
-  app.patch("/credentials/:id", { preHandler: requireTeam }, async (request, reply) => {
+  app.patch("/credentials/:id", { preHandler: requireAdmin }, async (request, reply) => {
     const params = idParams.safeParse(request.params);
     if (!params.success) return invalidInput(reply, params.error);
 
@@ -222,7 +222,7 @@ export async function credentialRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ credential: toDto(credential) });
   });
 
-  app.delete("/credentials/:id", { preHandler: requireTeam }, async (request, reply) => {
+  app.delete("/credentials/:id", { preHandler: requireAdmin }, async (request, reply) => {
     const params = idParams.safeParse(request.params);
     if (!params.success) return invalidInput(reply, params.error);
 
