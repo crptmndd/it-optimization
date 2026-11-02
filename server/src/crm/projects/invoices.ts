@@ -9,6 +9,7 @@ import { sumByCurrency } from "../currency.js";
 import { invalidInput } from "../http.js";
 import { listBills } from "./bills.js";
 import { billingMode, invoiceBody } from "./dto.js";
+import { rememberUnbilledMonth } from "./monthly-documents.js";
 
 /**
  * Счета и акты по проекту.
@@ -203,17 +204,22 @@ export async function invoiceRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(409).send({ error: STAGES_ONLY });
       }
 
-      const invoice = await prisma.invoice.update({
-        where: { id: existing.id },
-        data: {
-          ...(input.kind !== undefined && { kind: input.kind }),
-          ...(input.period !== undefined && { period: input.period }),
-          ...(input.amountMinor !== undefined && { amountMinor: input.amountMinor }),
-          ...(input.currency !== undefined && { currency: input.currency }),
-          ...(input.issuedAt !== undefined && { issuedAt: input.issuedAt }),
-          ...(input.paidAt !== undefined && { paidAt: input.paidAt }),
-          ...(input.note !== undefined && { note: input.note }),
-        },
+      const invoice = await prisma.$transaction(async (tx) => {
+        const updated = await tx.invoice.update({
+          where: { id: existing.id },
+          data: {
+            ...(input.kind !== undefined && { kind: input.kind }),
+            ...(input.period !== undefined && { period: input.period }),
+            ...(input.amountMinor !== undefined && { amountMinor: input.amountMinor }),
+            ...(input.currency !== undefined && { currency: input.currency }),
+            ...(input.issuedAt !== undefined && { issuedAt: input.issuedAt }),
+            ...(input.paidAt !== undefined && { paidAt: input.paidAt }),
+            ...(input.note !== undefined && { note: input.note }),
+          },
+        });
+        // Единственная запись могла уехать в будущее или стать актом.
+        await rememberUnbilledMonth(tx, existing.projectId);
+        return updated;
       });
 
       await audit(request, { entity: "invoices", entityId: invoice.id, action: "update" });
@@ -235,7 +241,12 @@ export async function invoiceRoutes(app: FastifyInstance): Promise<void> {
 
       // Жёстко, в отличие от остальных сущностей: ошибочно заведённый счёт —
       // это опечатка, а не история, и висеть в отчётах ему незачем.
-      await prisma.invoice.delete({ where: { id: existing.id } });
+      await prisma.$transaction(async (tx) => {
+        await tx.invoice.delete({ where: { id: existing.id } });
+        // Месяц без записи показан как пропуск и должен им остаться: запуск за
+        // следующий месяц иначе создал бы новую первую запись и убрал его молча.
+        await rememberUnbilledMonth(tx, existing.projectId);
+      });
 
       await audit(request, {
         entity: "invoices",

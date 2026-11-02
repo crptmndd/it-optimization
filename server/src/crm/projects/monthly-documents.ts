@@ -37,8 +37,9 @@ export const MONTHLY_DOCUMENTS_JOB = "monthly-documents";
  * пропуск. Ушёл из работы, так и не получив записи, — отметка снимается: запись, от
  * которой она защищала, не появилась, а оставшись, отметка при настоящем запуске через
  * несколько месяцев назвала бы весь простой пропусками. Поэтому функцию зовут и на
- * выходе из работы: смена статуса, архив, корзина. У проекта с галочкой отметка не
- * нужна, он считается от старта.
+ * выходе из работы: смена статуса, архив, корзина. Зовут её и после правки записи:
+ * месяц остаётся в списке, даже если единственную запись удалили или перенесли. У
+ * проекта с галочкой отметка не нужна, он считается от старта.
  */
 export async function rememberUnbilledMonth(
   tx: Prisma.TransactionClient,
@@ -49,7 +50,14 @@ export async function rememberUnbilledMonth(
     include: { invoices: { select: { kind: true, period: true } } },
   });
   if (!project || project.billingMonthly) return;
-  if (project.invoices.some((invoice) => invoice.kind === "invoice")) return;
+
+  // Запись не позже этого месяца держит начало счёта сама. Будущая не держит: запуск
+  // создаст запись раньше неё, и пропуск исчезнет точно так же.
+  const now = currentPeriod(env.TIMEZONE);
+  const anchored = project.invoices.some(
+    (invoice) => invoice.kind === "invoice" && invoice.period <= now,
+  );
+  if (anchored) return;
 
   // `unbilled()` сама отсекает всё, что считать не надо: статус, архив, режим и старт.
   // Отметку она возвращает как есть, поэтому у проекта в работе запись ниже её не сдвинет.
