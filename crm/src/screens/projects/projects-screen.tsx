@@ -586,10 +586,11 @@ function ProjectRow({ project, onOpen }: { project: Project; onOpen: () => void 
         type="button"
         onClick={onOpen}
         data-card-id={project.id}
-        className="border-border bg-background hover:border-accent-border flex w-full flex-wrap items-start gap-x-3 gap-y-1.5 rounded-xl border px-3 py-3 text-left transition hover:shadow-sm sm:flex-nowrap sm:py-2.5"
+        className="border-border bg-background hover:border-accent-border flex w-full flex-wrap items-start gap-x-3 gap-y-1.5 rounded-xl border px-3 py-3 text-left transition hover:shadow-sm lg:flex-nowrap lg:py-2.5"
       >
-        {/* На телефоне название отдельной строкой: иначе бейджи сжимают его до нуля. */}
-        <div className="w-full min-w-0 sm:w-auto sm:flex-1">
+        {/* Название отдельной строкой до lg, а не до sm: боковое меню с 768 px отнимает
+            ширину строки, и бейджи сжимают название до пары букв. */}
+        <div className="w-full min-w-0 lg:w-auto lg:flex-1">
           <span className="block truncate text-sm font-medium">{project.title}</span>
           <span className="text-muted-foreground mt-0.5 block truncate text-xs">
             {[
