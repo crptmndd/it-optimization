@@ -14,7 +14,8 @@ ADD COLUMN     "totp_setup_at" TIMESTAMP(3);
 ALTER TABLE "sessions" ADD COLUMN     "two_factor_confirmed_until" TIMESTAMP(3);
 
 -- AlterTable
-ALTER TABLE "projects" ADD COLUMN     "archived_at" TIMESTAMP(3);
+ALTER TABLE "projects" ADD COLUMN     "archived_at" TIMESTAMP(3),
+ADD COLUMN     "unbilled_from" TEXT;
 
 -- AlterTable
 ALTER TABLE "credentials" ADD COLUMN     "password_enc" TEXT,

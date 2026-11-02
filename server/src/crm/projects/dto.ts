@@ -261,6 +261,7 @@ export function unbilled(
     archivedAt: Date | null;
     startedAt: Date | null;
     createdAt: Date;
+    unbilledFrom: string | null;
   },
   invoices: { kind: string; period: string }[],
   timeZone: string,
@@ -281,9 +282,13 @@ export function unbilled(
   // Старое сопровождение без галочки считается от своей первой записи, а не от
   // начала работ: месяцы до автодокументов в CRM не велись, зажигать их незачем.
   // Записей нет — значит, проект стал подходящим уже после запуска за этот месяц, и
-  // пропуском считается текущий: иначе месяц терялся бы молча. Месяцы до старта не
-  // считаются и здесь: проект с перенесённым стартом не обязан был их выставлять.
-  const first = [...issued].reduce((a, b) => (b < a ? b : a), to);
+  // пропуском считается текущий, а `unbilledFrom` помнит его и после следующего запуска:
+  // иначе месяц терялся бы молча. Месяцы до старта не считаются и здесь: проект с
+  // перенесённым стартом не обязан был их выставлять.
+  const first = [...issued, project.unbilledFrom ?? to].reduce(
+    (a, b) => (b < a ? b : a),
+    to,
+  );
   const from = project.billingMonthly
     ? (started ?? currentPeriod(timeZone, project.createdAt))
     : started && started > first

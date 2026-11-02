@@ -8,6 +8,7 @@ import { env } from "../../env.js";
 import { invalidInput } from "../http.js";
 import { briefNotes, listNotes, noteRoutesFor } from "../notes.js";
 import { invoiceRoutes } from "./invoices.js";
+import { rememberUnbilledMonth } from "./monthly-documents.js";
 import {
   billingMode,
   CLOSED_PROJECT_STATUSES,
@@ -78,9 +79,13 @@ function archiveHandler(action: "archive" | "unarchive") {
 
     const { id } = params.data;
     const archive = action === "archive";
-    const { count } = await prisma.project.updateMany({
-      where: { id, deletedAt: null, archivedAt: archive ? null : { not: null } },
-      data: { archivedAt: archive ? new Date() : null },
+    const count = await prisma.$transaction(async (tx) => {
+      const { count } = await tx.project.updateMany({
+        where: { id, deletedAt: null, archivedAt: archive ? null : { not: null } },
+        data: { archivedAt: archive ? new Date() : null },
+      });
+      if (count > 0 && !archive) await rememberUnbilledMonth(tx, id);
+      return count;
     });
 
     const project = await prisma.project.findFirst({
@@ -274,11 +279,13 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
         });
       }
 
-      return tx.project.update({
+      const updated = await tx.project.update({
         where: { id: existing.id },
         data,
         include: PROJECT_RELATIONS,
       });
+      await rememberUnbilledMonth(tx, existing.id);
+      return updated;
     });
 
     await audit(request, {

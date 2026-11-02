@@ -1,5 +1,6 @@
 import { prisma } from "../../db.js";
 import type { NoteEntity } from "../notes.js";
+import { rememberUnbilledMonth } from "../projects/monthly-documents.js";
 
 /**
  * Корзина: что удалено, но ещё может вернуться.
@@ -114,13 +115,15 @@ export const TRASH = {
       if (!project?.deletedAt) return;
       // Задачи уходили вместе с проектом — вместе и возвращаются. Те, что
       // удалили раньше него, остаются в корзине: их убирали отдельным решением.
-      await prisma.$transaction([
-        prisma.project.update({ where: { id }, data: { deletedAt: null } }),
-        prisma.task.updateMany({
-          where: { projectId: id, deletedAt: { gte: project.deletedAt } },
+      const { deletedAt } = project;
+      await prisma.$transaction(async (tx) => {
+        await tx.project.update({ where: { id }, data: { deletedAt: null } });
+        await tx.task.updateMany({
+          where: { projectId: id, deletedAt: { gte: deletedAt } },
           data: { deletedAt: null },
-        }),
-      ]);
+        });
+        await rememberUnbilledMonth(tx, id);
+      });
     },
     purge: async (before) => {
       const rows = await prisma.project.findMany({

@@ -1,9 +1,10 @@
+import type { Prisma } from "@prisma/client";
 import { prisma } from "../../db.js";
 import { canNotify, env } from "../../env.js";
 import { escapeHtml, fitMessage, trySendMessage } from "../../notify/telegram.js";
 import { periodTitle, zonedNow } from "../../notify/zone.js";
 import { formatMoney } from "../currency.js";
-import { currentPeriod } from "./dto.js";
+import { currentPeriod, unbilled } from "./dto.js";
 
 /**
  * Автодокументы: в начале месяца система сама заводит счёт и акт у каждого
@@ -20,6 +21,38 @@ import { currentPeriod } from "./dto.js";
  */
 
 export const MONTHLY_DOCUMENTS_JOB = "monthly-documents";
+
+/**
+ * Запоминает месяц, который старое сопровождение без записей показывает в блоке
+ * «Не выставлено».
+ *
+ * Такой проект считается от первой записи, а без записей пропуском считается текущий
+ * месяц. Запуск за следующий месяц создаст запись, она станет первой, и пропуск
+ * исчезнет, хотя прошлые месяцы обязаны оставаться в списке. Сам запуск этого не
+ * поправит: к нему уже неизвестно, был ли проект в работе. Поэтому отметка ставится в
+ * момент, когда проект стал подходящим: смена статуса или старта, возврат из архива и
+ * из корзины.
+ *
+ * Отметка одна на проект и не сдвигается: иначе пауза между двумя запусками стёрла бы
+ * уже показанный пропуск. У проекта с галочкой она не нужна, он считается от старта.
+ */
+export async function rememberUnbilledMonth(
+  tx: Prisma.TransactionClient,
+  projectId: string,
+): Promise<void> {
+  const project = await tx.project.findUnique({
+    where: { id: projectId },
+    include: { invoices: { select: { kind: true, period: true } } },
+  });
+  if (!project || project.billingMonthly || project.unbilledFrom) return;
+  if (project.invoices.some((invoice) => invoice.kind === "invoice")) return;
+
+  // `unbilled()` сама отсекает всё, что считать не надо: статус, архив, режим и старт.
+  const { period } = unbilled(project, project.invoices, env.TIMEZONE);
+  if (period) {
+    await tx.project.update({ where: { id: projectId }, data: { unbilledFrom: period } });
+  }
+}
 
 interface Log {
   info: (obj: unknown, msg: string) => void;
