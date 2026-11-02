@@ -30,6 +30,9 @@ import {
  * приложениях. Все кнопки `type="button"`: снаружи форма проекта.
  */
 
+const AMOUNTS_DISAGREE =
+  "Общая сумма не сходится с суммами этапов: поправьте одно из двух или нажмите «Разделить поровну»";
+
 function failure(cause: unknown): string {
   return cause instanceof ApiError ? cause.message : "Не удалось сохранить";
 }
@@ -87,9 +90,9 @@ export function ProjectStages({
   const editable = mode === "stages";
 
   /**
-   * Что в полях расходится с базой. Сумма по строкам точнее общей, поэтому важнее её.
-   * Валюта без новых сумм идёт по строкам: общая сумма разложила бы ручную разбивку
-   * поровну.
+   * Что в полях расходится с базой. Сумма по строкам точнее общей, поэтому важнее её:
+   * об их расхождении см. `amountsDisagree`. Валюта без новых сумм идёт по строкам:
+   * общая сумма разложила бы ручную разбивку поровну.
    */
   function enteredAmounts(): StageAmounts | null {
     if (!editable || stages === null) return null;
@@ -99,6 +102,25 @@ export function ProjectStages({
     }
     if (parseAmount(total) !== savedTotal) return { totalMinor: parseAmount(total) };
     return currency !== stages[0]?.currency ? { amounts: rows } : null;
+  }
+
+  /** Новая общая: набрана и отличается от суммы этапов в базе. Очищенное поле не считается. */
+  function totalTyped(): boolean {
+    const typed = parseAmount(total);
+    return typed !== null && typed !== savedTotal;
+  }
+
+  /**
+   * Набраны и общая сумма, и строки, а итог не сходится. Какое из чисел настоящее, знает
+   * только человек: молча победившая строка стёрла бы общую, а этап оплатился бы с
+   * суммой, которой никто не называл.
+   */
+  function amountsDisagree(): boolean {
+    if (!editable || stages === null || !totalTyped()) return false;
+    const rows = amounts.map((value) => parseAmount(value));
+    const touched = rows.some((value, index) => value !== stages[index]?.amountMinor);
+    const sum = rows.reduce<number>((acc, value) => acc + (value ?? 0), 0);
+    return touched && sum !== parseAmount(total);
   }
 
   async function writeAmounts(input: StageAmounts) {
@@ -113,6 +135,8 @@ export function ProjectStages({
   }
 
   async function writeEntered() {
+    // ApiError: и блок, и окно проекта показывают текст только у него.
+    if (amountsDisagree()) throw new ApiError(400, AMOUNTS_DISAGREE);
     const input = enteredAmounts();
     if (input) await writeAmounts(input);
   }
@@ -192,7 +216,7 @@ export function ProjectStages({
    * Что набрано перед отметкой, сохраняется первым: иначе этап стал бы оплаченным без
    * суммы или не в той валюте, а заблокированный выбор показывал бы другую. Своя строка
    * важнее общей, как и в `enteredAmounts`, а черновики других строк этой отметки не
-   * касаются.
+   * касаются, пока не спорят с общей.
    *
    * Общая делится здесь же, пока этап не оплачен: после отметки сервер считал бы его за
    * ноль и отдал всю сумму двум другим. Очищенное поле не применяется: оно стёрло бы
@@ -208,8 +232,9 @@ export function ProjectStages({
       });
       return;
     }
+    if (amountsDisagree()) throw new ApiError(400, AMOUNTS_DISAGREE);
     const entered = enteredAmounts();
-    if (entered && "totalMinor" in entered && entered.totalMinor !== null) {
+    if (entered && totalTyped()) {
       show(await saveStageAmounts(projectId, { ...entered, currency }));
     } else if (currency !== stage.currency) {
       await saveStageAmounts(projectId, { amounts: saved, currency });
