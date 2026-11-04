@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { ApiError } from "@/api/client";
-import logoMark from "@/assets/logo-mark.svg";
+import { LogoMark } from "@/components/logo-mark";
 import { useAuth } from "@/auth/auth-context";
 import { Button, Card, ErrorNote, Field, Input } from "@/components/ui";
 
@@ -73,7 +73,7 @@ export function LoginScreen() {
     <main className="bg-canvas flex min-h-full items-center justify-center px-4 py-10">
       <Card className="w-full max-w-sm p-6 sm:p-7">
         <div className="mb-6 flex flex-col items-center text-center">
-          <img src={logoMark} alt="" className="h-9 w-auto" />
+          <LogoMark className="h-9 w-auto" />
           <h1 className="mt-4 text-2xl font-extrabold tracking-tight">Вход в CRM</h1>
           <p className="text-muted-foreground mt-0.5 text-sm font-medium">
             Внутренняя система «Айти-Оптимизации»

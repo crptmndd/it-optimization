@@ -7,16 +7,19 @@ import { cn } from "@/lib/cn";
  * учётными записями. Кружок с буквой читается на карточке быстрее строки
  * «Егор, Вадим» и занимает меньше места.
  *
+ * В тёмной теме те же оттенки, но глубокие с яркой буквой: пастельный кружок на почти
+ * чёрном светился бы ярче всего экрана.
+ *
  * Цвет выводится из самого имени, а не хранится: у одного человека он всегда
  * один и тот же, а новое имя не требует ни поля в базе, ни правки палитры.
  */
 const PALETTE = [
-  "bg-[#dff0a6] text-[#3f5208]",
-  "bg-[#cfe2fb] text-[#1d4576]",
-  "bg-[#fbd9cf] text-[#7a2f18]",
-  "bg-[#e2d8f8] text-[#43298a]",
-  "bg-[#fce6b4] text-[#6e4a06]",
-  "bg-[#c9efe2] text-[#10584a]",
+  "bg-[#dff0a6] text-[#3f5208] dark:bg-[#34421a] dark:text-[#d3ee82]",
+  "bg-[#cfe2fb] text-[#1d4576] dark:bg-[#1e3352] dark:text-[#aecdf6]",
+  "bg-[#fbd9cf] text-[#7a2f18] dark:bg-[#4a2a20] dark:text-[#f5bba8]",
+  "bg-[#e2d8f8] text-[#43298a] dark:bg-[#33295a] dark:text-[#cdbff6]",
+  "bg-[#fce6b4] text-[#6e4a06] dark:bg-[#4a3914] dark:text-[#f3d68c]",
+  "bg-[#c9efe2] text-[#10584a] dark:bg-[#173f36] dark:text-[#98e1c8]",
 ] as const;
 
 function paletteFor(name: string): string {

@@ -215,7 +215,7 @@ export function DeveloperPicker({
                   <span
                     className={cn(
                       "flex size-5 shrink-0 items-center justify-center rounded-md",
-                      picked ? "bg-surface text-accent" : "bg-black/[0.07]",
+                      picked ? "bg-surface text-accent" : "bg-ink/[0.07]",
                     )}
                   >
                     {picked && <Check size={13} strokeWidth={3} />}

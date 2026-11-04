@@ -57,7 +57,7 @@ export function PeopleFilter({
                 ? "bg-surface text-surface-foreground pr-3"
                 : value
                   ? "opacity-45 hover:opacity-100"
-                  : "hover:bg-black/[0.06]",
+                  : "hover:bg-ink/[0.06]",
             )}
           >
             <PersonChip name={name} className="size-8 text-[13px]" />

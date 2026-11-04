@@ -115,4 +115,4 @@ export function useDropdown<T extends HTMLElement>(
 
 /** Оформление панели одно на все списки. */
 export const panelClass =
-  "bg-background shadow-float fixed z-[60] overflow-y-auto overscroll-contain rounded-2xl";
+  "bg-popover shadow-float fixed z-[60] overflow-y-auto overscroll-contain rounded-2xl";

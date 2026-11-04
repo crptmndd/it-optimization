@@ -25,7 +25,7 @@ import { GlobalSearch } from "@/components/global-search";
 import { PersonChip } from "@/components/person-chip";
 import { ScreenBoundary } from "@/components/screen-boundary";
 import { cn } from "@/lib/cn";
-import logoMark from "@/assets/logo-mark.svg";
+import { LogoMark } from "@/components/logo-mark";
 
 /**
  * `adminOnly` — разделов нет у сотрудника. Скрытая кнопка защищает от случайного клика, а
@@ -97,7 +97,7 @@ function writeCollapsed(collapsed: boolean): void {
  */
 const itemClass =
   "flex h-10 items-center gap-3 overflow-hidden rounded-xl px-[15px] text-sm font-semibold whitespace-nowrap";
-const idleClass = "text-muted-foreground hover:bg-black/[0.05] hover:text-foreground";
+const idleClass = "text-muted-foreground hover:bg-ink/[0.05] hover:text-foreground";
 /* Чёрная плашка с лаймом — фирменное сочетание сайта и единственный тёмный акцент. */
 const activeClass = "bg-surface text-surface-foreground [&>svg]:text-accent";
 const smallItemClass =
@@ -168,7 +168,7 @@ function SecondaryItems({
             smallItemClass,
             "transition",
             isActive
-              ? "text-foreground bg-black/[0.05]"
+              ? "text-foreground bg-ink/[0.05]"
               : "text-muted-foreground hover:text-foreground",
           )
         }
@@ -232,7 +232,7 @@ function AccountItems({
             // Поле под кнопку выхода. В свёрнутой колонке она ниже, а поле раздуло бы
             // подложку шире колонки значков.
             !collapsed && "pr-11",
-            isActive ? "bg-black/[0.05]" : "hover:bg-black/[0.05]",
+            isActive ? "bg-ink/[0.05]" : "hover:bg-ink/[0.05]",
           )
         }
       >
@@ -252,7 +252,7 @@ function AccountItems({
         onClick={onLogout}
         aria-label="Выйти"
         title="Выйти"
-        className="text-muted-foreground hover:text-foreground absolute right-1 bottom-0.5 flex size-10 items-center justify-center rounded-xl transition hover:bg-black/[0.05]"
+        className="text-muted-foreground hover:text-foreground hover:bg-ink/[0.05] absolute right-1 bottom-0.5 flex size-10 items-center justify-center rounded-xl transition"
       >
         <LogOut size={17} strokeWidth={2.25} />
       </button>
@@ -263,7 +263,7 @@ function AccountItems({
 function Wordmark({ collapsed = false }: { collapsed?: boolean }) {
   return (
     <span className="flex items-center gap-2.5">
-      <img src={logoMark} alt="" className="h-[22px] w-auto shrink-0" />
+      <LogoMark className="h-[22px] w-auto shrink-0" />
       <span
         className={cn(
           "text-[15px] font-extrabold tracking-tight whitespace-nowrap transition-opacity",
@@ -407,7 +407,7 @@ export function Shell() {
             aria-label={collapseLabel}
             aria-expanded={!collapsed}
             title={`${collapseLabel} (${IS_MAC ? "⌘B" : "Ctrl+B"})`}
-            className="text-muted-foreground hover:text-foreground absolute right-1 bottom-0 flex size-10 items-center justify-center rounded-xl transition hover:bg-black/[0.05]"
+            className="text-muted-foreground hover:text-foreground hover:bg-ink/[0.05] absolute right-1 bottom-0 flex size-10 items-center justify-center rounded-xl transition"
           >
             {collapsed ? (
               <PanelLeftOpen size={18} strokeWidth={2.25} />
@@ -466,7 +466,7 @@ export function Shell() {
             className={cn(
               "flex size-10 items-center justify-center rounded-xl transition",
               searchOpen
-                ? "text-foreground bg-black/[0.06]"
+                ? "text-foreground bg-ink/[0.06]"
                 : "text-muted-foreground hover:text-foreground",
             )}
           >
@@ -488,7 +488,7 @@ export function Shell() {
         aria-hidden="true"
         onClick={() => setMenuOpen(false)}
         className={cn(
-          "fixed inset-0 z-40 bg-black/40 transition-opacity duration-300 ease-out motion-reduce:transition-none md:hidden",
+          "bg-scrim fixed inset-0 z-40 transition-opacity duration-300 ease-out motion-reduce:transition-none md:hidden",
           menuOpen ? "opacity-100" : "pointer-events-none opacity-0",
         )}
       />
@@ -515,7 +515,7 @@ export function Shell() {
             type="button"
             onClick={() => setMenuOpen(false)}
             aria-label="Закрыть меню"
-            className="text-muted-foreground hover:text-foreground -mr-1 flex size-9 items-center justify-center rounded-lg transition hover:bg-black/[0.05]"
+            className="text-muted-foreground hover:text-foreground hover:bg-ink/[0.05] -mr-1 flex size-9 items-center justify-center rounded-lg transition"
           >
             <X size={18} strokeWidth={2.25} />
           </button>
@@ -596,7 +596,7 @@ export function Shell() {
                 <span
                   className={cn(
                     "flex h-7 w-11 items-center justify-center rounded-full transition-colors",
-                    isActive && "bg-accent",
+                    isActive && "bg-accent text-accent-foreground",
                   )}
                 >
                   <Icon size={18} strokeWidth={2.25} />

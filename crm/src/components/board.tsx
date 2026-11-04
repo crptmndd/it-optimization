@@ -212,8 +212,9 @@ export function Board<T extends { id: string }>({
               })}
               style={{ minHeight: columnHeight }}
               className={cn(
-                "flex min-w-0 flex-col rounded-2xl bg-black/[0.035] p-2 transition-colors",
-                active && "bg-accent-soft",
+                // В тёмной теме колонка почти не светлее полотна: иначе карточки сливаются с ней.
+                "bg-ink/[0.035] dark:bg-ink/[0.02] flex min-w-0 flex-col rounded-2xl p-2 transition-colors",
+                active && "bg-accent-soft dark:bg-accent-soft",
               )}
             >
               <div className="flex min-h-9 items-center gap-2 px-2">

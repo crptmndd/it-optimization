@@ -13,6 +13,7 @@ import {
 } from "@/components/ui";
 import { isAdmin, useCurrentUser } from "@/auth/auth-context";
 import { cn } from "@/lib/cn";
+import { AppearancePanel } from "./settings/appearance-panel";
 import { TeamPanel } from "./settings/team-panel";
 import { TwoFactorPanel } from "./settings/two-factor-panel";
 
@@ -197,6 +198,8 @@ export function SettingsScreen() {
               </div>
             )}
           </Card>
+
+          <AppearancePanel className={admin ? "xl:col-span-2" : undefined} />
         </div>
 
         {admin && <TeamPanel />}

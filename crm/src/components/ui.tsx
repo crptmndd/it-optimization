@@ -232,7 +232,7 @@ export function Segmented({
       role="tablist"
       aria-label={ariaLabel}
       className={cn(
-        "crm-no-scrollbar inline-flex h-10 max-w-full shrink-0 items-center gap-0.5 overflow-x-auto rounded-xl bg-black/[0.055] p-1",
+        "crm-no-scrollbar bg-ink/[0.055] inline-flex h-10 max-w-full shrink-0 items-center gap-0.5 overflow-x-auto rounded-xl p-1",
         className,
       )}
     >
@@ -252,7 +252,7 @@ export function Segmented({
               "flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-3 text-[13px] font-semibold whitespace-nowrap transition",
               Icon && "w-9 justify-center px-0",
               picked
-                ? "bg-background text-foreground shadow-sm"
+                ? "bg-background dark:bg-surface text-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground",
             )}
           >
@@ -309,13 +309,17 @@ export function Switch({
         aria-hidden="true"
         className={cn(
           "relative h-5 w-9 shrink-0 rounded-full transition-colors",
-          checked ? "bg-surface" : "bg-black/15",
+          // В тёмной теме включённое — лаймовая дорожка: тёмная плашка на тёмной карточке
+          // почти не отличалась бы от выключенной.
+          checked ? "bg-surface dark:bg-accent" : "bg-ink/15",
         )}
       >
         <span
           className={cn(
             "absolute top-0.5 size-4 rounded-full transition-[left]",
-            checked ? "bg-accent left-[18px]" : "bg-background left-0.5",
+            checked
+              ? "bg-accent dark:bg-accent-foreground left-[18px]"
+              : "bg-background dark:bg-foreground left-0.5",
           )}
         />
       </span>
@@ -436,7 +440,7 @@ export function Modal({
     <div
       data-modal-backdrop
       className={cn(
-        "fixed inset-0 z-50 flex items-end justify-center bg-black/45 p-0 sm:items-center sm:p-6",
+        "bg-scrim fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-6",
         leaving ? "crm-fade-out" : "crm-fade-in",
       )}
       onMouseDown={(event) => {

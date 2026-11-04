@@ -90,7 +90,7 @@ export function GlobalSearch() {
       )}
 
       {hits !== null && (
-        <div className="bg-background shadow-float absolute top-full right-0 left-0 z-50 mt-1.5 max-h-80 overflow-y-auto rounded-2xl p-1.5 md:w-80">
+        <div className="bg-popover shadow-float absolute top-full right-0 left-0 z-50 mt-1.5 max-h-80 overflow-y-auto rounded-2xl p-1.5 md:w-80">
           {hits.length === 0 ? (
             <p className="text-muted-foreground px-3 py-2 text-sm">
               {busy ? "Ищем…" : "Ничего не нашлось"}

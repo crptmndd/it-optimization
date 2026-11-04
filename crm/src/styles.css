@@ -1,6 +1,13 @@
 @import "tailwindcss";
 
 /*
+ * Тёмная тема — атрибутом на <html>, а не медиазапросом: выбор можно закрепить в
+ * Настройках поверх системного. Ставит его `lib/theme.ts`, а до первой отрисовки —
+ * скрипт в index.html, иначе тёмная тема начиналась бы с белой вспышки.
+ */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/*
  * Токены. Цвет бренда и шрифт те же, что у сайта (src/app/globals.css), а раскладка
  * своя: сайт живёт на белом, а рабочий инструмент — на сером полотне с белыми
  * карточками. Так сразу видно, что здесь содержимое, а что фон, и рамки вокруг каждой
@@ -26,6 +33,16 @@
   --color-accent-muted: var(--accent-muted);
   --color-accent-border: var(--accent-border);
   --color-accent-foreground: var(--accent-foreground);
+  /*
+   * Цвет «краски» для полупрозрачных подложек: наведение, дорожка переключателя,
+   * колонка доски. Чёрный в светлой теме и белый в тёмной, поэтому одна утилита
+   * `bg-ink/5` затемняет на светлом и высветляет на тёмном.
+   */
+  --color-ink: var(--ink);
+  /* Затемнение под окном и выдвижной панелью. */
+  --color-scrim: var(--scrim);
+  /* Выпадающие списки. В тёмной теме светлее карточки, иначе сливаются с ней. */
+  --color-popover: var(--popover);
 
   /* Статусы. Отдельными токенами, чтобы цвет не разъезжался по компонентам. */
   --color-danger: var(--danger);
@@ -44,11 +61,12 @@
   --radius-3xl: 1.5rem;
   --radius-full: 9999px;
 
-  --shadow-card: 0 1px 2px rgb(17 18 17 / 0.04), 0 0 0 1px rgb(17 18 17 / 0.03);
-  --shadow-float: 0 12px 32px rgb(17 18 17 / 0.14), 0 0 0 1px rgb(17 18 17 / 0.05);
+  --shadow-card: var(--card-shadow);
+  --shadow-float: var(--float-shadow);
 }
 
 :root {
+  color-scheme: light;
   /* Полотно страницы. Всё, что лежит на нём, — белое. */
   --canvas: #f3f3f0;
   --background: #ffffff;
@@ -89,6 +107,66 @@
   --warning-soft: rgba(217, 119, 6, 0.13);
   --success: #15803d;
   --success-soft: rgba(21, 128, 61, 0.1);
+
+  --ink: #000000;
+  --scrim: rgb(0 0 0 / 0.45);
+  --popover: #ffffff;
+  --card-shadow: 0 1px 2px rgb(17 18 17 / 0.04), 0 0 0 1px rgb(17 18 17 / 0.03);
+  --float-shadow: 0 12px 32px rgb(17 18 17 / 0.14), 0 0 0 1px rgb(17 18 17 / 0.05);
+}
+
+/*
+ * Тёмная тема. Те же тёплые серые, что у светлой, только в обратную сторону: полотно
+ * темнее карточки, карточка темнее поля и списка. Глубину дают ступени светлоты, а не
+ * тени, потому что тень на почти чёрном не видна. Лайм остаётся единственным ярким
+ * цветом. Статусы светлее светлой темы: на тёмном исходные красный и зелёный не
+ * добирают контраста 4.5:1.
+ */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #0e0f0d;
+  --background: #1a1b18;
+  --foreground: #ecede7;
+  --field: #262722;
+  --muted: #262722;
+  --disabled: #30312c;
+  --muted-foreground: #a2a39b;
+  --border: #2b2c27;
+  /* Активный пункт меню и выбранное в переключателях: на почти чёрном чёрная плашка
+     пропала бы, поэтому она здесь светлее карточки. */
+  --surface: #34352f;
+  --surface-foreground: #f4f5ef;
+  --accent-hover: #c4eb4c;
+  --accent-soft: rgba(180, 224, 45, 0.13);
+  --accent-muted: rgba(180, 224, 45, 0.09);
+  --accent-border: rgba(180, 224, 45, 0.45);
+  /* На тёмном сам лайм виден, затемнять рамку незачем. */
+  --ring: #b4e02d;
+
+  --danger: #ff7d70;
+  --danger-soft: rgba(255, 110, 96, 0.14);
+  --warning: #f2a845;
+  --warning-soft: rgba(242, 168, 69, 0.15);
+  --success: #5fd08a;
+  --success-soft: rgba(95, 208, 138, 0.14);
+
+  --ink: #ffffff;
+  --scrim: rgb(0 0 0 / 0.62);
+  --popover: #24251f;
+  --card-shadow: 0 0 0 1px rgb(255 255 255 / 0.04);
+  --float-shadow: 0 16px 40px rgb(0 0 0 / 0.55), 0 0 0 1px rgb(255 255 255 / 0.08);
+}
+
+/*
+ * Смена темы перекрашивает всё сразу. Без этого правила кнопки и строки со своим
+ * `transition` догоняли бы новый цвет за 150 мс, а остальное менялось мгновенно, и
+ * экран на долю секунды становился пятнистым.
+ */
+.crm-theme-switching,
+.crm-theme-switching *,
+.crm-theme-switching *::before,
+.crm-theme-switching *::after {
+  transition: none !important;
 }
 
 @layer base {

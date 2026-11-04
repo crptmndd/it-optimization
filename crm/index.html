@@ -6,6 +6,26 @@
     <!-- Внутренний инструмент: в поиске ему делать нечего. -->
     <meta name="robots" content="noindex, nofollow" />
     <title>CRM · Айти-Оптимизация</title>
+    <meta name="theme-color" content="#f3f3f0" />
+    <!--
+      Тема до первой отрисовки, иначе тёмная начиналась бы с белой вспышки, пока грузится
+      бандл. Ключ и правило те же, что в src/lib/theme.ts, дальше тема живёт там.
+    -->
+    <script>
+      (function () {
+        var theme = null;
+        try {
+          theme = localStorage.getItem("crm.theme");
+        } catch (error) {}
+        if (theme !== "light" && theme !== "dark") {
+          theme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        }
+        document.documentElement.dataset.theme = theme;
+        if (theme === "dark") {
+          document.querySelector('meta[name="theme-color"]').content = "#0e0f0d";
+        }
+      })();
+    </script>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
