@@ -32,6 +32,7 @@ export function TaskModal({
   onClose,
   onSubmit,
   onDelete,
+  archive,
   onProgress,
 }: {
   title: string;
@@ -48,6 +49,8 @@ export function TaskModal({
   /** `subtasks` — черновик новой задачи, у сохранённой всегда пуст. */
   onSubmit: (values: TaskFormValues, subtasks: DraftSubtask[]) => Promise<void>;
   onDelete?: () => Promise<void>;
+  /** Ручной архив, только у админа: одно из двух, в зависимости от того, где задача. */
+  archive?: { label: "В архив" | "Вернуть из архива"; run: () => Promise<void> };
   onProgress: (taskId: string, progress: SubtaskProgress) => void;
 }) {
   const [values, setValues] = useState<TaskFormValues>(initial);
@@ -88,6 +91,18 @@ export function TaskModal({
       await onSubmit(values, items);
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Не удалось сохранить");
+      setSaving(false);
+    }
+  }
+
+  async function handleArchive() {
+    if (!archive) return;
+    setError(null);
+    setSaving(true);
+    try {
+      await archive.run();
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Не удалось");
       setSaving(false);
     }
   }
@@ -166,6 +181,17 @@ export function TaskModal({
           <Button type="submit" disabled={saving} className="h-11 flex-1">
             {saving ? "Сохраняем…" : submitLabel}
           </Button>
+          {archive && (
+            <Button
+              type="button"
+              variant="ghost"
+              className="h-11"
+              onClick={() => void handleArchive()}
+              disabled={saving}
+            >
+              {archive.label}
+            </Button>
+          )}
           {onDelete && (
             <Button
               type="button"

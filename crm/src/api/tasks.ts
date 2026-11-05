@@ -41,8 +41,10 @@ export interface Task {
    * раньше, чем API на старом коде успевает смениться, и поля может не быть совсем.
    */
   columnId?: string | null;
-  /** Закрыта больше трёх дней назад: место ей в «Архиве», а не на доске. */
+  /** В архиве — сама (закрыта больше трёх дней назад) или руками: на доске её нет. */
   archived?: boolean;
+  /** Когда админ убрал её в архив руками. Пусто — не убирали. */
+  archivedAt?: string | null;
   priority: TaskPriority;
   project: { id: string; title: string } | null;
   /** Заполнен у подзадачи: своего экрана у неё нет, открывается родитель. */
@@ -144,6 +146,26 @@ export async function createTask(input: NewTaskInput): Promise<Task> {
 
 export async function updateTask(id: string, input: TaskInput): Promise<Task> {
   const { task } = await api.patch<{ task: Task }>(`/tasks/${id}`, input);
+  return task;
+}
+
+/** Через сколько дней закрытая задача сама уходит в архив. То же число, что на сервере. */
+export const ARCHIVE_AFTER_DAYS = 3;
+
+/** Закрыта так давно, что в архиве по возрасту: ручной возврат её не вернёт на доску. */
+export function archivedByAge(task: Task): boolean {
+  if (task.status !== "done" && task.status !== "cancelled") return false;
+  const closed = Date.parse(task.completedAt ?? task.updatedAt);
+  return Date.now() - closed > ARCHIVE_AFTER_DAYS * 24 * 60 * 60 * 1000;
+}
+
+export async function archiveTask(id: string): Promise<Task> {
+  const { task } = await api.post<{ task: Task }>(`/tasks/${id}/archive`);
+  return task;
+}
+
+export async function unarchiveTask(id: string): Promise<Task> {
+  const { task } = await api.post<{ task: Task }>(`/tasks/${id}/unarchive`);
   return task;
 }
 

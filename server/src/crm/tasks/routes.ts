@@ -1,8 +1,8 @@
 import type { Prisma } from "@prisma/client";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { audit } from "../../audit.js";
-import { requireTeam } from "../../auth/guard.js";
+import { requireAdmin, requireTeam } from "../../auth/guard.js";
 import { prisma } from "../../db.js";
 import { notifyTaskInBackground } from "../../notify/notifications.js";
 import { liveTask, projectScope, taskScope, type Viewer } from "../access.js";
@@ -337,6 +337,8 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
         data.status = placed.status as TaskStatusValue;
         data.columnId = placed.columnId;
         data.position = await nextPosition(placed);
+        // Задачу двинули — ею снова занимаются, ручной архив снимается.
+        data.archivedAt = null;
       }
     }
 
@@ -433,6 +435,43 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
 
     return reply.code(204).send();
   });
+
+  /**
+   * Ручной архив: админ убирает задачу с доски, из «Сегодня» и сводки, даже открытую.
+   * Подзадача уходит и возвращается только со своей задачей: своей строки на доске у неё
+   * нет. Возврат снимает только ручную отметку: закрытая больше трёх дней назад остаётся
+   * в архиве по возрасту, и вернуть её можно, только вернув в работу.
+   */
+  const archiveHandler =
+    (archived: boolean) => async (request: FastifyRequest, reply: FastifyReply) => {
+      const params = idParams.safeParse(request.params);
+      if (!params.success) return invalidInput(reply, params.error);
+
+      const existing = await prisma.task.findFirst({
+        where: reachableTask(params.data.id, request.user!),
+      });
+      if (!existing) return reply.code(404).send({ error: "Задача не найдена" });
+      if (existing.parentId) {
+        return reply
+          .code(400)
+          .send({ error: "Подзадача уходит в архив вместе со своей задачей" });
+      }
+
+      const task = await prisma.task.update({
+        where: { id: existing.id },
+        data: { archivedAt: archived ? (existing.archivedAt ?? new Date()) : null },
+        include: TASK_RELATIONS,
+      });
+      await audit(request, {
+        entity: "tasks",
+        entityId: task.id,
+        action: archived ? "archive" : "unarchive",
+      });
+      return reply.send({ task: toTaskDto(task) });
+    };
+
+  app.post("/tasks/:id/archive", { preHandler: requireAdmin }, archiveHandler(true));
+  app.post("/tasks/:id/unarchive", { preHandler: requireAdmin }, archiveHandler(false));
 
   app.delete("/tasks/:id", { preHandler: requireTeam }, async (request, reply) => {
     const params = idParams.safeParse(request.params);

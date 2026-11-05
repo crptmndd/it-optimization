@@ -463,7 +463,11 @@ export const PROJECT_RELATIONS = {
   client: { select: { id: true, name: true } },
   lead: { select: { id: true, contact: true, name: true } },
   // Подзадачи не считаются: «3 из 5» на карточке говорит о задачах верхнего уровня.
-  tasks: { where: { deletedAt: null, parentId: null }, select: { status: true } },
+  // Убранные в архив руками тоже: их больше нет в работе, хотя статус мог остаться открытым.
+  tasks: {
+    where: { deletedAt: null, parentId: null, archivedAt: null },
+    select: { status: true },
+  },
   // Без сумм: для списка они не нужны, а строк на проект за год набегает две
   // дюжины. Отметка оплаты нужна состоянию оплаты за текущий месяц.
   invoices: { select: { kind: true, period: true, paidAt: true } },

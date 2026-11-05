@@ -131,6 +131,8 @@ export async function collectToday(filter: TodayFilter = {}): Promise<TodaySnaps
   const liveTask: Prisma.TaskWhereInput = {
     deletedAt: null,
     parentId: null,
+    // Убранная в архив руками больше никого не торопит, даже открытая.
+    archivedAt: null,
     AND: [{ OR: [{ projectId: null }, { project: { archivedAt: null } }] }],
   };
   const liveProject: Prisma.ProjectWhereInput = {

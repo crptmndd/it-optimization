@@ -17,10 +17,11 @@ export const OPEN_TASK_STATUSES = ["backlog", "todo", "in_progress"] as const;
 export const CLOSED_TASK_STATUSES = ["done", "cancelled"] as const;
 
 /**
- * Архив задач. Закрытая задача (готово или отменена) уходит туда через три дня после
- * закрытия. Архив вычисляется, а не хранится: ни планировщика, ни отметки, которую
- * забыли бы снять. Вернул задачу в работу — дата закрытия стёрлась, и она снова на доске.
- * Старые закрытые без даты закрытия считаются по последней правке.
+ * Архив задач. Два пути туда. Закрытая задача (готово или отменена) уходит сама через три
+ * дня после закрытия: это вычисляется, без планировщика, и возврат в работу стирает дату
+ * закрытия, поэтому задача сразу снова на доске. Старые закрытые без даты закрытия
+ * считаются по последней правке. А админ может убрать любую задачу руками, открытую тоже:
+ * это `archivedAt`, и такая задача пропадает и из «Сегодня», и из сводки.
  */
 export const ARCHIVE_AFTER_DAYS = 3;
 
@@ -30,18 +31,29 @@ export function archiveCutoff(now = new Date()): Date {
 
 export function archivedTaskWhere(cutoff: Date): Prisma.TaskWhereInput {
   return {
-    status: { in: [...CLOSED_TASK_STATUSES] },
     OR: [
-      { completedAt: { lt: cutoff } },
-      { completedAt: null, updatedAt: { lt: cutoff } },
+      { archivedAt: { not: null } },
+      {
+        status: { in: [...CLOSED_TASK_STATUSES] },
+        OR: [
+          { completedAt: { lt: cutoff } },
+          { completedAt: null, updatedAt: { lt: cutoff } },
+        ],
+      },
     ],
   };
 }
 
 function isArchived(
-  item: { status: string; completedAt: Date | null; updatedAt: Date },
+  item: {
+    status: string;
+    completedAt: Date | null;
+    updatedAt: Date;
+    archivedAt: Date | null;
+  },
   cutoff: Date,
 ): boolean {
+  if (item.archivedAt) return true;
   if (!(CLOSED_TASK_STATUSES as readonly string[]).includes(item.status)) return false;
   return (item.completedAt ?? item.updatedAt) < cutoff;
 }
@@ -119,8 +131,10 @@ export interface TaskDto {
   status: (typeof TASK_STATUSES)[number];
   /** Колонка доски. Пусто у подзадачи и у отменённой: на доске их нет. */
   columnId: string | null;
-  /** Закрыта больше трёх дней назад: на доске и в списках её нет, только в «Архиве». */
+  /** В архиве — сама (закрыта больше трёх дней назад) или руками: на доске её нет. */
   archived: boolean;
+  /** Когда убрали руками. Пусто — задача в архиве сама по возрасту или не в архиве. */
+  archivedAt: string | null;
   priority: (typeof TASK_PRIORITIES)[number];
   project: { id: string; title: string } | null;
   /** Заполнен у подзадачи: своего экрана у неё нет, открывается родитель. */
@@ -164,6 +178,7 @@ export function toTaskDto(item: TaskWithRelations): TaskDto {
     status: item.status,
     columnId: item.columnId,
     archived: isArchived(item, archiveCutoff()),
+    archivedAt: item.archivedAt?.toISOString() ?? null,
     priority: item.priority,
     project: item.project ? { id: item.project.id, title: item.project.title } : null,
     parentId: item.parentId,

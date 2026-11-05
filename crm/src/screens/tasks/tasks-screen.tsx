@@ -15,6 +15,8 @@ import { useOpenFromSearch } from "@/lib/open-from-search";
 import { listProjects, type Project } from "@/api/projects";
 import { columnOf, useColumns } from "@/api/columns";
 import {
+  archivedByAge,
+  archiveTask,
   createTask,
   deleteTask,
   getTask,
@@ -26,6 +28,7 @@ import {
   type Task,
   type TaskFilters,
   type TaskStatus,
+  unarchiveTask,
 } from "@/api/tasks";
 import { isAdmin, useCurrentUser } from "@/auth/auth-context";
 import { Board, type BoardColumn, type ColumnTone } from "@/components/board";
@@ -166,7 +169,12 @@ export function TasksScreen() {
     setError(null);
     const current = (request.current += 1);
     Promise.all([
-      listTasks({ ...filters, scope: "open" }),
+      // Открытые тоже без архива: админ мог убрать туда и незакрытую.
+      listTasks({
+        ...filters,
+        scope: "open",
+        archived: debouncedSearch ? "include" : "exclude",
+      }),
       // Архив отдельно, своей вкладкой: он растёт без конца. Поиск идёт и по нему, иначе
       // давно закрытая задача ответила бы «Ничего не нашлось» и её завели бы второй раз.
       listTasks({
@@ -198,7 +206,8 @@ export function TasksScreen() {
     if (!archiveOpen || tasks === null) return;
     let alive = true;
     listTasks({
-      scope: "closed",
+      // Все статусы: руками в архив убирают и открытые.
+      scope: "all",
       archived: "only",
       ...(developer && { developer }),
       ...(debouncedSearch && { search: debouncedSearch }),
@@ -568,7 +577,7 @@ export function TasksScreen() {
             <p className="text-muted-foreground mt-3 px-1 text-[13px]">
               {tab === "done"
                 ? "Через три дня после закрытия задача сама уходит в «Архив»."
-                : "Закрытые больше трёх дней назад. Кружок вернёт задачу в работу."}
+                : "Закрытые больше трёх дней назад и убранные руками. Закрытую вернёт в работу кружок, убранную руками — кнопка в карточке."}
             </p>
           </>
         ) : (
@@ -648,6 +657,33 @@ export function TasksScreen() {
             setEditingNotice(null);
             latestLoad.current();
           }}
+          // Ручной архив у админа. Закрытую давно вернуть кнопкой нельзя: она в архиве по
+          // возрасту и вернётся, только если вернуть её в работу кружком.
+          {...(admin &&
+            !editing.parentId &&
+            (!editing.archived
+              ? {
+                  archive: {
+                    label: "В архив" as const,
+                    run: async () => {
+                      await archiveTask(editing.id);
+                      setEditing(null);
+                      latestLoad.current();
+                    },
+                  },
+                }
+              : editing.archivedAt && !archivedByAge(editing)
+                ? {
+                    archive: {
+                      label: "Вернуть из архива" as const,
+                      run: async () => {
+                        await unarchiveTask(editing.id);
+                        setEditing(null);
+                        latestLoad.current();
+                      },
+                    },
+                  }
+                : {}))}
           onProgress={showProgress}
         />
       )}

@@ -666,13 +666,16 @@ model Task {
   parent   Task?   @relation("Subtasks", fields: [parentId], references: [id], onDelete: Cascade)
   subtasks Task[]  @relation("Subtasks")
 
-  status   TaskStatus   @default(todo)
-  priority TaskPriority @default(normal)
+  status     TaskStatus   @default(todo)
+  priority   TaskPriority @default(normal)
   /// Колонка доски, статус берётся из её типа. У подзадач и отменённых пусто: на доске их нет.
-  columnId String?      @map("column_id") @db.Uuid
-  column   BoardColumn? @relation(fields: [columnId], references: [id], onDelete: SetNull)
+  columnId   String?      @map("column_id") @db.Uuid
+  /// Убрана в архив руками (админом). Закрытые старше трёх дней в архиве и без этого,
+  /// см. `archivedTaskWhere`. Смена статуса или колонки отметку снимает.
+  archivedAt DateTime?    @map("archived_at")
+  column     BoardColumn? @relation(fields: [columnId], references: [id], onDelete: SetNull)
   /// Порядок внутри колонки на доске.
-  position Int          @default(0)
+  position   Int          @default(0)
 
   /// Кто делает. Имена из `team_members`, как и у проекта, — по той же причине.
   developers  String[]
