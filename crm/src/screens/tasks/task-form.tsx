@@ -1,4 +1,4 @@
-import { Flame } from "lucide-react";
+import { Flame, MessageCircle } from "lucide-react";
 import { Link } from "react-router";
 import type { Project } from "@/api/projects";
 import { columnOf, useColumns } from "@/api/columns";
@@ -21,6 +21,8 @@ export interface TaskFormValues {
   status: TaskStatus;
   /** Колонка доски, пусто — первая колонка статуса или её нет (отменённая). */
   columnId: string;
+  /** Писать ли о постановке в общий чат. Каждый раз заново включена: это не свойство задачи. */
+  notifyChat: boolean;
   priority: TaskPriority;
   projectId: string;
   developers: string[];
@@ -35,6 +37,7 @@ export function emptyTaskValues(defaults: {
     title: "",
     status: "todo",
     columnId: "",
+    notifyChat: true,
     priority: "normal",
     projectId: defaults.projectId ?? "",
     developers: defaults.developers ?? [],
@@ -47,6 +50,7 @@ export function taskToValues(task: Task): TaskFormValues {
     title: task.title,
     status: task.status,
     columnId: task.columnId ?? "",
+    notifyChat: true,
     priority: task.priority,
     projectId: task.project?.id ?? "",
     developers: task.developers,
@@ -66,6 +70,7 @@ export function valuesToTaskInput(values: TaskFormValues): TaskInput {
     ...(values.columnId &&
       values.status !== "cancelled" && { columnId: values.columnId }),
     priority: values.priority,
+    notifyChat: values.notifyChat,
     projectId: values.projectId || null,
     developers: values.developers,
     dueAt: fromDateInputValue(values.dueDate),
@@ -110,6 +115,7 @@ export function TaskFields({
   onChange,
   projects,
   current,
+  initialDevelopers = [],
   editing = false,
 }: {
   values: TaskFormValues;
@@ -120,6 +126,11 @@ export function TaskFields({
    * или архивном: без него поле показало бы прочерк, будто привязка потеряна.
    */
   current?: { id: string; title: string } | null;
+  /**
+   * Исполнители на момент открытия. Галочка чата при правке видна, только когда в
+   * задачу добавили людей: о прежних бот и так не пишет.
+   */
+  initialDevelopers?: string[];
   /**
    * Статус есть только у заведённой задачи. Новая всегда встаёт «К работе»: выбирать
    * тут нечего, а лишнее поле замедляет то, что делают по десять раз на дню.
@@ -224,10 +235,61 @@ export function TaskFields({
 
       {editing && <UrgentSwitch values={values} onChange={onChange} />}
 
+      <ChatSwitch
+        values={values}
+        onChange={onChange}
+        people={
+          editing
+            ? values.developers.filter((name) => !initialDevelopers.includes(name))
+            : values.developers
+        }
+        editing={editing}
+      />
+
       {/* На всю ширину и под полями: в колонке текст переносился и сдвигал поле рядом
           прямо под открытым списком исполнителей. */}
       <MissingHandleHint people={values.developers} />
     </div>
+  );
+}
+
+/**
+ * «Написать в общий чат». Видна, только когда бот туда и написал бы: в задаче есть
+ * сотрудник или человек без входа, либо исполнителя нет совсем. Задачу только на админах
+ * бот присылает им лично, и галочка ничего бы не меняла. При правке смотрит на
+ * добавленных: о тех, кто уже стоял, бот не пишет.
+ */
+function ChatSwitch({
+  values,
+  onChange,
+  people,
+  editing,
+}: {
+  values: TaskFormValues;
+  onChange: (values: TaskFormValues) => void;
+  people: string[];
+  editing: boolean;
+}) {
+  const team = usePeople();
+  if (editing && people.length === 0) return null;
+  const toChat =
+    people.length === 0 ||
+    people.some((name) => team?.find((person) => person.name === name)?.role !== "admin");
+  if (!toChat) return null;
+
+  return (
+    <Switch
+      checked={values.notifyChat}
+      onChange={(on) => onChange({ ...values, notifyChat: on })}
+      label="Написать в общий чат"
+      hint={
+        people.length === 0
+          ? "Задачу без исполнителя бот покажет всем, чтобы кто-то взял"
+          : "Бот отметит исполнителя в чате команды"
+      }
+      icon={MessageCircle}
+      tone="neutral"
+    />
   );
 }
 

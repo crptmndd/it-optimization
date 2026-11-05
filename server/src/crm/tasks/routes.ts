@@ -239,11 +239,18 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
     if (created.error) return reply.code(created.code).send({ error: created.error });
     const { task } = created;
 
-    await audit(request, { entity: "tasks", entityId: task.id, action: "create" });
+    await audit(request, {
+      entity: "tasks",
+      entityId: task.id,
+      action: "create",
+      ...(input.notifyChat === false && { diff: { notifyChat: false } }),
+    });
 
     // Заведённая сразу закрытой задача — запись задним числом, работы в ней нет.
     if (!isClosed(task.status)) {
-      notifyTaskInBackground(task, task.developers, "created", viewer, request.log);
+      notifyTaskInBackground(task, task.developers, "created", viewer, request.log, {
+        teamChat: input.notifyChat !== false,
+      });
     }
 
     return reply.code(201).send({ task: toTaskDto(task) });
@@ -344,13 +351,20 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
       return updated;
     });
 
-    await audit(request, { entity: "tasks", entityId: task.id, action: "update" });
+    await audit(request, {
+      entity: "tasks",
+      entityId: task.id,
+      action: "update",
+      ...(input.notifyChat === false && { diff: { notifyChat: false } }),
+    });
 
     // Тэгаем только новых: форма присылает весь список при каждом сохранении, и
     // сравнение с прежним не даёт будить всех исполнителей из-за правки названия.
     const added = task.developers.filter((name) => !existing.developers.includes(name));
     if (added.length > 0 && !isClosed(task.status)) {
-      notifyTaskInBackground(task, added, "assigned", viewer, request.log);
+      notifyTaskInBackground(task, added, "assigned", viewer, request.log, {
+        teamChat: input.notifyChat !== false,
+      });
     }
 
     return reply.send({ task: toTaskDto(task) });

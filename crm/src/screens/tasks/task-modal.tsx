@@ -115,6 +115,7 @@ export function TaskModal({
           onChange={setValues}
           projects={projects}
           current={current}
+          initialDevelopers={initial.developers}
           editing={editing}
         />
 

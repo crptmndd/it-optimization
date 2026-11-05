@@ -82,6 +82,8 @@ export interface TaskInput {
   status?: TaskStatus;
   /** Колонка сильнее статуса: сервер возьмёт статус из её типа. */
   columnId?: string | null;
+  /** false — не писать о постановке в общий чат. Не хранится, нет поля — пишет. */
+  notifyChat?: boolean;
   priority?: TaskPriority;
   projectId?: string | null;
   developers?: string[];

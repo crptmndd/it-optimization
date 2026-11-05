@@ -26,6 +26,11 @@ const taskFields = {
   projectId: optionalUuid,
   developers: z.array(z.string().trim().min(1).max(120)).max(MAX_DEVELOPERS),
   dueAt: optionalDate,
+  /**
+   * Писать ли о постановке в общий чат. Не хранится: относится к одному сохранению,
+   * которое ставит задачу или добавляет людей. Нет поля — пишет, как раньше.
+   */
+  notifyChat: z.boolean(),
 };
 
 /**

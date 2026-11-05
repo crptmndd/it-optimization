@@ -275,6 +275,7 @@ export function Switch({
   hint,
   icon: Icon,
   disabled,
+  tone = "danger",
 }: {
   checked: boolean;
   onChange: (checked: boolean) => void;
@@ -282,6 +283,8 @@ export function Switch({
   hint?: string;
   icon?: LucideIcon;
   disabled?: boolean;
+  /** Цвет значка у включённого: красный для «Срочно», обычный там, где включено — норма. */
+  tone?: "danger" | "neutral";
 }) {
   return (
     <button
@@ -296,7 +299,14 @@ export function Switch({
         <Icon
           size={15}
           strokeWidth={2.25}
-          className={cn("shrink-0", checked ? "text-danger" : "text-muted-foreground")}
+          className={cn(
+            "shrink-0",
+            checked
+              ? tone === "danger"
+                ? "text-danger"
+                : "text-foreground"
+              : "text-muted-foreground",
+          )}
         />
       )}
       <span className="min-w-0 flex-1">

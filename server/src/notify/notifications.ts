@@ -223,12 +223,22 @@ export function taskButton(
  * задача только на админов туда не идёт, а в общей отмечены только сотрудники. Задача без
  * исполнителя остаётся в чате: там её кто-то возьмёт.
  */
+/**
+ * `teamChat: false` — галочка «Написать в общий чат» снята при постановке: задачу
+ * обсудили лично, и тэг в чате только шумит. Выключает только чат: админу лично о его
+ * задаче бот пишет по-прежнему, это его собственная работа, а не оповещение команды.
+ */
+export interface TaskNotifyOptions {
+  teamChat?: boolean;
+}
+
 async function notifyTask(
   task: TaskNotice,
   people: string[],
   kind: "created" | "assigned",
   actor: TaskActor,
   log: Log,
+  options: TaskNotifyOptions = {},
 ): Promise<void> {
   if (!canNotify) return;
 
@@ -257,6 +267,7 @@ async function notifyTask(
   // там, где его видят все, а личное сообщение о чужой задаче никому не нужно.
   const chatId = env.TELEGRAM_TEAM_CHAT_ID;
   if (!chatId) return;
+  if (options.teamChat === false) return;
   if (people.length > 0 && others.length === 0) return;
 
   // Задачу без исполнителя показывают всем, чтобы её кто-то взял. Подзадачу без него
@@ -286,8 +297,9 @@ export function notifyTaskInBackground(
   kind: "created" | "assigned",
   actor: TaskActor,
   log: Log,
+  options: TaskNotifyOptions = {},
 ): void {
-  void notifyTask(task, people, kind, actor, log).catch((cause: unknown) => {
+  void notifyTask(task, people, kind, actor, log, options).catch((cause: unknown) => {
     log.warn({ err: cause }, "уведомление о задаче не отправлено");
   });
 }
