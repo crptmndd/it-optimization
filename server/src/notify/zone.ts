@@ -137,15 +137,12 @@ export function pluralDays(count: number): string {
   return `${count} дней`;
 }
 
-/** «5 ноября, ср» — дата для сообщений, где важнее читаться, чем уместиться. */
-export function formatDayLong(date: Date, timeZone: string): string {
-  const day = new Intl.DateTimeFormat("ru-RU", {
-    day: "numeric",
-    month: "long",
+/** «24.10.2026» — срок в сообщениях бота. День в поясе команды, как и в `formatDay`. */
+export function formatDate(date: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
     timeZone,
   }).format(date);
-  const weekday = new Intl.DateTimeFormat("ru-RU", { weekday: "short", timeZone }).format(
-    date,
-  );
-  return `${day}, ${weekday}`;
 }

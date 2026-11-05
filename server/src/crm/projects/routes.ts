@@ -220,7 +220,7 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
 
     // Заведённый сразу закрытым проект — запись задним числом, работы в нём нет.
     if (!project.closedAt) {
-      notifyNewProjectInBackground(project, request.user!, request.log);
+      notifyNewProjectInBackground(project, request.log);
     }
     return reply.code(201).send({ project: toProjectDto(project, env.TIMEZONE) });
   });
@@ -345,7 +345,7 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
       (name) => !existing.developers.includes(name),
     );
     if (added.length > 0 && !project.closedAt) {
-      notifyProjectAssignedInBackground(project, added, request.user!, request.log);
+      notifyProjectAssignedInBackground(project, added, request.log);
     }
 
     return reply.send({ project: toProjectDto(project, env.TIMEZONE) });
