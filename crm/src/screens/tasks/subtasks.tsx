@@ -1,4 +1,4 @@
-import { Check, Trash2 } from "lucide-react";
+import { Check, Plus, Trash2 } from "lucide-react";
 import {
   useEffect,
   useImperativeHandle,
@@ -41,6 +41,43 @@ function progressOf(list: Subtask[]): SubtaskProgress {
     total: list.length,
     done: list.filter((item) => item.status === "done").length,
   };
+}
+
+/**
+ * Кружок «готово», как у задачи в списке. Один на сохранённые подзадачи и черновик: в
+ * новой задаче строка без кружка читалась как заметка, а не как дело, которое закрывают.
+ */
+function DoneCircle({
+  done,
+  title,
+  onToggle,
+}: {
+  done: boolean;
+  title: string;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={done}
+      aria-label={`Готово: ${title}`}
+      title={done ? "Вернуть в работу" : "Отметить выполненной"}
+      onClick={onToggle}
+      className="group/check flex size-7 shrink-0 items-center justify-center"
+    >
+      <span
+        className={cn(
+          "flex size-5 items-center justify-center rounded-full transition",
+          done
+            ? "bg-accent text-accent-foreground"
+            : "ring-foreground/30 group-hover/check:ring-foreground/60 group-hover/check:text-muted-foreground text-transparent ring-2 ring-inset",
+        )}
+      >
+        <Check size={13} strokeWidth={3} />
+      </span>
+    </button>
+  );
 }
 
 function Block({
@@ -137,7 +174,10 @@ function RemoveButton({ label, onClick }: { label: string; onClick: () => void }
   );
 }
 
-/** Поле внизу блока. Фокус остаётся в нём: подзадачи заводят пачкой, подряд. */
+/**
+ * Поле внизу блока. Фокус остаётся в нём: подзадачи заводят пачкой, подряд. Кнопка «+»
+ * рядом — для тех, кто не догадается про Enter: без неё казалось, что подзадача одна.
+ */
 function AddField({
   value,
   onChange,
@@ -159,25 +199,42 @@ function AddField({
     box.current.scrollIntoView({ block: "nearest" });
   }, [count]);
 
-  function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    // С ⌘ это уже отправка всей формы, её ловит окно.
-    if (event.key !== "Enter" || event.metaKey || event.ctrlKey) return;
-    event.preventDefault();
+  function submit() {
     const title = value.trim();
     if (title) onAdd(title);
   }
 
+  function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    // С ⌘ это уже отправка всей формы, её ловит окно.
+    if (event.key !== "Enter" || event.metaKey || event.ctrlKey) return;
+    event.preventDefault();
+    submit();
+  }
+
   return (
-    <div ref={box} className="mt-2">
+    <div ref={box} className="relative mt-2">
       <Input
         value={value}
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={onKeyDown}
         disabled={disabled}
         maxLength={300}
-        placeholder="Добавить подзадачу"
+        placeholder={count > 0 ? "Ещё подзадача" : "Добавить подзадачу"}
         aria-label="Добавить подзадачу"
+        className="pr-11"
       />
+      <button
+        type="button"
+        onClick={submit}
+        // Кнопка не забирает фокус: следующую подзадачу пишут сразу, не возвращаясь в поле.
+        onMouseDown={(event) => event.preventDefault()}
+        disabled={disabled || !value.trim()}
+        aria-label="Добавить"
+        title="Добавить (Enter)"
+        className="bg-accent text-accent-foreground hover:bg-accent-hover disabled:bg-disabled disabled:text-muted-foreground absolute top-1 right-1 flex size-8 items-center justify-center rounded-md transition"
+      >
+        <Plus size={16} strokeWidth={2.5} />
+      </button>
     </div>
   );
 }
@@ -323,31 +380,17 @@ export function SubtasksPanel({
             const done = item.status === "done";
             return (
               <li key={item.id} className="group flex min-h-9 items-center gap-1.5">
-                <button
-                  type="button"
-                  role="checkbox"
-                  aria-checked={done}
-                  aria-label={`Готово: ${item.title}`}
-                  onClick={() =>
+                <DoneCircle
+                  done={done}
+                  title={item.title}
+                  onToggle={() =>
                     save(
                       item.id,
                       { status: done ? "todo" : "done" },
                       { status: item.status },
                     )
                   }
-                  className="group/check flex size-7 shrink-0 items-center justify-center"
-                >
-                  <span
-                    className={cn(
-                      "flex size-5 items-center justify-center rounded-full transition",
-                      done
-                        ? "bg-accent text-accent-foreground"
-                        : "ring-foreground/20 group-hover/check:ring-foreground/50 group-hover/check:text-muted-foreground text-transparent ring-2 ring-inset",
-                    )}
-                  >
-                    <Check size={13} strokeWidth={3} />
-                  </span>
-                </button>
+                />
 
                 <TitleField
                   title={item.title}
@@ -393,37 +436,61 @@ export function SubtasksPanel({
   );
 }
 
+/** Подзадача новой задачи: живёт в окне, пока самой задачи нет. */
+export interface DraftSubtask {
+  title: string;
+  done: boolean;
+  developers: string[];
+}
+
 /**
- * Черновик в новой задаче: только названия. Поле ввода управляется снаружи, потому что
- * форма добавит к списку и то, на чём не нажали Enter.
+ * Черновик в новой задаче: та же строка, что у сохранённой, — кружок, название,
+ * исполнитель. Поле ввода управляется снаружи, потому что форма добавит к списку и то,
+ * на чём не нажали Enter.
  */
 export function SubtasksDraft({
-  titles,
+  items,
   onChange,
   text,
   onTextChange,
 }: {
-  titles: string[];
-  onChange: (titles: string[]) => void;
+  items: DraftSubtask[];
+  onChange: (items: DraftSubtask[]) => void;
   text: string;
   onTextChange: (text: string) => void;
 }) {
+  function patch(index: number, change: Partial<DraftSubtask>) {
+    onChange(items.map((item, at) => (at === index ? { ...item, ...change } : item)));
+  }
+  const done = items.filter((item) => item.done).length;
+
   return (
-    <Block count={titles.length > 0 ? String(titles.length) : undefined}>
-      {titles.length > 0 && (
+    <Block count={items.length > 0 ? `${done} из ${items.length}` : undefined}>
+      {items.length > 0 && (
         <ul className="mt-1.5 space-y-0.5">
-          {titles.map((title, index) => (
+          {items.map((item, index) => (
             <li key={index} className="group flex min-h-9 items-center gap-1.5">
+              <DoneCircle
+                done={item.done}
+                title={item.title}
+                onToggle={() => patch(index, { done: !item.done })}
+              />
               <TitleField
-                title={title}
-                label={`Название: ${title}`}
-                onCommit={(next) =>
-                  onChange(titles.map((item, at) => (at === index ? next : item)))
-                }
+                title={item.title}
+                label={`Название: ${item.title}`}
+                done={item.done}
+                onCommit={(title) => patch(index, { title })}
+              />
+              <DeveloperPicker
+                compact
+                label={`Кто делает: ${item.title}`}
+                placeholder="Назначить"
+                value={item.developers}
+                onChange={(developers) => patch(index, { developers })}
               />
               <RemoveButton
-                label={`Убрать: ${title}`}
-                onClick={() => onChange(titles.filter((_, at) => at !== index))}
+                label={`Убрать: ${item.title}`}
+                onClick={() => onChange(items.filter((_, at) => at !== index))}
               />
             </li>
           ))}
@@ -434,10 +501,10 @@ export function SubtasksDraft({
         value={text}
         onChange={onTextChange}
         onAdd={(title) => {
-          onChange([...titles, title]);
+          onChange([...items, { title, done: false, developers: [] }]);
           onTextChange("");
         }}
-        count={titles.length}
+        count={items.length}
       />
     </Block>
   );
@@ -445,17 +512,25 @@ export function SubtasksDraft({
 
 /**
  * Подзадачи черновика на сервере, строго по очереди, ради порядка. Возвращает то, что
- * сохранить не удалось: задача уже создана, и повторять её нельзя.
+ * сохранить не удалось: задача уже создана, и повторять её нельзя. `notifyChat` — тот же
+ * выбор, что у самой задачи: выключенный чат молчит и о её подзадачах.
  */
 export async function saveDraftSubtasks(
   parentId: string,
-  titles: string[],
-): Promise<string[]> {
-  for (const [index, title] of titles.entries()) {
+  items: DraftSubtask[],
+  notifyChat = true,
+): Promise<DraftSubtask[]> {
+  for (const [index, item] of items.entries()) {
     try {
-      await createTask({ title, parentId });
+      await createTask({
+        title: item.title,
+        parentId,
+        developers: item.developers,
+        notifyChat,
+        ...(item.done && { status: "done" }),
+      });
     } catch {
-      return titles.slice(index);
+      return items.slice(index);
     }
   }
   return [];

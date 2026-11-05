@@ -11,7 +11,12 @@ import type { Project } from "@/api/projects";
 import { addTaskNote, getTask, type SubtaskProgress } from "@/api/tasks";
 import { NotesPanel, type NotesHandle } from "@/components/notes-panel";
 import { Button, ErrorNote, Modal } from "@/components/ui";
-import { SubtasksDraft, SubtasksPanel, type SubtasksHandle } from "./subtasks";
+import {
+  SubtasksDraft,
+  SubtasksPanel,
+  type DraftSubtask,
+  type SubtasksHandle,
+} from "./subtasks";
 import { TaskFields, type TaskFormValues } from "./task-form";
 
 /** Окно задачи: и новой, и заведённой. У новой нет ни заметок, ни настоящих подзадач. */
@@ -41,14 +46,14 @@ export function TaskModal({
   notice?: string | null;
   onClose: () => void;
   /** `subtasks` — черновик новой задачи, у сохранённой всегда пуст. */
-  onSubmit: (values: TaskFormValues, subtasks: string[]) => Promise<void>;
+  onSubmit: (values: TaskFormValues, subtasks: DraftSubtask[]) => Promise<void>;
   onDelete?: () => Promise<void>;
   onProgress: (taskId: string, progress: SubtaskProgress) => void;
 }) {
   const [values, setValues] = useState<TaskFormValues>(initial);
   const [error, setError] = useState<string | null>(notice);
   const [saving, setSaving] = useState(false);
-  const [draft, setDraft] = useState<string[]>([]);
+  const [draft, setDraft] = useState<DraftSubtask[]>([]);
   const [draftText, setDraftText] = useState("");
   const panel = useRef<SubtasksHandle>(null);
   const notes = useRef<NotesHandle>(null);
@@ -76,8 +81,11 @@ export function TaskModal({
         setSaving(false);
         return;
       }
-      const titles = [...draft, draftText.trim()].filter(Boolean);
-      await onSubmit(values, titles);
+      const typed = draftText.trim();
+      const items = typed
+        ? [...draft, { title: typed, done: false, developers: [] }]
+        : draft;
+      await onSubmit(values, items);
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Не удалось сохранить");
       setSaving(false);
@@ -129,7 +137,7 @@ export function TaskModal({
             />
           ) : (
             <SubtasksDraft
-              titles={draft}
+              items={draft}
               onChange={setDraft}
               text={draftText}
               onTextChange={setDraftText}

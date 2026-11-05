@@ -48,7 +48,7 @@ import {
 import { daysFromToday, describeDeadline, formatDate } from "@/lib/dates";
 import { cn } from "@/lib/cn";
 import { ProjectBoard } from "./project-board";
-import { saveDraftSubtasks } from "./subtasks";
+import { saveDraftSubtasks, type DraftSubtask } from "./subtasks";
 import { byUrgency, isClosed, statusBadge, SubtaskCount, TaskCard } from "./task-card";
 import {
   emptyTaskValues,
@@ -58,7 +58,7 @@ import {
 } from "./task-form";
 import { TaskModal } from "./task-modal";
 
-type TabKey = "open" | "overdue" | "done";
+type TabKey = "open" | "overdue" | "done" | "archive";
 type TaskView = "list" | "board" | "calendar";
 type BoardBy = "status" | "projects";
 
@@ -167,7 +167,13 @@ export function TasksScreen() {
     const current = (request.current += 1);
     Promise.all([
       listTasks({ ...filters, scope: "open" }),
-      listTasks({ ...filters, scope: "closed" }),
+      // Архив отдельно, своей вкладкой: он растёт без конца. Поиск идёт и по нему, иначе
+      // давно закрытая задача ответила бы «Ничего не нашлось» и её завели бы второй раз.
+      listTasks({
+        ...filters,
+        scope: "closed",
+        archived: debouncedSearch ? "include" : "exclude",
+      }),
     ])
       .then(([open, closed]) => {
         if (current === request.current) setTasks([...open, ...closed]);
@@ -181,6 +187,34 @@ export function TasksScreen() {
   }, [developer, debouncedSearch]);
 
   useEffect(load, [load]);
+
+  /*
+   * Архив грузится, только когда его открыли, и заново после любой перезагрузки списка:
+   * задачу, возвращённую в работу или закрытую в окне, он должен отпустить или принять.
+   */
+  const [archive, setArchive] = useState<Task[] | null>(null);
+  const archiveOpen = view === "list" && tab === "archive";
+  useEffect(() => {
+    if (!archiveOpen || tasks === null) return;
+    let alive = true;
+    listTasks({
+      scope: "closed",
+      archived: "only",
+      ...(developer && { developer }),
+      ...(debouncedSearch && { search: debouncedSearch }),
+    })
+      .then((items) => alive && setArchive(items))
+      .catch((cause: unknown) => {
+        if (!alive) return;
+        setError(
+          cause instanceof ApiError ? cause.message : "Не удалось загрузить архив",
+        );
+        setArchive((shown) => shown ?? []);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [archiveOpen, tasks, developer, debouncedSearch]);
 
   /**
    * Запись ждёт ответ сервера, и за это время срез могли переключить. Перезагрузка идёт
@@ -279,6 +313,8 @@ export function TasksScreen() {
         ? null
         : current.map((item) => (item.id === task.id ? { ...item, status: next } : item)),
     );
+    // Из архива задача уходит сразу: вернули в работу — ей место на доске.
+    setArchive((current) => current?.filter((item) => item.id !== task.id) ?? current);
     try {
       await updateTask(task.id, { status: next });
       latestLoad.current();
@@ -298,13 +334,13 @@ export function TasksScreen() {
   }, []);
 
   /** Родитель, потом подзадачи: если они не сохранятся, задача останется и откроется. */
-  async function createWithSubtasks(values: TaskFormValues, subtasks: string[]) {
+  async function createWithSubtasks(values: TaskFormValues, subtasks: DraftSubtask[]) {
     const task = await createTask(valuesToTaskInput(values));
-    const lost = await saveDraftSubtasks(task.id, subtasks);
+    const lost = await saveDraftSubtasks(task.id, subtasks, values.notifyChat);
 
     setCreating(null);
     if (lost.length > 0) {
-      const titles = lost.map((title) => `«${title}»`).join(", ");
+      const titles = lost.map((item) => `«${item.title}»`).join(", ");
       setEditingNotice(`Задача создана, но подзадачи не сохранились: ${titles}.`);
       setEditing(task);
     }
@@ -321,6 +357,7 @@ export function TasksScreen() {
 
   const shown = useMemo(() => {
     if (!tasks) return [];
+    if (tab === "archive") return archive ?? [];
     if (tab === "overdue") return tasks.filter(isOverdue);
     if (tab === "open") {
       // Поиск идёт по всему: закрытая задача иначе ответила бы «Ничего не нашлось», и
@@ -332,7 +369,7 @@ export function TasksScreen() {
       .sort((left, right) =>
         (right.completedAt ?? "").localeCompare(left.completedAt ?? ""),
       );
-  }, [tasks, tab, debouncedSearch]);
+  }, [tasks, tab, debouncedSearch, archive]);
 
   const groups = useMemo(
     () =>
@@ -374,6 +411,7 @@ export function TasksScreen() {
                   { value: "open", label: "Открытые", count: counts.open },
                   { value: "overdue", label: "Просрочено", count: counts.overdue },
                   { value: "done", label: "Готово" },
+                  { value: "archive", label: "Архив" },
                 ]}
               />
             )}
@@ -414,23 +452,27 @@ export function TasksScreen() {
       )}
 
       <div className="mt-5">
-        {tasks === null ? (
+        {tasks === null || (archiveOpen && archive === null) ? (
           <LoadingRows />
         ) : nothing && error ? null : nothing ? (
           <EmptyState
             title={
               debouncedSearch || developer
                 ? "Ничего не нашлось"
-                : tab === "overdue" && view === "list"
-                  ? "Ничего не горит"
-                  : "Пока пусто"
+                : archiveOpen
+                  ? "Архив пуст"
+                  : tab === "overdue" && view === "list"
+                    ? "Ничего не горит"
+                    : "Пока пусто"
             }
             note={
               debouncedSearch || developer
                 ? "Попробуйте другой запрос или человека."
-                : tab === "overdue" && view === "list"
-                  ? "Задач с истёкшим сроком нет."
-                  : "Заведите первую задачу — кнопка справа сверху."
+                : archiveOpen
+                  ? "Сюда сами уходят задачи через три дня после закрытия."
+                  : tab === "overdue" && view === "list"
+                    ? "Задач с истёкшим сроком нет."
+                    : "Заведите первую задачу — кнопка справа сверху."
             }
           />
         ) : view === "calendar" ? (
@@ -511,17 +553,24 @@ export function TasksScreen() {
               <TaskCard task={task} onOpen={() => setEditing(task)} />
             )}
           />
-        ) : tab === "done" ? (
-          <List>
-            {shown.map((task) => (
-              <TaskRow
-                key={task.id}
-                task={task}
-                onToggle={() => void toggleDone(task)}
-                onOpen={() => setEditing(task)}
-              />
-            ))}
-          </List>
+        ) : tab === "done" || tab === "archive" ? (
+          <>
+            <List>
+              {shown.map((task) => (
+                <TaskRow
+                  key={task.id}
+                  task={task}
+                  onToggle={() => void toggleDone(task)}
+                  onOpen={() => setEditing(task)}
+                />
+              ))}
+            </List>
+            <p className="text-muted-foreground mt-3 px-1 text-[13px]">
+              {tab === "done"
+                ? "Через три дня после закрытия задача сама уходит в «Архив»."
+                : "Закрытые больше трёх дней назад. Кружок вернёт задачу в работу."}
+            </p>
+          </>
         ) : (
           <div className="space-y-6">
             {groups.map((group) => (

@@ -11,6 +11,8 @@ import { briefNotes, listNotes, noteRoutesFor } from "../notes.js";
 import { normalizeTaskStatus, placeCard } from "../columns/columns.js";
 import { assertDevelopers } from "../people.js";
 import {
+  archiveCutoff,
+  archivedTaskWhere,
   CLOSED_TASK_STATUSES,
   createTaskBody,
   listTasksQuery,
@@ -119,7 +121,7 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
     const query = listTasksQuery.safeParse(request.query);
     if (!query.success) return invalidInput(reply, query.error);
 
-    const { status, scope, projectId, developer, standalone, overdue, search } =
+    const { status, scope, projectId, developer, standalone, overdue, search, archived } =
       query.data;
     // Видимость и срез по человеку в AND: `where.OR` ниже занят поиском, и одно OR
     // затёрло бы другое.
@@ -157,9 +159,18 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
       ];
     }
 
+    // Архив — в AND, как и видимость: `where.OR` занят поиском.
+    const cutoff = archiveCutoff();
+    if (archived === "only") conditions.push(archivedTaskWhere(cutoff));
+    if (archived === "exclude") conditions.push({ NOT: archivedTaskWhere(cutoff) });
+
     const tasks = await prisma.task.findMany({
       where,
-      orderBy: [{ status: "asc" }, { position: "asc" }],
+      // Архив растёт без конца, и потолок срезал бы свежие: там сначала недавно закрытые.
+      orderBy:
+        archived === "only"
+          ? [{ completedAt: { sort: "desc", nulls: "last" } }, { updatedAt: "desc" }]
+          : [{ status: "asc" }, { position: "asc" }],
       include: TASK_RELATIONS,
       take: 1000,
     });

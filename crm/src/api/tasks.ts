@@ -41,6 +41,8 @@ export interface Task {
    * раньше, чем API на старом коде успевает смениться, и поля может не быть совсем.
    */
   columnId?: string | null;
+  /** Закрыта больше трёх дней назад: место ей в «Архиве», а не на доске. */
+  archived?: boolean;
   priority: TaskPriority;
   project: { id: string; title: string } | null;
   /** Заполнен у подзадачи: своего экрана у неё нет, открывается родитель. */
@@ -103,6 +105,8 @@ export interface TaskFilters {
   standalone?: boolean;
   overdue?: boolean;
   search?: string;
+  /** По умолчанию сервер отдаёт всё, архив тоже. */
+  archived?: "exclude" | "only" | "include";
 }
 
 function toQuery(filters: TaskFilters): string {
@@ -114,6 +118,7 @@ function toQuery(filters: TaskFilters): string {
   if (filters.standalone) params.set("standalone", "true");
   if (filters.overdue) params.set("overdue", "true");
   if (filters.search) params.set("search", filters.search);
+  if (filters.archived) params.set("archived", filters.archived);
   const query = params.toString();
   return query ? `?${query}` : "";
 }
