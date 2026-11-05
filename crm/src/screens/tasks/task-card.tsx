@@ -1,4 +1,5 @@
 import { Flame, ListChecks } from "lucide-react";
+import { columnOf, useColumns, type BoardColumnDef } from "@/api/columns";
 import { TASK_STATUS_LABELS, type SubtaskProgress, type Task } from "@/api/tasks";
 import { NoteHint } from "@/components/note-hint";
 import { PersonChips } from "@/components/person-chip";
@@ -21,11 +22,27 @@ export function byUrgency(left: Task, right: Task): number {
   );
 }
 
-/** Статус виден только когда он что-то добавляет: «К работе» — обычное состояние. */
-export function statusTone(task: Task): "accent" | "neutral" | null {
-  if (task.status === "in_progress") return "accent";
-  if (task.status === "backlog") return "neutral";
-  return null;
+/**
+ * Метка колонки на карточке и в строке. Видна, только когда что-то добавляет: первая
+ * колонка «ждёт» — обычное состояние, закрытую видно по зачёркиванию. Подпись — название
+ * колонки, которое дал админ; пока колонки не загрузились, по статусу.
+ */
+export function statusBadge(
+  task: Task,
+  columns: BoardColumnDef[] | null,
+): { label: string; tone: "accent" | "neutral" } | null {
+  if (isClosed(task)) return null;
+  const column = columns ? columnOf(columns, task) : null;
+  if (!column) {
+    return task.status === "in_progress"
+      ? { label: TASK_STATUS_LABELS.in_progress, tone: "accent" }
+      : null;
+  }
+  if (column.id === columns?.find((item) => item.kind === "todo")?.id) return null;
+  return {
+    label: column.title,
+    tone: column.kind === "in_progress" ? "accent" : "neutral",
+  };
 }
 
 /** «2/5» на карточке и в строке. Без подзадач пусто: нулевой прогресс ничего не говорит. */
@@ -61,7 +78,8 @@ export function TaskCard({
   const done = isClosed(task);
   const deadline = task.dueAt && !done ? describeDeadline(task.dueAt) : null;
   const closedOn = done && task.completedAt ? formatDate(task.completedAt) : null;
-  const tone = showStatus ? statusTone(task) : null;
+  const columns = useColumns("task");
+  const badge = showStatus ? statusBadge(task, columns) : null;
   const hasFooter =
     deadline || closedOn || task.developers.length > 0 || task.subtasks.total > 0;
 
@@ -73,9 +91,9 @@ export function TaskCard({
       onClick={onOpen}
       className="flex w-full flex-col gap-2 p-4 text-left"
     >
-      {tone && (
-        <Badge tone={tone} className="self-start text-[13px]">
-          {TASK_STATUS_LABELS[task.status]}
+      {badge && (
+        <Badge tone={badge.tone} className="self-start text-[13px]">
+          {badge.label}
         </Badge>
       )}
       {!showStatus && task.project && (

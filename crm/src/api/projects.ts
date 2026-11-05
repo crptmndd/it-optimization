@@ -43,6 +43,8 @@ export interface Project {
   title: string;
   description: string | null;
   status: ProjectStatus;
+  /** Колонка доски, статус — её тип. Нестрого: на старом API поля нет. */
+  columnId?: string | null;
   client: { id: string; name: string } | null;
   lead: { id: string; contact: string; name: string | null } | null;
   developers: string[];
@@ -80,6 +82,8 @@ export interface ProjectInput {
   title?: string;
   description?: string | null;
   status?: ProjectStatus;
+  /** Колонка сильнее статуса: сервер возьмёт статус из её типа. */
+  columnId?: string | null;
   clientId?: string | null;
   leadId?: string | null;
   developers?: string[];
@@ -275,11 +279,8 @@ export async function deleteInvoice(projectId: string, invoiceId: string): Promi
 }
 
 /** Порядок колонки на доске — целиком, как и у задач. */
-export async function reorderProjects(
-  status: ProjectStatus,
-  ids: string[],
-): Promise<void> {
-  await api.put<void>("/projects/reorder", { status, ids });
+export async function reorderProjects(columnId: string, ids: string[]): Promise<void> {
+  await api.put<void>("/projects/reorder", { columnId, ids });
 }
 
 export interface ProjectFilters {

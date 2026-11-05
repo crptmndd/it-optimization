@@ -19,14 +19,6 @@ export const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
   cancelled: "Отменена",
 };
 
-/** Колонки доски. «Отменена» намеренно не колонка: это исход, а не этап. */
-export const BOARD_COLUMNS: readonly TaskStatus[] = [
-  "backlog",
-  "todo",
-  "in_progress",
-  "done",
-];
-
 export const CLOSED_TASK_STATUSES: readonly TaskStatus[] = ["done", "cancelled"];
 
 export const TASK_PRIORITIES = ["low", "normal", "high"] as const;
@@ -44,6 +36,11 @@ export interface Task {
   id: string;
   title: string;
   status: TaskStatus;
+  /**
+   * Колонка доски, статус — её тип. Пусто у подзадачи и отменённой. Нестрого: CRM уезжает
+   * раньше, чем API на старом коде успевает смениться, и поля может не быть совсем.
+   */
+  columnId?: string | null;
   priority: TaskPriority;
   project: { id: string; title: string } | null;
   /** Заполнен у подзадачи: своего экрана у неё нет, открывается родитель. */
@@ -83,6 +80,8 @@ export interface TaskDetail extends Task {
 export interface TaskInput {
   title?: string;
   status?: TaskStatus;
+  /** Колонка сильнее статуса: сервер возьмёт статус из её типа. */
+  columnId?: string | null;
   priority?: TaskPriority;
   projectId?: string | null;
   developers?: string[];
@@ -146,8 +145,8 @@ export async function deleteTask(id: string): Promise<void> {
 }
 
 /** Порядок колонки целиком: частично применённая перестановка выглядит как потеря. */
-export async function reorderTasks(status: TaskStatus, ids: string[]): Promise<void> {
-  await api.put<void>("/tasks/reorder", { status, ids });
+export async function reorderTasks(columnId: string, ids: string[]): Promise<void> {
+  await api.put<void>("/tasks/reorder", { columnId, ids });
 }
 
 export async function addTaskNote(taskId: string, body: string): Promise<Note> {

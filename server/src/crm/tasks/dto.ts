@@ -20,6 +20,8 @@ const taskFields = {
   title: requiredTitle(300, "Без названия задача бесполезна"),
   description: optionalText(4000),
   status: z.enum(TASK_STATUSES),
+  /** Колонка доски. Сильнее статуса: статус берётся из её типа. */
+  columnId: optionalUuid,
   priority: z.enum(TASK_PRIORITIES),
   projectId: optionalUuid,
   developers: z.array(z.string().trim().min(1).max(120)).max(MAX_DEVELOPERS),
@@ -43,10 +45,15 @@ export const updateTaskBody = z.object(taskFields).partial();
  * Слать по одной позиции нельзя: перетаскивание меняет положение сразу
  * нескольких задач, и частично применённый порядок выглядит как потеря данных.
  */
-export const reorderTasksBody = z.object({
-  status: z.enum(TASK_STATUSES),
-  ids: z.array(z.string().uuid()).max(500),
-});
+export const reorderTasksBody = z
+  .object({
+    /** Новая CRM присылает колонку: в двух колонках одного типа номера свои. */
+    columnId: z.string().uuid().optional(),
+    /** Старая вкладка во время выката присылает статус. */
+    status: z.enum(TASK_STATUSES).optional(),
+    ids: z.array(z.string().uuid()).max(500),
+  })
+  .refine((body) => body.columnId || body.status, { message: "Нужна колонка" });
 
 export const listTasksQuery = z.object({
   status: z.enum(TASK_STATUSES).optional(),
@@ -70,6 +77,8 @@ export interface TaskDto {
   title: string;
   description: string | null;
   status: (typeof TASK_STATUSES)[number];
+  /** Колонка доски. Пусто у подзадачи и у отменённой: на доске их нет. */
+  columnId: string | null;
   priority: (typeof TASK_PRIORITIES)[number];
   project: { id: string; title: string } | null;
   /** Заполнен у подзадачи: своего экрана у неё нет, открывается родитель. */
@@ -111,6 +120,7 @@ export function toTaskDto(item: TaskWithRelations): TaskDto {
     title: item.title,
     description: item.description,
     status: item.status,
+    columnId: item.columnId,
     priority: item.priority,
     project: item.project ? { id: item.project.id, title: item.project.title } : null,
     parentId: item.parentId,

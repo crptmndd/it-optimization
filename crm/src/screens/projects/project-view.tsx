@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import { ApiError } from "@/api/client";
+import { columnOf, useColumns } from "@/api/columns";
 import {
   addProjectNote,
   CLOSED_PROJECT_STATUSES,
@@ -76,6 +77,7 @@ const TASK_TONE: Partial<Record<Task["status"], "accent" | "success">> = {
 function MyTasks({ projectId }: { projectId: string }) {
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const columns = useColumns("task");
 
   useEffect(() => {
     let alive = true;
@@ -135,7 +137,9 @@ function MyTasks({ projectId }: { projectId: string }) {
                   </span>
                   {deadline && <Badge tone={deadline.tone}>{deadline.label}</Badge>}
                   <Badge tone={TASK_TONE[task.status] ?? "neutral"}>
-                    {TASK_STATUS_LABELS[task.status]}
+                    {/* Название колонки, которое дал админ: так же, как на доске. */}
+                    {(columns && columnOf(columns, task)?.title) ??
+                      TASK_STATUS_LABELS[task.status]}
                   </Badge>
                 </Link>
               </li>

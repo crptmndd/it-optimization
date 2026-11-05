@@ -26,6 +26,8 @@ const projectFields = {
   title: requiredTitle(200, "Без названия проект не найти"),
   description: optionalText(4000),
   status: z.enum(PROJECT_STATUSES),
+  /** Колонка доски. Сильнее статуса: статус берётся из её типа. */
+  columnId: optionalUuid,
   clientId: optionalUuid,
   leadId: optionalUuid,
   /// Кто ведёт. Список целиком: приходит новый состав, а не «добавь этого».
@@ -68,10 +70,14 @@ export const createProjectBody = z
 export const updateProjectBody = z.object(projectFields).partial();
 
 /** Порядок колонки целиком: частично применённая перестановка выглядит как потеря. */
-export const reorderProjectsBody = z.object({
-  status: z.enum(PROJECT_STATUSES),
-  ids: z.array(z.string().uuid()).max(500),
-});
+export const reorderProjectsBody = z
+  .object({
+    /** Новая CRM присылает колонку, старая вкладка во время выката — статус. */
+    columnId: z.string().uuid().optional(),
+    status: z.enum(PROJECT_STATUSES).optional(),
+    ids: z.array(z.string().uuid()).max(500),
+  })
+  .refine((body) => body.columnId || body.status, { message: "Нужна колонка" });
 
 export const invoiceBody = z.object({
   kind: z.enum(["invoice", "act"]),
@@ -120,6 +126,8 @@ export interface ProjectDto {
   title: string;
   description: string | null;
   status: (typeof PROJECT_STATUSES)[number];
+  /** Колонка доски; пусто — первая колонка своего статуса. */
+  columnId: string | null;
   client: { id: string; name: string } | null;
   lead: { id: string; contact: string; name: string | null } | null;
   developers: string[];
@@ -360,6 +368,8 @@ export interface EmployeeProjectDto {
   title: string;
   description: string | null;
   status: (typeof PROJECT_STATUSES)[number];
+  /** Колонка доски; пусто — первая колонка своего статуса. */
+  columnId: string | null;
   client: { id: string; name: string } | null;
   developers: string[];
   startedAt: string | null;
@@ -390,6 +400,7 @@ export function toEmployeeProjectDto(item: ProjectWithRelations): EmployeeProjec
     title: item.title,
     description: item.description,
     status: item.status,
+    columnId: item.columnId,
     client: item.client ? { id: item.client.id, name: item.client.name } : null,
     developers: item.developers,
     startedAt: item.startedAt?.toISOString() ?? null,
@@ -411,6 +422,7 @@ export function toProjectDto(item: ProjectWithRelations, timeZone: string): Proj
     title: item.title,
     description: item.description,
     status: item.status,
+    columnId: item.columnId,
     client: item.client ? { id: item.client.id, name: item.client.name } : null,
     lead: item.lead
       ? { id: item.lead.id, contact: item.lead.contact, name: item.lead.name }

@@ -20,7 +20,6 @@ import {
   addProjectNote,
   getProject,
   listProjects,
-  PROJECT_STATUSES,
   PROJECT_STATUS_LABELS,
   reorderProjects,
   unarchiveProject,
@@ -31,7 +30,9 @@ import {
   type ProjectStatus,
 } from "@/api/projects";
 import { isAdmin, useCurrentUser } from "@/auth/auth-context";
+import { columnOf, useColumns } from "@/api/columns";
 import { Board, type BoardColumn, type ColumnTone } from "@/components/board";
+import { ColumnMenu } from "@/components/column-menu";
 import { NotesPanel } from "@/components/notes-panel";
 import { PersonChips } from "@/components/person-chip";
 import {
@@ -84,6 +85,17 @@ const STATUS_TONE: Record<string, "neutral" | "accent" | "warning" | "success"> 
   done: "success",
   cancelled: "neutral",
 };
+
+/** Статус проекта названием его колонки: админ называет колонки как хочет. */
+function StatusBadge({ project }: { project: Project }) {
+  const columns = useColumns("project");
+  return (
+    <Badge tone={STATUS_TONE[project.status] ?? "neutral"}>
+      {(columns && columnOf(columns, project)?.title) ??
+        PROJECT_STATUS_LABELS[project.status]}
+    </Badge>
+  );
+}
 
 const COLUMN_TONE: Record<string, ColumnTone> = {
   planned: "neutral",
@@ -260,7 +272,11 @@ export function ProjectsScreen() {
    * она остаётся прежней после понижения, а форма на проекте без денег роняет экран.
    */
   const manages = (project: Project) => admin && hasMoney(project);
-  const [view, setView] = useState<"list" | "board">("list");
+  // Доской с 768px, как задачи: так их и смотрят. На телефоне перетаскивать нечем, там
+  // список. Выбор не запоминается, по той же причине, что у задач.
+  const [view, setView] = useState<"list" | "board">(() =>
+    window.matchMedia("(min-width: 768px)").matches ? "board" : "list",
+  );
   const [tab, setTab] = useState<TabKey>("all");
   const [clientFilter, setClientFilter] = useState(ALL_CLIENTS);
   const [search, setSearch] = useState("");
@@ -270,7 +286,11 @@ export function ProjectsScreen() {
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   /** Колонка, из которой нажали «+» — проект заводится сразу в ней. */
-  const [prefillStatus, setPrefillStatus] = useState<ProjectStatus | null>(null);
+  const [prefill, setPrefill] = useState<{
+    columnId: string;
+    status: ProjectStatus;
+  } | null>(null);
+  const columns = useColumns("project");
   const [editing, setEditing] = useState<Project | null>(null);
   /** Карточка, открытая ради суммы: туда сразу прокручивается блок оплаты. */
   const [revealFor, setRevealFor] = useState<string | null>(null);
@@ -350,12 +370,16 @@ export function ProjectsScreen() {
   }, [admin]);
 
   /**
-   * Перенос карточки: сначала статус, потом порядок колонки — сервер при смене
-   * статуса ставит проект в конец, и перестановка обязана идти после.
+   * Перенос карточки: сначала колонка, потом порядок колонки. Статус задаёт тип колонки,
+   * его считает сервер, а здесь он ставится заранее, чтобы карточка не мигнула.
    */
-  async function moveProject(status: ProjectStatus, ids: string[]) {
+  async function moveProject(columnId: string, ids: string[]) {
+    const column = columns?.find((item) => item.id === columnId);
+    if (!column) return;
+    const status = column.kind as ProjectStatus;
     const moved = projects?.find(
-      (project) => ids.includes(project.id) && project.status !== status,
+      (project) =>
+        ids.includes(project.id) && columnOf(columns ?? [], project)?.id !== columnId,
     );
 
     // Двигаем на месте до ответа сервера — иначе карточка успевает вернуться
@@ -365,7 +389,7 @@ export function ProjectsScreen() {
         ? null
         : current.map((project) =>
             project.id === moved?.id
-              ? { ...project, status, position: ids.indexOf(project.id) }
+              ? { ...project, status, columnId, position: ids.indexOf(project.id) }
               : ids.includes(project.id)
                 ? { ...project, position: ids.indexOf(project.id) }
                 : project,
@@ -373,8 +397,8 @@ export function ProjectsScreen() {
     );
 
     try {
-      if (moved) await updateProject(moved.id, { status });
-      await reorderProjects(status, ids);
+      if (moved) await updateProject(moved.id, { columnId, status });
+      await reorderProjects(columnId, ids);
       latestLoad.current();
     } catch (cause) {
       // Именно в таком порядке: `load` сбрасывает ошибку.
@@ -446,30 +470,47 @@ export function ProjectsScreen() {
           <LoadingRows />
         ) : projects.length === 0 ? (
           <EmptyState {...emptyState(tab, clientFilter, debouncedSearch, admin)} />
+        ) : shownView === "board" && !columns ? (
+          <LoadingRows />
         ) : shownView === "board" ? (
           <Board
             readOnly={!admin}
             onAdd={
               admin
                 ? (columnKey) => {
-                    setPrefillStatus(columnKey as ProjectStatus);
+                    const column = columns?.find((item) => item.id === columnKey);
+                    if (column) {
+                      setPrefill({
+                        columnId: column.id,
+                        status: column.kind as ProjectStatus,
+                      });
+                    }
                     setCreating(true);
                   }
                 : undefined
             }
             columns={
-              PROJECT_STATUSES.map((status) => ({
-                key: status,
-                label: PROJECT_STATUS_LABELS[status],
-                tone: COLUMN_TONE[status],
-                items: projects.filter((project) => project.status === status),
+              (columns ?? []).map((column) => ({
+                key: column.id,
+                label: column.title,
+                tone: COLUMN_TONE[column.kind],
+                items: projects.filter(
+                  (project) => columnOf(columns ?? [], project)?.id === column.id,
+                ),
               })) satisfies BoardColumn<Project>[]
             }
             onMove={
-              admin
-                ? (columnKey, ids) => void moveProject(columnKey as ProjectStatus, ids)
-                : undefined
+              admin ? (columnKey, ids) => void moveProject(columnKey, ids) : undefined
             }
+            {...(admin &&
+              columns && {
+                columnActions: (columnKey: string) => {
+                  const column = columns.find((item) => item.id === columnKey);
+                  return column ? (
+                    <ColumnMenu column={column} columns={columns} onError={setError} />
+                  ) : null;
+                },
+              })}
             renderCard={(project) => (
               <ProjectCard
                 project={project}
@@ -499,16 +540,16 @@ export function ProjectsScreen() {
           clients={clients}
           initial={{
             ...emptyProjectValues(),
-            ...(prefillStatus ? { status: prefillStatus } : {}),
+            ...(prefill ?? {}),
           }}
           onClose={() => {
             setCreating(false);
-            setPrefillStatus(null);
+            setPrefill(null);
           }}
           onSubmit={async (values) => {
             const project = await createProject(valuesToProjectInput(values));
             setCreating(false);
-            setPrefillStatus(null);
+            setPrefill(null);
             // Сумма задаётся в карточке, поэтому туда и ведём.
             if (project.payment.mode !== "none") {
               setEditing(project);
@@ -524,9 +565,7 @@ export function ProjectsScreen() {
           project={editing}
           badge={
             <>
-              <Badge tone={STATUS_TONE[editing.status] ?? "neutral"}>
-                {PROJECT_STATUS_LABELS[editing.status]}
-              </Badge>
+              <StatusBadge project={editing} />
               {editing.archivedAt && <Badge>архив</Badge>}
             </>
           }
@@ -649,9 +688,7 @@ function ProjectRow({
 
         <span className="col-span-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 xl:contents">
           <span className="flex xl:col-start-2 xl:row-start-1">
-            <Badge tone={STATUS_TONE[project.status] ?? "neutral"}>
-              {PROJECT_STATUS_LABELS[project.status]}
-            </Badge>
+            <StatusBadge project={project} />
           </span>
 
           {deadline && (

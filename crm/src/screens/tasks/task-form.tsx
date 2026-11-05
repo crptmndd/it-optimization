@@ -1,8 +1,8 @@
 import { Flame } from "lucide-react";
 import { Link } from "react-router";
 import type { Project } from "@/api/projects";
+import { columnOf, useColumns } from "@/api/columns";
 import {
-  TASK_STATUSES,
   TASK_STATUS_LABELS,
   type Task,
   type TaskInput,
@@ -19,6 +19,8 @@ import { usePeople } from "@/lib/people";
 export interface TaskFormValues {
   title: string;
   status: TaskStatus;
+  /** Колонка доски, пусто — первая колонка статуса или её нет (отменённая). */
+  columnId: string;
   priority: TaskPriority;
   projectId: string;
   developers: string[];
@@ -32,6 +34,7 @@ export function emptyTaskValues(defaults: {
   return {
     title: "",
     status: "todo",
+    columnId: "",
     priority: "normal",
     projectId: defaults.projectId ?? "",
     developers: defaults.developers ?? [],
@@ -43,6 +46,7 @@ export function taskToValues(task: Task): TaskFormValues {
   return {
     title: task.title,
     status: task.status,
+    columnId: task.columnId ?? "",
     priority: task.priority,
     projectId: task.project?.id ?? "",
     developers: task.developers,
@@ -57,7 +61,10 @@ export function taskToValues(task: Task): TaskFormValues {
 export function valuesToTaskInput(values: TaskFormValues): TaskInput {
   return {
     title: values.title.trim(),
+    // Статус идёт вместе с колонкой: на старом API колонок нет, и он поймёт только его.
     status: values.status,
+    ...(values.columnId &&
+      values.status !== "cancelled" && { columnId: values.columnId }),
     priority: values.priority,
     projectId: values.projectId || null,
     developers: values.developers,
@@ -119,6 +126,8 @@ export function TaskFields({
    */
   editing?: boolean;
 }) {
+  const columns = useColumns("task");
+
   function set<K extends keyof TaskFormValues>(key: K, value: TaskFormValues[K]) {
     onChange({ ...values, [key]: value });
   }
@@ -175,14 +184,37 @@ export function TaskFields({
 
         {editing ? (
           <Field label="Статус">
+            {/* Колонки доски и «Отменена»: отмена — исход, а не этап, колонки у неё нет. */}
             <Select
-              value={values.status}
-              onChange={(next) => set("status", next as TaskStatus)}
+              value={
+                values.status === "cancelled"
+                  ? "cancelled"
+                  : (columnOf(columns ?? [], values)?.id ?? values.status)
+              }
+              onChange={(next) => {
+                const column = columns?.find((item) => item.id === next);
+                onChange(
+                  column
+                    ? {
+                        ...values,
+                        columnId: column.id,
+                        status: column.kind as TaskStatus,
+                      }
+                    : { ...values, columnId: "", status: next as TaskStatus },
+                );
+              }}
               ariaLabel="Статус"
-              options={TASK_STATUSES.map((item) => ({
-                value: item,
-                label: TASK_STATUS_LABELS[item],
-              }))}
+              options={[
+                ...(columns ?? []).map((column) => ({
+                  value: column.id,
+                  label: column.title,
+                })),
+                // Пока колонки не пришли, в списке хотя бы нынешний статус.
+                ...(columns
+                  ? []
+                  : [{ value: values.status, label: TASK_STATUS_LABELS[values.status] }]),
+                { value: "cancelled", label: TASK_STATUS_LABELS.cancelled },
+              ]}
             />
           </Field>
         ) : (

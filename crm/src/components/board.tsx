@@ -50,6 +50,7 @@ export function Board<T extends { id: string }>({
   onAdd,
   reorderable = true,
   readOnly = false,
+  columnActions,
 }: {
   columns: BoardColumn<T>[];
   renderCard: (item: T) => ReactNode;
@@ -69,6 +70,12 @@ export function Board<T extends { id: string }>({
   reorderable?: boolean;
   /** Только смотреть: карточки не таскаются, а «+» в колонках нет. */
   readOnly?: boolean;
+  /**
+   * Меню колонки в её шапке, у админа: переименовать, сдвинуть, добавить справа, удалить.
+   * Новая колонка заводится отсюда, а не кнопкой в конце доски: лишняя ячейка выдавила бы
+   * четвёртую колонку за край на 1440 с открытой панелью.
+   */
+  columnActions?: (columnKey: string) => ReactNode;
 }) {
   const [dragging, setDragging] = useState<{ id: string; from: string } | null>(null);
   const [over, setOver] = useState<string | null>(null);
@@ -235,15 +242,20 @@ export function Board<T extends { id: string }>({
                 <span className="text-muted-foreground text-[13px] font-semibold">
                   {column.items.length}
                 </span>
-                {onAdd && !readOnly && (
-                  <button
-                    type="button"
-                    onClick={() => onAdd(column.key)}
-                    aria-label={`Добавить в «${column.label}»`}
-                    className="text-muted-foreground hover:bg-background hover:text-foreground ml-auto flex size-7 shrink-0 items-center justify-center rounded-lg transition"
-                  >
-                    <Plus size={15} strokeWidth={2.5} />
-                  </button>
+                {((onAdd && !readOnly) || columnActions) && (
+                  <span className="ml-auto flex shrink-0 items-center gap-0.5">
+                    {onAdd && !readOnly && (
+                      <button
+                        type="button"
+                        onClick={() => onAdd(column.key)}
+                        aria-label={`Добавить в «${column.label}»`}
+                        className="text-muted-foreground hover:bg-background hover:text-foreground flex size-7 shrink-0 items-center justify-center rounded-lg transition"
+                      >
+                        <Plus size={15} strokeWidth={2.5} />
+                      </button>
+                    )}
+                    {columnActions?.(column.key)}
+                  </span>
                 )}
               </div>
 
@@ -272,7 +284,10 @@ export function Board<T extends { id: string }>({
                   >
                     {/* Фон задаёт сама карточка: цвет несёт смысл, и у задач с проектами
                         он разный — доска в него не лезет. */}
-                    <div className="bg-background shadow-card overflow-hidden rounded-xl transition hover:shadow-md">
+                    {/* Обводка при наведении показывает, какую карточку возьмёшь: на плотной
+                        доске одной тени мало. Снаружи, а не внутри: свой фон карточки
+                        закрыл бы внутреннее кольцо. */}
+                    <div className="bg-background shadow-card hover:ring-ink/20 overflow-hidden rounded-xl ring-1 ring-transparent transition hover:shadow-md">
                       {renderCard(item)}
                     </div>
                   </div>

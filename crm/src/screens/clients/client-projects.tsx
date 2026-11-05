@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router";
 import { ApiError } from "@/api/client";
+import { columnOf, useColumns } from "@/api/columns";
 import {
   listProjects,
   PROJECT_STATUS_LABELS,
@@ -48,6 +49,7 @@ export function ClientProjects({
   onChanged: () => void;
 }) {
   const [own, setOwn] = useState<Project[] | null>(null);
+  const columns = useColumns("project");
   const [others, setOthers] = useState<Project[]>([]);
   const [picked, setPicked] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -130,7 +132,10 @@ export function ClientProjects({
                       {project.title}
                     </Link>
                     <span className="flex flex-wrap items-center gap-1.5 sm:justify-end">
-                      <Badge>{PROJECT_STATUS_LABELS[project.status]}</Badge>
+                      <Badge>
+                        {(columns && columnOf(columns, project)?.title) ??
+                          PROJECT_STATUS_LABELS[project.status]}
+                      </Badge>
                       {payment && <Badge tone={payment.tone}>{payment.label}</Badge>}
                       {project.archivedAt && <Badge>архив</Badge>}
                     </span>

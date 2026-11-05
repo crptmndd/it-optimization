@@ -39,6 +39,7 @@ import {
   type ClientFormValues,
 } from "./client-form";
 import { ClientProjects } from "./client-projects";
+import { contactHref } from "@/lib/contacts";
 
 const CONTACT_LABELS = new Map<string, string>(
   CONTACT_TYPES.map((type) => [type.value, type.label]),
@@ -175,10 +176,28 @@ function ClientContacts({ client, className }: { client: Client; className?: str
       {contacts.map((contact, index) => {
         const Icon = CONTACT_ICONS[contact.type] ?? UserRound;
         const label = CONTACT_LABELS.get(contact.type) ?? contact.type;
-        return (
-          <span key={index} title={label} className="flex min-w-0 items-center gap-1.5">
+        const href = contactHref(contact.type, contact.value);
+        const body = (
+          <>
             <Icon size={15} strokeWidth={2.25} aria-label={label} className="shrink-0" />
             <span className="truncate">{contact.value}</span>
+          </>
+        );
+        // Ссылка поверх строки, которая сама открывает карточку: поэтому `relative z-10`,
+        // иначе нажатие ушло бы растянутой кнопке под ней.
+        return href ? (
+          <a
+            key={index}
+            href={href}
+            title={`${label}: открыть`}
+            {...(href.startsWith("http") && { target: "_blank", rel: "noreferrer" })}
+            className="hover:text-foreground relative z-10 flex w-fit max-w-full min-w-0 items-center gap-1.5 rounded transition-colors hover:underline hover:underline-offset-2"
+          >
+            {body}
+          </a>
+        ) : (
+          <span key={index} title={label} className="flex min-w-0 items-center gap-1.5">
+            {body}
           </span>
         );
       })}
@@ -186,18 +205,25 @@ function ClientContacts({ client, className }: { client: Client; className?: str
   );
 }
 
+/**
+ * Строка открывает карточку целиком, а контакты в ней — ссылки. Кнопка внутри ссылки
+ * и ссылка внутри кнопки в HTML запрещены, поэтому кнопка стоит на названии и
+ * растянута на всю строку через `after`, а ссылки лежат над ней.
+ */
 function ClientRow({ client, onOpen }: { client: Client; onOpen: () => void }) {
   return (
-    <li className="hover:bg-muted/60 transition-colors">
+    <li className="hover:bg-muted/60 relative transition-colors">
       {/* Доли, а не rem: с боковой колонкой на 768px остаётся меньше 500px, и
           колонка контактов постоянной ширины съела бы название целиком. */}
-      <button
-        type="button"
-        onClick={onOpen}
-        className="grid min-h-14 w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 px-4 py-2.5 text-left sm:grid-cols-[minmax(0,3fr)_minmax(0,2fr)_6.5rem]"
-      >
+      <div className="grid min-h-14 w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 px-4 py-2.5 sm:grid-cols-[minmax(0,3fr)_minmax(0,2fr)_6.5rem]">
         <span className="min-w-0">
-          <span className="block truncate text-[15px] font-semibold">{client.name}</span>
+          <button
+            type="button"
+            onClick={onOpen}
+            className="block max-w-full truncate text-left text-[15px] font-semibold after:absolute after:inset-0 after:content-['']"
+          >
+            {client.name}
+          </button>
           <ClientContacts client={client} className="mt-0.5 block sm:hidden" />
           <NoteHint note={client.note} text={client.notes} />
         </span>
@@ -213,7 +239,7 @@ function ClientRow({ client, onOpen }: { client: Client; onOpen: () => void }) {
             </Badge>
           )}
         </span>
-      </button>
+      </div>
     </li>
   );
 }

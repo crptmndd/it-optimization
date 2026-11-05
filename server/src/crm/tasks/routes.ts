@@ -8,6 +8,7 @@ import { notifyTaskInBackground } from "../../notify/notifications.js";
 import { liveTask, projectScope, taskScope, type Viewer } from "../access.js";
 import { invalidInput } from "../http.js";
 import { briefNotes, listNotes, noteRoutesFor } from "../notes.js";
+import { normalizeTaskStatus, placeCard } from "../columns/columns.js";
 import { assertDevelopers } from "../people.js";
 import {
   CLOSED_TASK_STATUSES,
@@ -56,11 +57,22 @@ async function assertReferences(
   return assertDevelopers(input.developers);
 }
 
-/** Новая задача встаёт в конец своей колонки. На доске только верхний уровень. */
-async function nextPosition(status: string): Promise<number> {
+type TaskStatusValue = Prisma.EnumTaskStatusFilter["equals"] & string;
+
+/**
+ * Новая задача встаёт в конец своей колонки. На доске только верхний уровень. У двух
+ * колонок одного типа номера свои; задача без колонки (отменённая, подзадача) считается
+ * по статусу, как раньше.
+ */
+async function nextPosition(slot: {
+  columnId: string | null;
+  status: string;
+}): Promise<number> {
   const last = await prisma.task.aggregate({
     where: {
-      status: status as Prisma.EnumTaskStatusFilter["equals"],
+      ...(slot.columnId
+        ? { columnId: slot.columnId }
+        : { status: slot.status as TaskStatusValue }),
       deletedAt: null,
       parentId: null,
     },
@@ -180,8 +192,17 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
     );
     if (problem) return reply.code(400).send({ error: problem });
 
-    const status = input.status ?? "todo";
-    const position = await nextPosition(status);
+    // Колонка сильнее статуса. У подзадачи колонки нет: на доске её не бывает.
+    const requested = normalizeTaskStatus(input.status) ?? "todo";
+    const placed = parentId
+      ? ({ ok: true, columnId: null, status: requested } as const)
+      : await placeCard(prisma, "task", {
+          columnId: input.columnId ?? undefined,
+          status: input.columnId ? undefined : requested,
+        });
+    if (!placed.ok) return reply.code(400).send({ error: placed.error });
+    const status = placed.status as TaskStatusValue;
+    const position = await nextPosition(placed);
 
     const created = await prisma.$transaction(async (tx) => {
       let projectId = input.projectId ?? null;
@@ -200,6 +221,7 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
           title: input.title,
           description: input.description ?? null,
           status,
+          columnId: placed.columnId,
           priority: input.priority ?? "normal",
           projectId,
           parentId,
@@ -276,14 +298,31 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
     if (input.developers !== undefined) data.developers = input.developers;
     if (input.dueAt !== undefined) data.dueAt = input.dueAt;
 
-    // Смена статуса — это переезд в другую колонку, поэтому задача встаёт в её
-    // конец. Иначе она приземлилась бы в середину по старому номеру позиции.
-    if (input.status !== undefined && input.status !== existing.status) {
-      data.status = input.status;
-      data.position = await nextPosition(input.status);
+    // Смена колонки или статуса — переезд, поэтому задача встаёт в конец новой колонки.
+    // Иначе она приземлилась бы в середину по старому номеру позиции. Колонка сильнее
+    // статуса; один статус от старой формы оставляет задачу в её колонке, если та того
+    // же типа, иначе ставит в первую колонку типа.
+    let nextStatus: string | undefined;
+    if (input.columnId !== undefined || input.status !== undefined) {
+      const requested = normalizeTaskStatus(input.status);
+      const placed = existing.parentId
+        ? ({ ok: true, columnId: null, status: requested ?? existing.status } as const)
+        : await placeCard(
+            prisma,
+            "task",
+            { columnId: input.columnId ?? undefined, status: requested },
+            existing,
+          );
+      if (!placed.ok) return reply.code(400).send({ error: placed.error });
+      nextStatus = placed.status;
+      if (placed.status !== existing.status || placed.columnId !== existing.columnId) {
+        data.status = placed.status as TaskStatusValue;
+        data.columnId = placed.columnId;
+        data.position = await nextPosition(placed);
+      }
     }
 
-    const completedAt = completedAtFor(input.status, existing.completedAt);
+    const completedAt = completedAtFor(nextStatus, existing.completedAt);
     if (completedAt !== undefined) data.completedAt = completedAt;
 
     const task = await prisma.$transaction(async (tx) => {
@@ -322,15 +361,31 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
     const parsed = reorderTasksBody.safeParse(request.body);
     if (!parsed.success) return invalidInput(reply, parsed.error);
 
-    const { status, ids } = parsed.data;
+    const { columnId, ids } = parsed.data;
+    const status = normalizeTaskStatus(parsed.data.status) as TaskStatusValue | undefined;
+    const column = columnId
+      ? await prisma.boardColumn.findFirst({
+          where: { id: columnId, scope: "task" },
+          select: { id: true, kind: true },
+        })
+      : null;
+    if (columnId && !column) return reply.code(404).send({ error: "Колонка не найдена" });
 
     // Берём только те задачи, что действительно в этой колонке и видны этому человеку:
     // присланный список мог устареть, пока его тащили мышью, а мог быть подделан.
-    // Подзадач на доске нет, их номера с номерами колонки не сравнимы.
+    // Подзадач на доске нет, их номера с номерами колонки не сравнимы. Задача без
+    // колонки показана в первой колонке своего статуса, поэтому тоже своя.
     const existing = await prisma.task.findMany({
       where: {
         id: { in: ids },
-        status,
+        ...(column
+          ? {
+              OR: [
+                { columnId: column.id },
+                { columnId: null, status: column.kind as TaskStatusValue },
+              ],
+            }
+          : { status }),
         deletedAt: null,
         parentId: null,
         AND: [taskScope(request.user!)],
@@ -344,7 +399,10 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
       [...new Set(ids)]
         .filter((id) => known.has(id))
         .map((id, index) =>
-          prisma.task.update({ where: { id }, data: { position: slots[index] } }),
+          prisma.task.update({
+            where: { id },
+            data: { position: slots[index], ...(column && { columnId: column.id }) },
+          }),
         ),
     );
 

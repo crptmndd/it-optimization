@@ -13,8 +13,8 @@ import { FilterToolbar } from "@/components/filter-toolbar";
 import { useFocusFromLink } from "@/lib/focus-card";
 import { useOpenFromSearch } from "@/lib/open-from-search";
 import { listProjects, type Project } from "@/api/projects";
+import { columnOf, useColumns } from "@/api/columns";
 import {
-  BOARD_COLUMNS,
   createTask,
   deleteTask,
   getTask,
@@ -29,6 +29,7 @@ import {
 } from "@/api/tasks";
 import { isAdmin, useCurrentUser } from "@/auth/auth-context";
 import { Board, type BoardColumn, type ColumnTone } from "@/components/board";
+import { ColumnMenu } from "@/components/column-menu";
 import { PeopleFilter } from "@/components/people-filter";
 import { PersonChip, PersonChips } from "@/components/person-chip";
 import { MonthCalendar } from "@/components/month-calendar";
@@ -48,7 +49,7 @@ import { daysFromToday, describeDeadline, formatDate } from "@/lib/dates";
 import { cn } from "@/lib/cn";
 import { ProjectBoard } from "./project-board";
 import { saveDraftSubtasks } from "./subtasks";
-import { byUrgency, isClosed, statusTone, SubtaskCount, TaskCard } from "./task-card";
+import { byUrgency, isClosed, statusBadge, SubtaskCount, TaskCard } from "./task-card";
 import {
   emptyTaskValues,
   taskToValues,
@@ -115,7 +116,6 @@ function groupOf(task: Task): GroupKey {
 
 /** Цвет колонки — по смыслу: что ждёт, что в работе, что закрыто. */
 const COLUMN_TONE: Record<string, ColumnTone> = {
-  backlog: "neutral",
   todo: "accent",
   in_progress: "warning",
   done: "success",
@@ -130,6 +130,9 @@ export function TasksScreen() {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [tasks, setTasks] = useState<Task[] | null>(null);
+  const columns = useColumns("task");
+  /** Колонками управляет админ; сотрудник только двигает свои задачи по ним. */
+  const admin = isAdmin(user);
   /** `null` — неизвестно: ещё не загрузились или не загрузились вовсе. */
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -208,12 +211,18 @@ export function TasksScreen() {
   }, []);
 
   /**
-   * Перенос карточки: сначала статус, потом порядок колонки. Порядок важен —
-   * сервер при смене статуса ставит задачу в конец, и перестановка обязана
-   * идти после, иначе она затрётся.
+   * Перенос карточки: сначала колонка, потом порядок колонки. Порядок важен —
+   * сервер при смене колонки ставит задачу в конец, и перестановка обязана
+   * идти после, иначе она затрётся. Статус задаёт тип колонки, его считает сервер,
+   * а здесь он ставится заранее, чтобы карточка не мигнула в старом виде.
    */
-  async function moveTask(status: TaskStatus, ids: string[]) {
-    const moved = tasks?.find((task) => ids.includes(task.id) && task.status !== status);
+  async function moveTask(columnId: string, ids: string[]) {
+    const column = columns?.find((item) => item.id === columnId);
+    if (!column) return;
+    const status = column.kind as TaskStatus;
+    const moved = tasks?.find(
+      (task) => ids.includes(task.id) && columnOf(columns ?? [], task)?.id !== columnId,
+    );
 
     // Двигаем на месте до ответа сервера. Иначе карточка на долю секунды
     // возвращается в исходную колонку и «прыгает» — выглядит как сбой, хотя
@@ -223,7 +232,7 @@ export function TasksScreen() {
         ? null
         : current.map((task) =>
             task.id === moved?.id
-              ? { ...task, status, position: ids.indexOf(task.id) }
+              ? { ...task, status, columnId, position: ids.indexOf(task.id) }
               : ids.includes(task.id)
                 ? { ...task, position: ids.indexOf(task.id) }
                 : task,
@@ -231,8 +240,8 @@ export function TasksScreen() {
     );
 
     try {
-      if (moved) await updateTask(moved.id, { status });
-      await reorderTasks(status, ids);
+      if (moved) await updateTask(moved.id, { columnId, status });
+      await reorderTasks(columnId, ids);
       latestLoad.current();
     } catch (cause) {
       // Откат: на экране должно остаться то, что в базе. Именно в таком порядке:
@@ -467,22 +476,37 @@ export function TasksScreen() {
             onAdd={(projectId) => setCreating({ projectId: projectId ?? "" })}
             onOpen={setEditing}
           />
+        ) : view === "board" && !columns ? (
+          // Колонки грузятся отдельно от задач: без них доска была бы пустой без причины.
+          <LoadingRows />
         ) : view === "board" ? (
           <Board
-            onAdd={(columnKey) => setCreating({ status: columnKey as TaskStatus })}
+            onAdd={(columnKey) => {
+              const column = columns?.find((item) => item.id === columnKey);
+              setCreating({ columnId: columnKey, status: column?.kind as TaskStatus });
+            }}
             columns={
-              BOARD_COLUMNS.map((status) => ({
-                key: status,
-                label: TASK_STATUS_LABELS[status],
-                tone: COLUMN_TONE[status],
+              (columns ?? []).map((column) => ({
+                key: column.id,
+                label: column.title,
+                tone: COLUMN_TONE[column.kind],
                 // По `position`: перенос меняет его сразу, а порядок ответа сервера
                 // устарел бы до следующей загрузки, и карточка отскочила бы назад.
                 items: tasks
-                  .filter((task) => task.status === status)
+                  .filter((task) => columnOf(columns ?? [], task)?.id === column.id)
                   .sort((left, right) => left.position - right.position),
               })) satisfies BoardColumn<Task>[]
             }
-            onMove={(columnKey, ids) => void moveTask(columnKey as TaskStatus, ids)}
+            onMove={(columnKey, ids) => void moveTask(columnKey, ids)}
+            {...(admin &&
+              columns && {
+                columnActions: (columnKey: string) => {
+                  const column = columns.find((item) => item.id === columnKey);
+                  return column ? (
+                    <ColumnMenu column={column} columns={columns} onError={setError} />
+                  ) : null;
+                },
+              })}
             renderCard={(task) => (
               <TaskCard task={task} onOpen={() => setEditing(task)} />
             )}
@@ -597,7 +621,7 @@ function TaskRow({
 }) {
   const done = isClosed(task);
   const deadline = task.dueAt && !done ? describeDeadline(task.dueAt) : null;
-  const tone = statusTone(task);
+  const badge = statusBadge(task, useColumns("task"));
 
   return (
     <li
@@ -651,9 +675,9 @@ function TaskRow({
             {task.title}
           </span>
           <SubtaskCount subtasks={task.subtasks} />
-          {tone && !done && (
-            <Badge tone={tone} className="hidden xl:inline-flex">
-              {TASK_STATUS_LABELS[task.status]}
+          {badge && (
+            <Badge tone={badge.tone} className="hidden xl:inline-flex">
+              {badge.label}
             </Badge>
           )}
           {task.status === "cancelled" && (

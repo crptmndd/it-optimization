@@ -10,6 +10,7 @@ import {
   notifyProjectAssignedInBackground,
 } from "../../notify/notifications.js";
 import { projectScope } from "../access.js";
+import { placeCard } from "../columns/columns.js";
 import { invalidInput } from "../http.js";
 import { briefNotes, listNotes, noteRoutesFor } from "../notes.js";
 import { assertDevelopers } from "../people.js";
@@ -33,6 +34,7 @@ import {
 import { ensureStages, stageRoutes, STAGE_POSITIONS } from "./stages.js";
 
 const idParams = z.object({ id: z.string().uuid() });
+type ProjectStatusValue = Prisma.EnumProjectStatusFilter["equals"] & string;
 
 /**
  * Закрытие проставляет дату закрытия, возврат в работу — снимает. Иначе в
@@ -178,13 +180,20 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
     const problem = await assertReferences(input);
     if (problem) return reply.code(400).send({ error: problem });
 
-    const status = input.status ?? "planned";
+    // Колонка сильнее статуса: из «+» колонки проект заводится сразу в ней.
+    const placed = await placeCard(prisma, "project", {
+      columnId: input.columnId ?? undefined,
+      status: input.columnId ? undefined : (input.status ?? "planned"),
+    });
+    if (!placed.ok) return reply.code(400).send({ error: placed.error });
+    const status = placed.status as ProjectStatusValue;
     const currency = input.currency ?? "rub";
     const project = await prisma.project.create({
       data: {
         title: input.title,
         description: input.description ?? null,
         status,
+        columnId: placed.columnId,
         clientId: input.clientId ?? null,
         leadId: input.leadId ?? null,
         developers: input.developers ?? [],
@@ -252,7 +261,20 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
     const data: Prisma.ProjectUncheckedUpdateInput = {};
     if (input.title !== undefined) data.title = input.title;
     if (input.description !== undefined) data.description = input.description;
-    if (input.status !== undefined) data.status = input.status;
+    // Колонка сильнее статуса, а один статус от старой формы оставляет проект в его
+    // колонке, если та того же типа. Дальше всё смотрит на итоговый статус, как раньше.
+    if (input.columnId !== undefined || input.status !== undefined) {
+      const placed = await placeCard(
+        prisma,
+        "project",
+        { columnId: input.columnId ?? undefined, status: input.status },
+        existing,
+      );
+      if (!placed.ok) return reply.code(400).send({ error: placed.error });
+      input.status = placed.status as ProjectStatusValue;
+      data.status = input.status;
+      data.columnId = placed.columnId;
+    }
     if (input.clientId !== undefined) data.clientId = input.clientId;
     if (input.leadId !== undefined) data.leadId = input.leadId;
     // Состав приходит целиком — записываем как есть.
@@ -334,12 +356,32 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
     const parsed = reorderProjectsBody.safeParse(request.body);
     if (!parsed.success) return invalidInput(reply, parsed.error);
 
-    const { status, ids } = parsed.data;
+    const { columnId, status, ids } = parsed.data;
+    const column = columnId
+      ? await prisma.boardColumn.findFirst({
+          where: { id: columnId, scope: "project" },
+          select: { id: true, kind: true },
+        })
+      : null;
+    if (columnId && !column) return reply.code(404).send({ error: "Колонка не найдена" });
 
     // Берём только те, что действительно в этой колонке: присланный список мог
-    // устареть, пока его тащили мышью. Архива на доске нет.
+    // устареть, пока его тащили мышью. Архива на доске нет. Проект без колонки показан
+    // в первой колонке своего статуса, поэтому тоже свой.
     const existing = await prisma.project.findMany({
-      where: { id: { in: ids }, status, deletedAt: null, archivedAt: null },
+      where: {
+        id: { in: ids },
+        ...(column
+          ? {
+              OR: [
+                { columnId: column.id },
+                { columnId: null, status: column.kind as ProjectStatusValue },
+              ],
+            }
+          : { status }),
+        deletedAt: null,
+        archivedAt: null,
+      },
       select: { id: true },
     });
     const known = new Set(existing.map((project) => project.id));
@@ -348,7 +390,10 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
       ids
         .filter((id) => known.has(id))
         .map((id, index) =>
-          prisma.project.update({ where: { id }, data: { position: index } }),
+          prisma.project.update({
+            where: { id },
+            data: { position: index, ...(column && { columnId: column.id }) },
+          }),
         ),
     );
 

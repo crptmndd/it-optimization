@@ -1,6 +1,7 @@
 import { ChevronDown } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { Client } from "@/api/clients";
+import { columnOf, useColumns } from "@/api/columns";
 import {
   PROJECT_STATUSES,
   PROJECT_STATUS_LABELS,
@@ -18,6 +19,8 @@ export interface ProjectFormValues {
   title: string;
   description: string;
   status: ProjectStatus;
+  /** Колонка доски; пусто — первая колонка статуса. */
+  columnId: string;
   clientId: string;
   developers: string[];
   startedDate: string;
@@ -35,6 +38,7 @@ export function emptyProjectValues(): ProjectFormValues {
     title: "",
     description: "",
     status: "planned",
+    columnId: "",
     clientId: "",
     developers: [],
     startedDate: "",
@@ -52,6 +56,7 @@ export function projectToValues(project: Project): ProjectFormValues {
     title: project.title,
     description: project.description ?? "",
     status: project.status,
+    columnId: project.columnId ?? "",
     clientId: project.client?.id ?? "",
     developers: project.developers,
     startedDate: toDateInputValue(project.startedAt),
@@ -75,7 +80,9 @@ export function valuesToProjectInput(values: ProjectFormValues): ProjectInput {
   return {
     title: values.title.trim(),
     description: values.description.trim() || null,
+    // Статус идёт вместе с колонкой: на старом API колонок нет, и он поймёт только его.
     status: values.status,
+    ...(values.columnId && { columnId: values.columnId }),
     clientId: values.clientId || null,
     developers: values.developers,
     startedAt: fromDateInputValue(values.startedDate),
@@ -110,6 +117,8 @@ export function ProjectFields({
   /** Что лежит в базе. У нового проекта этого нет. */
   saved?: Pick<Project, "workType" | "billingMonthly">;
 }) {
+  const columns = useColumns("project");
+
   function set<K extends keyof ProjectFormValues>(key: K, value: ProjectFormValues[K]) {
     onChange({ ...values, [key]: value });
   }
@@ -179,13 +188,27 @@ export function ProjectFields({
 
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Статус">
+            {/* Колонки доски проектов: тип колонки и есть статус, от него зависят счета. */}
             <Select
-              value={values.status}
-              onChange={(next) => set("status", next as ProjectStatus)}
-              options={PROJECT_STATUSES.map((item) => ({
-                value: item,
-                label: PROJECT_STATUS_LABELS[item],
-              }))}
+              value={columns ? (columnOf(columns, values)?.id ?? "") : values.status}
+              onChange={(next) => {
+                const column = columns?.find((item) => item.id === next);
+                if (column) {
+                  onChange({
+                    ...values,
+                    columnId: column.id,
+                    status: column.kind as ProjectStatus,
+                  });
+                }
+              }}
+              options={
+                columns
+                  ? columns.map((column) => ({ value: column.id, label: column.title }))
+                  : PROJECT_STATUSES.map((item) => ({
+                      value: item,
+                      label: PROJECT_STATUS_LABELS[item],
+                    }))
+              }
             />
           </Field>
 
