@@ -1,4 +1,4 @@
-import type { Note, User } from "@prisma/client";
+import type { Note, Prisma, User } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { requireTeam } from "../auth/guard.js";
@@ -112,13 +112,18 @@ export async function listNotes(
   return notes.map((note) => toNoteDto(note, isAdmin(viewer)));
 }
 
+/**
+ * `db` — транзакция, когда заметка заводится вместе с самой записью: задача без заметки,
+ * которую человек видел в форме, была бы той же потерей текста, только молчаливой.
+ */
 export async function createNote(
   entity: NoteEntity,
   entityId: string,
   authorId: string,
   body: string,
+  db: Prisma.TransactionClient = prisma,
 ): Promise<NoteDto> {
-  const note = await prisma.note.create({
+  const note = await db.note.create({
     data: { entity, entityId, authorId, body },
     include: { author: AUTHOR_SELECT },
   });
@@ -131,8 +136,11 @@ export async function deleteNotes(entity: NoteEntity, entityId: string): Promise
   await prisma.note.deleteMany({ where: { entity, entityId } });
 }
 
+/** Один предел и у отдельной заметки, и у той, что приходит вместе с новой задачей. */
+export const NOTE_MAX_LENGTH = 4000;
+
 export const createNoteBody = z.object({
-  body: z.string().trim().min(1).max(4000),
+  body: z.string().trim().min(1).max(NOTE_MAX_LENGTH),
 });
 
 /**

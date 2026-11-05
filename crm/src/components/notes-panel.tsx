@@ -14,6 +14,20 @@ import { Button, ErrorNote, LoadingRows, Textarea } from "@/components/ui";
 import { formatDateTime } from "@/lib/dates";
 import { PersonChip } from "./person-chip";
 
+/** Предел сервера: `NOTE_MAX_LENGTH` в `server/src/crm/notes.ts`, приложения собираются порознь. */
+const NOTE_MAX_LENGTH = 4000;
+
+/**
+ * Что не так с текстом заметки, `null` — всё в порядке. Сервер ответил бы общим «Некорректные
+ * данные», и причину пришлось бы угадывать. `maxLength` на поле здесь не годится: он молча
+ * обрезал бы вставленный текст.
+ */
+export function noteProblem(text: string): string | null {
+  return text.trim().length > NOTE_MAX_LENGTH
+    ? `Заметка должна быть не длиннее ${NOTE_MAX_LENGTH} символов`
+    : null;
+}
+
 export interface NotesHandle {
   /**
    * Добавить то, что вписано в поле, но не отправлено. Вызывается перед сохранением окна:
@@ -35,11 +49,13 @@ export function NotesPanel({
   load,
   add,
   hint,
+  savedWithForm,
 }: {
   ref?: Ref<NotesHandle>;
   load: () => Promise<Note[]>;
   add: (body: string) => Promise<Note>;
   hint?: string;
+  savedWithForm?: boolean;
 }) {
   const [notes, setNotes] = useState<Note[] | null>(null);
   const [draft, setDraft] = useState("");
@@ -83,6 +99,11 @@ export function NotesPanel({
     if (sending.current) return sending.current;
     const body = draft.trim();
     if (!body) return Promise.resolve(true);
+    const problem = noteProblem(body);
+    if (problem) {
+      setError(problem);
+      return Promise.resolve(false);
+    }
     sending.current = send(body);
     return sending.current;
   }
@@ -98,6 +119,7 @@ export function NotesPanel({
       saving={saving}
       error={error}
       hint={hint}
+      savedWithForm={savedWithForm}
     />
   );
 }
@@ -115,26 +137,35 @@ export function NotesView({
   error,
   hint = "Пока пусто. Здесь удобно держать то, что не влезает в поля.",
   placeholder = "Что обсудили, о чём договорились",
+  savedWithForm = false,
 }: {
   /** `null` — ещё загружаются. */
   notes: Note[] | null;
   draft: string;
   onDraftChange: (draft: string) => void;
-  onSubmit: () => void;
+  /** Не нужен только при `savedWithForm`: отправлять заметку отдельно там нечем. */
+  onSubmit?: () => void;
   saving?: boolean;
   error?: string | null;
   hint?: string;
   placeholder?: string;
+  /**
+   * Заметка сохраняется кнопкой окна вокруг, как и его поля. Своей кнопки и подсказки
+   * тогда нет, а ⌘Enter принадлежит форме.
+   */
+  savedWithForm?: boolean;
 }) {
   /*
    * ⌘Enter здесь добавляет заметку и дальше не идёт: у окна вокруг он значит «сохранить
-   * и закрыть», а человек в этом поле говорит о заметке.
+   * и закрыть», а человек в этом поле говорит о заметке. При `savedWithForm` разницы нет,
+   * и нажатие уходит форме целиком: она и заметку сохранит.
    */
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (savedWithForm) return;
     if (event.key !== "Enter" || (!event.metaKey && !event.ctrlKey)) return;
     event.preventDefault();
     event.stopPropagation();
-    if (draft.trim() && !saving) onSubmit();
+    if (draft.trim() && !saving) onSubmit?.();
   }
 
   return (
@@ -146,7 +177,7 @@ export function NotesView({
           <LoadingRows rows={2} />
         </div>
       ) : notes.length === 0 ? (
-        <p className="text-muted-foreground mt-1 text-sm">{hint}</p>
+        !savedWithForm && <p className="text-muted-foreground mt-1 text-sm">{hint}</p>
       ) : (
         <ul className="divide-border mt-1 divide-y">
           {notes.map((note) => {
@@ -188,16 +219,18 @@ export function NotesView({
         />
         {/* type="button": форма записи снаружи, и submit сохранил бы её целиком.
             Лайм занят главной кнопкой окна. */}
-        <Button
-          type="button"
-          variant="secondary"
-          size="sm"
-          className="mt-2"
-          onClick={onSubmit}
-          disabled={saving || !draft.trim()}
-        >
-          {saving ? "Сохраняем…" : "Добавить заметку"}
-        </Button>
+        {!savedWithForm && (
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            className="mt-2"
+            onClick={onSubmit}
+            disabled={saving || !draft.trim()}
+          >
+            {saving ? "Сохраняем…" : "Добавить заметку"}
+          </Button>
+        )}
       </div>
     </div>
   );

@@ -21,12 +21,17 @@ export const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
 
 export const CLOSED_TASK_STATUSES: readonly TaskStatus[] = ["done", "cancelled"];
 
-export const TASK_PRIORITIES = ["low", "normal", "high"] as const;
+/**
+ * От низкой к срочной: на этом порядке стоит сортировка. `high` значит «Срочно», значение
+ * старше четырёх уровней и осталось прежним, а «Высокая» — это `important` перед ним.
+ */
+export const TASK_PRIORITIES = ["low", "normal", "important", "high"] as const;
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 
 export const TASK_PRIORITY_LABELS: Record<TaskPriority, string> = {
-  low: "Низкий",
-  normal: "Обычный",
+  low: "Низкая",
+  normal: "Обычная",
+  important: "Высокая",
   high: "Срочно",
 };
 
@@ -97,6 +102,8 @@ export interface TaskInput {
 /** Родителя можно указать только при создании: подзадачи не переезжают. */
 export interface NewTaskInput extends TaskInput {
   parentId?: string;
+  /** Первая заметка, сервер заводит её вместе с задачей. У подзадачи заметок нет. */
+  note?: string;
 }
 
 export interface TaskFilters {

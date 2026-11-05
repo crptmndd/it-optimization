@@ -1,8 +1,10 @@
-import { Flame, MessageCircle } from "lucide-react";
+import { MessageCircle } from "lucide-react";
 import { Link } from "react-router";
 import type { Project } from "@/api/projects";
 import { columnOf, useColumns } from "@/api/columns";
 import {
+  TASK_PRIORITIES,
+  TASK_PRIORITY_LABELS,
   TASK_STATUS_LABELS,
   type Task,
   type TaskInput,
@@ -13,6 +15,7 @@ import { isAdmin, useCurrentUser } from "@/auth/auth-context";
 import { DateField } from "@/components/date-field";
 import { DeveloperPicker } from "@/components/developer-picker";
 import { Field, Input, Select, Switch } from "@/components/ui";
+import { cn } from "@/lib/cn";
 import { fromDateInputValue, toDateInputValue } from "@/lib/dates";
 import { usePeople } from "@/lib/people";
 
@@ -181,7 +184,9 @@ export function TaskFields({
           />
         </Field>
 
-        <Field label="Проект">
+        {/* У заведённой в ряду стоят «Статус» и «Важность», а проекту отдана вся строка:
+            из всех полей только его название бывает длинным. */}
+        <Field label="Проект" className={cn(editing && "sm:col-span-2")}>
           <Select
             value={values.projectId}
             onChange={(projectId) => set("projectId", projectId)}
@@ -193,7 +198,7 @@ export function TaskFields({
           />
         </Field>
 
-        {editing ? (
+        {editing && (
           <Field label="Статус">
             {/* Колонки доски и «Отменена»: отмена — исход, а не этап, колонки у неё нет. */}
             <Select
@@ -228,12 +233,22 @@ export function TaskFields({
               ]}
             />
           </Field>
-        ) : (
-          <UrgentSwitch values={values} onChange={onChange} withLabel />
         )}
-      </div>
 
-      {editing && <UrgentSwitch values={values} onChange={onChange} />}
+        {/* Четыре уровня, а не переключатель: срочное от просто важного отличается и в
+            чате, и на доске. */}
+        <Field label="Важность">
+          <Select
+            value={values.priority}
+            onChange={(priority) => set("priority", priority as TaskPriority)}
+            ariaLabel="Важность"
+            options={TASK_PRIORITIES.map((priority) => ({
+              value: priority,
+              label: TASK_PRIORITY_LABELS[priority],
+            }))}
+          />
+        </Field>
+      </div>
 
       <ChatSwitch
         values={values}
@@ -290,39 +305,5 @@ function ChatSwitch({
       icon={MessageCircle}
       tone="neutral"
     />
-  );
-}
-
-/**
- * Важность — один переключатель. Три степени никто не различал: задача либо срочная,
- * либо обычная. Старая «низкая» при открытии не меняется, пока переключатель не тронут.
- */
-function UrgentSwitch({
-  values,
-  onChange,
-  withLabel = false,
-}: {
-  values: TaskFormValues;
-  onChange: (values: TaskFormValues) => void;
-  /** В ряду с полями нужна подпись сверху, иначе переключатель съезжает вверх. */
-  withLabel?: boolean;
-}) {
-  const control = (
-    <Switch
-      checked={values.priority === "high"}
-      onChange={(on) => onChange({ ...values, priority: on ? "high" : "normal" })}
-      label="Срочно"
-      icon={Flame}
-    />
-  );
-  if (!withLabel) return control;
-
-  return (
-    <div>
-      <span className="text-muted-foreground mb-1.5 block text-[13px] font-semibold">
-        Важность
-      </span>
-      {control}
-    </div>
   );
 }

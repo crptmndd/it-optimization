@@ -173,16 +173,11 @@ export function taskMessage(input: {
 }): string {
   const { task, tags, kind, personal = false, actor, timeZone, now } = input;
   const urgent = task.priority === "high";
-  const icon = urgent ? "🔥" : kind === "created" ? "📌" : "👋";
+  const important = task.priority === "important";
+  const icon = urgent ? "🔥" : important ? "⚡" : kind === "created" ? "📌" : "👋";
   const noun = task.parent ? "подзадача" : "задача";
-  const what =
-    kind === "assigned"
-      ? urgent
-        ? `назначена срочная ${noun}`
-        : `назначена ${noun}`
-      : urgent
-        ? `новая срочная ${noun}`
-        : `новая ${noun}`;
+  const level = urgent ? "срочная " : important ? "важная " : "";
+  const what = `${kind === "assigned" ? "назначена" : "новая"} ${level}${noun}`;
 
   // Тэг в первой строке: это единственное, что видно в уведомлении на телефоне.
   const headline = personal

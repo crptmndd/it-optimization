@@ -9,7 +9,12 @@ import {
 import { ApiError } from "@/api/client";
 import type { Project } from "@/api/projects";
 import { addTaskNote, getTask, type SubtaskProgress } from "@/api/tasks";
-import { NotesPanel, type NotesHandle } from "@/components/notes-panel";
+import {
+  noteProblem,
+  NotesPanel,
+  NotesView,
+  type NotesHandle,
+} from "@/components/notes-panel";
 import { Button, ErrorNote, Modal } from "@/components/ui";
 import {
   SubtasksDraft,
@@ -19,7 +24,7 @@ import {
 } from "./subtasks";
 import { TaskFields, type TaskFormValues } from "./task-form";
 
-/** Окно задачи: и новой, и заведённой. У новой нет ни заметок, ни настоящих подзадач. */
+/** Окно задачи: и новой, и заведённой. У новой заметка и подзадачи пока только черновики. */
 export function TaskModal({
   title,
   submitLabel = "Сохранить",
@@ -40,14 +45,18 @@ export function TaskModal({
   initial: TaskFormValues;
   projects: Project[];
   current?: { id: string; title: string } | null;
-  /** Есть только у сохранённой задачи — заметки вешать не на что, пока её нет. */
+  /** Есть только у сохранённой задачи: вешать заметки и подзадачи пока не на что. */
   taskId?: string;
   editing?: boolean;
   /** Ошибка, с которой окно открывается: задача создалась, а подзадачи нет. */
   notice?: string | null;
   onClose: () => void;
-  /** `subtasks` — черновик новой задачи, у сохранённой всегда пуст. */
-  onSubmit: (values: TaskFormValues, subtasks: DraftSubtask[]) => Promise<void>;
+  /** `subtasks` и `note` — черновики новой задачи, у сохранённой всегда пусты. */
+  onSubmit: (
+    values: TaskFormValues,
+    subtasks: DraftSubtask[],
+    note: string,
+  ) => Promise<void>;
   onDelete?: () => Promise<void>;
   /** Ручной архив, только у админа: одно из двух, в зависимости от того, где задача. */
   archive?: { label: "В архив" | "Вернуть из архива"; run: () => Promise<void> };
@@ -58,6 +67,7 @@ export function TaskModal({
   const [saving, setSaving] = useState(false);
   const [draft, setDraft] = useState<DraftSubtask[]>([]);
   const [draftText, setDraftText] = useState("");
+  const [noteDraft, setNoteDraft] = useState("");
   const panel = useRef<SubtasksHandle>(null);
   const notes = useRef<NotesHandle>(null);
 
@@ -67,20 +77,31 @@ export function TaskModal({
   // Функция постоянная, иначе заметки перезапрашивались бы на каждую букву в форме.
   const loadNotes = useCallback(async () => (await card)?.notes ?? [], [card]);
 
+  /**
+   * Окно закроется вместе с тем, что вписано, но не отправлено. Текст на экране — не
+   * черновик, который можно молча потерять, поэтому при сбое окно остаётся.
+   */
+  async function flushBlocks(): Promise<boolean> {
+    return (
+      (await panel.current?.flush()) !== false && (await notes.current?.flush()) !== false
+    );
+  }
+
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     // ⌘Enter шлёт форму мимо выключенной кнопки, а с подзадачами сохранение идёт дольше:
     // второе нажатие завело бы вторую задачу.
     if (saving) return;
+    // Заметка новой задачи едет в том же запросе: слишком длинная отклонила бы задачу целиком.
+    const problem = noteProblem(noteDraft);
+    if (problem) {
+      setError(problem);
+      return;
+    }
     setError(null);
     setSaving(true);
     try {
-      // Окно закроется вместе с тем, что вписано, но не отправлено. Текст на экране — не
-      // черновик, который можно молча потерять, поэтому при сбое окно остаётся.
-      const flushed =
-        (await panel.current?.flush()) !== false &&
-        (await notes.current?.flush()) !== false;
-      if (!flushed) {
+      if (!(await flushBlocks())) {
         setSaving(false);
         return;
       }
@@ -88,7 +109,7 @@ export function TaskModal({
       const items = typed
         ? [...draft, { title: typed, done: false, developers: [] }]
         : draft;
-      await onSubmit(values, items);
+      await onSubmit(values, items, noteDraft.trim());
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Не удалось сохранить");
       setSaving(false);
@@ -100,6 +121,10 @@ export function TaskModal({
     setError(null);
     setSaving(true);
     try {
+      if (!(await flushBlocks())) {
+        setSaving(false);
+        return;
+      }
       await archive.run();
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Не удалось");
@@ -120,8 +145,9 @@ export function TaskModal({
     }
   }
 
-  // В поле заметки ⌘Enter свой, он добавляет заметку и сюда не доходит. Отправка не сразу:
-  // поле подзадачи отдаёт правку по `blur`, и она должна успеть попасть в состояние окна.
+  // Из поля заметки ⌘Enter тоже приходит сюда: заметку добавит `flushBlocks`. Отправка не
+  // сразу: поле подзадачи отдаёт правку по `blur`, и она должна успеть попасть в состояние
+  // окна.
   function onKeyDown(event: KeyboardEvent<HTMLFormElement>) {
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
@@ -160,16 +186,23 @@ export function TaskModal({
           )}
         </div>
 
-        {taskId && (
-          <div className="mt-5">
+        <div className="mt-5">
+          {taskId ? (
             <NotesPanel
               ref={notes}
               load={loadNotes}
               add={(body) => addTaskNote(taskId, body)}
-              hint="Пока пусто. Сюда — что выяснилось по ходу и почему сделано так."
+              savedWithForm
             />
-          </div>
-        )}
+          ) : (
+            <NotesView
+              notes={[]}
+              draft={noteDraft}
+              onDraftChange={setNoteDraft}
+              savedWithForm
+            />
+          )}
+        </div>
 
         {error && (
           <div className="mt-4">

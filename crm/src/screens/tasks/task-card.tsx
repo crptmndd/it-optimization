@@ -1,8 +1,14 @@
-import { Flame, ListChecks } from "lucide-react";
+import { ListChecks } from "lucide-react";
 import { columnOf, useColumns, type BoardColumnDef } from "@/api/columns";
-import { TASK_STATUS_LABELS, type SubtaskProgress, type Task } from "@/api/tasks";
+import {
+  TASK_PRIORITIES,
+  TASK_STATUS_LABELS,
+  type SubtaskProgress,
+  type Task,
+} from "@/api/tasks";
 import { NoteHint } from "@/components/note-hint";
 import { PersonChips } from "@/components/person-chip";
+import { PriorityMark } from "@/components/priority-mark";
 import { Badge } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { describeDeadline, formatDate } from "@/lib/dates";
@@ -11,13 +17,13 @@ export function isClosed(task: Pick<Task, "status">): boolean {
   return task.status === "done" || task.status === "cancelled";
 }
 
-/** Раньше срок, потом срочное: две задачи на один день различает важность. */
+/** Раньше срок, потом важнее: две задачи на один день различает важность. */
 export function byUrgency(left: Task, right: Task): number {
   const leftDue = left.dueAt ? new Date(left.dueAt).getTime() : Infinity;
   const rightDue = right.dueAt ? new Date(right.dueAt).getTime() : Infinity;
   if (leftDue !== rightDue) return leftDue - rightDue;
   return (
-    Number(right.priority === "high") - Number(left.priority === "high") ||
+    TASK_PRIORITIES.indexOf(right.priority) - TASK_PRIORITIES.indexOf(left.priority) ||
     left.position - right.position
   );
 }
@@ -110,12 +116,11 @@ export function TaskCard({
           done && "text-muted-foreground line-through",
         )}
       >
-        {task.priority === "high" && !done && (
-          <Flame
+        {!done && (
+          <PriorityMark
+            priority={task.priority}
             size={14}
-            strokeWidth={2.5}
-            aria-label="Срочно"
-            className="text-danger mr-1 inline align-[-1px]"
+            className="mr-1 inline align-[-1px]"
           />
         )}
         {task.title}

@@ -7,7 +7,7 @@ import { prisma } from "../../db.js";
 import { notifyTaskInBackground } from "../../notify/notifications.js";
 import { liveTask, projectScope, taskScope, type Viewer } from "../access.js";
 import { invalidInput } from "../http.js";
-import { briefNotes, listNotes, noteRoutesFor } from "../notes.js";
+import { briefNotes, createNote, listNotes, noteRoutesFor } from "../notes.js";
 import { normalizeTaskStatus, placeCard } from "../columns/columns.js";
 import { assertDevelopers } from "../people.js";
 import {
@@ -196,6 +196,12 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
     const viewer = request.user!;
     const parentId = input.parentId ?? null;
 
+    // Своего окна у подзадачи нет, и заметку к ней никто бы не увидел. Отказ честнее:
+    // текст остаётся у того, кто его написал, а не пропадает в невидимой записи.
+    if (parentId && input.note) {
+      return reply.code(400).send({ error: "У подзадачи не бывает заметок" });
+    }
+
     // Проект подзадачи всегда родительский, присланный ни на что не влияет.
     const problem = await assertReferences(
       viewer,
@@ -244,6 +250,7 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
         },
         include: TASK_RELATIONS,
       });
+      if (input.note) await createNote("task", task.id, viewer.id, input.note, tx);
       return { task };
     });
 

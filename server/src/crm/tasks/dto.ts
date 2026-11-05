@@ -1,6 +1,7 @@
 import type { Prisma, Project, Task } from "@prisma/client";
 import { z } from "zod";
 import { optionalDate, optionalText, optionalUuid, requiredTitle } from "../fields.js";
+import { NOTE_MAX_LENGTH } from "../notes.js";
 import { MAX_DEVELOPERS } from "../people.js";
 
 export const TASK_STATUSES = [
@@ -10,7 +11,8 @@ export const TASK_STATUSES = [
   "done",
   "cancelled",
 ] as const;
-export const TASK_PRIORITIES = ["low", "normal", "high"] as const;
+/** От низкой к срочной, как в enum базы. `high` значит «Срочно», см. `schema.prisma`. */
+export const TASK_PRIORITIES = ["low", "normal", "important", "high"] as const;
 
 /** Незакрытые: только они попадают в напоминания и в счётчики проекта. */
 export const OPEN_TASK_STATUSES = ["backlog", "todo", "in_progress"] as const;
@@ -79,9 +81,12 @@ const taskFields = {
  * `parentId` есть только при создании: перенос подзадачи к другому родителю никто не
  * просил, а вложенность в один уровень держится на том, что верхняя задача не становится
  * подзадачей и наоборот.
+ *
+ * `note` тоже только при создании и не в `taskFields`, поэтому в `PATCH` его нет: у
+ * заведённой задачи заметки идут своим маршрутом. Пустая значит, что заметки нет.
  */
 export const createTaskBody = z
-  .object({ ...taskFields, parentId: optionalUuid })
+  .object({ ...taskFields, parentId: optionalUuid, note: optionalText(NOTE_MAX_LENGTH) })
   .partial()
   .required({ title: true });
 

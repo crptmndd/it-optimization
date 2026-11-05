@@ -1,4 +1,4 @@
-import { Check, Flame } from "lucide-react";
+import { Check } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ApiError } from "@/api/client";
 import { updateCredential, type Credential } from "@/api/credentials";
@@ -8,6 +8,7 @@ import { getToday, type TodaySnapshot } from "@/api/today";
 import { isAdmin, useCurrentUser } from "@/auth/auth-context";
 import { PeopleFilter } from "@/components/people-filter";
 import { PersonChips } from "@/components/person-chip";
+import { PriorityMark } from "@/components/priority-mark";
 import {
   Badge,
   Button,
@@ -467,14 +468,7 @@ function TaskLine({
 
       <Link to={`/tasks?focus=${task.id}`} className={cn(WORK_ROW, "flex-1")}>
         <span className="flex min-w-0 items-center gap-2">
-          {task.priority === "high" && (
-            <Flame
-              size={15}
-              strokeWidth={2.5}
-              aria-label="Срочно"
-              className="text-danger shrink-0"
-            />
-          )}
+          <PriorityMark priority={task.priority} className="shrink-0" />
           <span className="truncate text-[15px] font-semibold">{task.title}</span>
         </span>
 

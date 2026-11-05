@@ -159,6 +159,36 @@ docker compose -f docker-compose.prod.yml exec api npx prisma migrate deploy
 
 Тома `db-data`, `uploads` и сертификаты переживают пересборку.
 
+### Выкат: заметка при создании задачи и четыре уровня важности
+
+Миграция `20261105190000_task_priority_important` добавляет в enum значение `important` перед
+`high` и строки не трогает. `high` по-прежнему значит «Срочно», поэтому уже срочные задачи не
+меняются, а `important` получает подпись «Высокая». Порядок значений важен: «Сегодня» сортирует по
+нему. Если миграцию пересоздавать, `BEFORE 'high'` придётся вписать руками: сам Prisma ставит новое
+значение в конец.
+
+**Порядок: API раньше CRM.** Новая CRM на старом API не сохранит задачу с важностью «Высокая», ответ
+будет 400. Заметка новой задачи пропадёт и вовсе молча: старый API не знает поля `note` и выбрасывает
+его, а задача создаётся. Старая вкладка на новом API работает: задачу с `important` она показывает
+без отметки и при сохранении возвращает то же значение.
+
+1. Тег и бэкап: `docker image tag server-api:latest server-api:before-priority`,
+   `bash scripts/backup.sh`.
+2. API из ветки, миграция накатится при старте.
+3. Проверить, что значение встало на место, ответ `{low,normal,important,high}`:
+
+   ```bash
+   cd /opt/it-optimization/server
+   CO="docker compose -f docker-compose.prod.yml"
+   echo 'SELECT enum_range(NULL::"TaskPriority");' \
+     | $CO exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+   ```
+
+4. Слить в `main`: уедут CRM и сайт (в слиянии `CLAUDE.md` и `docs/`).
+
+Откат описан ниже, в разделе «Откат выката с заметкой и четырьмя уровнями важности»: перед сменой API
+нужна одна команда `UPDATE`.
+
 ### Выкат: колонки досок
 
 Миграция `20261105090000_board_columns` заводит `board_columns` и `column_id` у задач и проектов,
@@ -431,6 +461,43 @@ nano .env                             # там же CRM_ORIGIN=https://crm.it-op
 переменную `NEXT_PUBLIC_ADMIN_API_URL` и пересобрать сайт. `/panel` снова
 попросит токен GitHub и будет коммитить напрямую. Публичные страницы не зависят
 от API вообще — они статические, и падение сервера на них не влияет.
+
+### Откат выката с заметкой и четырьмя уровнями важности
+
+**Сначала CRM, потом база, потом API.** В старом Prisma-клиенте значения `important` нет, и одна такая
+строка роняет весь запрос: `Value 'important' not found in enum 'TaskPriority'`. Вместе с ним падают
+доска, «Сегодня» и сводка. Поэтому такие задачи переводятся в «Срочно» до смены API.
+
+1. Сделать revert в `main` и дождаться конца обоих workflow.
+2. Перевести `important` в `high`:
+
+   ```bash
+   cd /opt/it-optimization/server
+   CO="docker compose -f docker-compose.prod.yml"
+   echo "UPDATE tasks SET priority = 'high' WHERE priority = 'important';" \
+     | $CO exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+   ```
+
+3. Вернуть API из `before-priority`:
+
+   ```bash
+   cd /opt/it-optimization && git checkout main && git pull
+   cd server
+   docker image tag server-api:before-priority server-api:latest
+   docker compose -f docker-compose.prod.yml up -d --no-deps --no-build api
+   ```
+
+Команда из шага 2 повторяема. Если старый API отвечает 500 на `GET /tasks` и в логе та же ошибка,
+значит, открытая вкладка успела записать `important` между шагами 2 и 3: выполнить её ещё раз. Старый
+API такого значения уже не примет, поэтому больше оно не появится.
+
+После отката это не поломки, данные целы:
+
+- значение `important` остаётся в enum: Postgres не удаляет значения, а старый код его не замечает,
+  пока на нём нет строк;
+- бывшие «Высокие» остаются срочными и после возврата на новую версию: `UPDATE` не хранит, какими
+  они были;
+- заметки, заведённые вместе с задачами, остаются обычными заметками.
 
 ### Откат выката с ролями и подзадачами
 

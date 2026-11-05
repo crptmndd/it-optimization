@@ -1,12 +1,4 @@
-import {
-  CalendarDays,
-  Check,
-  Columns3,
-  Flame,
-  List as ListIcon,
-  Plus,
-  X,
-} from "lucide-react";
+import { CalendarDays, Check, Columns3, List as ListIcon, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError } from "@/api/client";
 import { FilterToolbar } from "@/components/filter-toolbar";
@@ -35,6 +27,7 @@ import { Board, type BoardColumn, type ColumnTone } from "@/components/board";
 import { ColumnMenu } from "@/components/column-menu";
 import { PeopleFilter } from "@/components/people-filter";
 import { PersonChip, PersonChips } from "@/components/person-chip";
+import { PriorityMark } from "@/components/priority-mark";
 import { MonthCalendar } from "@/components/month-calendar";
 import {
   Badge,
@@ -342,9 +335,16 @@ export function TasksScreen() {
     );
   }, []);
 
-  /** Родитель, потом подзадачи: если они не сохранятся, задача останется и откроется. */
-  async function createWithSubtasks(values: TaskFormValues, subtasks: DraftSubtask[]) {
-    const task = await createTask(valuesToTaskInput(values));
+  /**
+   * Родитель с заметкой, потом подзадачи: если они не сохранятся, задача останется и
+   * откроется. Заметка там уже будет: окно правки загрузит её с сервера, а не из черновика.
+   */
+  async function createWithSubtasks(
+    values: TaskFormValues,
+    subtasks: DraftSubtask[],
+    note: string,
+  ) {
+    const task = await createTask({ ...valuesToTaskInput(values), note });
     const lost = await saveDraftSubtasks(task.id, subtasks, values.notifyChat);
 
     setCreating(null);
@@ -668,6 +668,7 @@ export function TasksScreen() {
                     run: async () => {
                       await archiveTask(editing.id);
                       setEditing(null);
+                      setEditingNotice(null);
                       latestLoad.current();
                     },
                   },
@@ -679,6 +680,7 @@ export function TasksScreen() {
                       run: async () => {
                         await unarchiveTask(editing.id);
                         setEditing(null);
+                        setEditingNotice(null);
                         latestLoad.current();
                       },
                     },
@@ -743,14 +745,7 @@ function TaskRow({
         className="grid min-h-14 min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 py-2.5 pr-4 text-left xl:grid-cols-[minmax(0,1fr)_12rem_3.5rem_9.75rem]"
       >
         <span className="flex min-w-0 items-center gap-2">
-          {task.priority === "high" && !done && (
-            <Flame
-              size={15}
-              strokeWidth={2.5}
-              aria-label="Срочно"
-              className="text-danger shrink-0"
-            />
-          )}
+          {!done && <PriorityMark priority={task.priority} className="shrink-0" />}
           <span
             className={cn(
               "truncate text-[15px] font-semibold",
