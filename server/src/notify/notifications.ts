@@ -1,7 +1,14 @@
 import type { Lead, TaskPriority } from "@prisma/client";
 import { prisma } from "../db.js";
 import { canNotify, env } from "../env.js";
-import { escapeHtml, trySendMessage, type LinkButton } from "./telegram.js";
+import { isClosed } from "../crm/tasks/service.js";
+import {
+  escapeHtml,
+  trySendMessage,
+  type Keyboard,
+  type LinkButton,
+  type Markup,
+} from "./telegram.js";
 import { formatDate } from "./zone.js";
 
 interface Log {
@@ -18,7 +25,7 @@ async function sendPrivate(
   chatId: string,
   text: string,
   log: Log,
-  button?: LinkButton,
+  button?: Markup,
 ): Promise<void> {
   try {
     await trySendMessage(chatId, text, log, 3, button);
@@ -129,6 +136,8 @@ async function taskTags(people: string[]): Promise<Map<string, string>> {
 export interface TaskNotice {
   id: string;
   title: string;
+  /** Решает, какие кнопки под сообщением: закрытой задаче нечего «взять в работу». */
+  status: string;
   description: string | null;
   priority: TaskPriority;
   dueAt: Date | null;
@@ -198,6 +207,39 @@ export function taskButton(
 }
 
 /**
+ * Кнопки под сообщением о задаче: закрыть, взять в работу, перенести на завтра — не
+ * открывая CRM. Нажимает кто угодно из чата, а право проверяется при нажатии тем же
+ * правилом, что и правка в CRM (`notify/task-actions.ts`). Закрытой задаче остаётся
+ * только «Вернуть в работу»: случайное «Готово» должно отменяться там же, где нажато.
+ */
+export function taskKeyboard(task: {
+  id: string;
+  status: string;
+  parent?: { id: string } | null;
+}): Keyboard {
+  // У подзадачи в CRM только «сделано» и «не сделано», срока на ней не видно: ей одна
+  // кнопка, иначе нажатие меняло бы то, чего в карточке нет.
+  const subtask = Boolean(task.parent);
+  const rows: Keyboard = isClosed(task.status)
+    ? [[{ text: "↩️ Вернуть в работу", callback_data: `s:back:${task.id}` }]]
+    : [
+        [
+          { text: "✅ Готово", callback_data: `s:done:${task.id}` },
+          ...(task.status === "in_progress" || subtask
+            ? []
+            : [{ text: "▶️ В работу", callback_data: `s:work:${task.id}` }]),
+          ...(subtask
+            ? []
+            : [{ text: "📅 На завтра", callback_data: `s:tmrw:${task.id}` }]),
+        ],
+      ];
+  // Своей карточки у подзадачи нет, открывается родитель.
+  const link = taskButton(task.parent?.id ?? task.id, env.CRM_ORIGIN);
+  if (link) rows.push([link]);
+  return rows;
+}
+
+/**
  * Админу лично, остальным тэгом в общем чате. Работу админа в чате не показываем, поэтому
  * задача только на админов туда не идёт, а в общей отмечены только сотрудники. Задача без
  * исполнителя остаётся в чате: там её кто-то возьмёт.
@@ -235,8 +277,7 @@ export async function notifyTask(
   const admins = await adminChatsOf(people);
   const others = people.filter((name) => !admins.has(name));
   const note = await taskNote(task);
-  // Своей карточки у подзадачи нет, открывается родитель.
-  const button = taskButton(task.parent?.id ?? task.id, env.CRM_ORIGIN);
+  const button = taskKeyboard(task);
 
   const privateText = taskMessage({
     task,
@@ -290,6 +331,70 @@ export function notifyTaskInBackground(
   void notifyTask(task, people, log, options).catch((cause: unknown) => {
     log.warn({ err: cause }, "уведомление о задаче не отправлено");
   });
+}
+
+/** Кто сделал правку — для подписи в сообщении: имя из команды, иначе из учётки. */
+export function actorName(user: {
+  memberName: string | null;
+  name?: string | null;
+  email?: string;
+}): string {
+  return user.memberName ?? user.name ?? user.email ?? "кто-то из команды";
+}
+
+/**
+ * Автору — что его задачу закрыли. Без этого автор узнаёт о выполнении, только открыв
+ * CRM, и переспрашивает «ну как там?» о сделанном. Лично, кто бы автор ни был: это его
+ * собственная задача, а не новость для команды. Только верхний уровень: подзадача — строка
+ * чек-листа, и каждая галочка в нём будила бы автора. Себе не пишем.
+ */
+async function notifyAuthorClosed(
+  task: TaskNotice & { createdById: string | null },
+  actor: string,
+  log: Log,
+): Promise<void> {
+  if (!canNotify || !task.createdById) return;
+  const author = await prisma.user.findUnique({
+    where: { id: task.createdById },
+    select: { telegramChatId: true, disabledAt: true },
+  });
+  const chatId = author?.telegramChatId;
+  if (!chatId || author.disabledAt || !isPrivateChat(chatId)) return;
+
+  const done = task.status === "done";
+  const text = [
+    `${done ? "✅" : "✖️"} <b>${escapeHtml(task.title)}</b>`,
+    `${done ? "Выполнено" : "Отменено"} · ${escapeHtml(actor)}`,
+  ].join("\n");
+  await sendPrivate(chatId, text, log, taskKeyboard(task));
+}
+
+/**
+ * Что сказать после правки задачи — одно правило для формы CRM, кнопок и ответов в
+ * телеграме. Новых исполнителей будим, прежних нет: форма присылает весь список при
+ * каждом сохранении. Закрытие верхней задачи чужими руками — повод написать автору.
+ */
+export function afterTaskUpdate(
+  change: {
+    existing: { status: string; developers: string[] };
+    task: TaskNotice & { parentId: string | null; createdById: string | null };
+    actor: { id: string; name: string };
+    teamChat?: boolean;
+  },
+  log: Log,
+): void {
+  const { existing, task, actor } = change;
+  const added = task.developers.filter((name) => !existing.developers.includes(name));
+  if (added.length > 0 && !isClosed(task.status)) {
+    notifyTaskInBackground(task, added, log, { teamChat: change.teamChat !== false });
+  }
+
+  const closedNow = !isClosed(existing.status) && isClosed(task.status);
+  if (closedNow && task.parentId === null && task.createdById !== actor.id) {
+    void notifyAuthorClosed(task, actor.name, log).catch((cause: unknown) => {
+      log.warn({ err: cause }, "автору не сообщили о закрытии задачи");
+    });
+  }
 }
 
 export interface ProjectNotice {

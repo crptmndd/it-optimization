@@ -71,7 +71,10 @@ function rows<T>(items: T[], size: number): T[][] {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Задача, к которой относится карточка: по данным её кнопок. Чужие кнопки не подходят. */
+/**
+ * Задача, о которой сообщение бота: карточка, уведомление или карточка из `/tasks`. Берётся
+ * из данных кнопок. Список `/tasks` (кнопки `o:`) — не про одну задачу, он не подходит.
+ */
 export function cardTaskId(
   markup:
     | {
@@ -81,8 +84,10 @@ export function cardTaskId(
 ): string | null {
   for (const row of markup?.inline_keyboard ?? []) {
     for (const button of row) {
-      const id = button.callback_data?.split(":")[1];
-      if (id && UUID.test(id)) return id;
+      const data = button.callback_data;
+      if (!data || data.startsWith("o:")) continue;
+      const id = data.split(":").find((part) => UUID.test(part));
+      if (id) return id;
     }
   }
   return null;

@@ -59,7 +59,10 @@ function offsetMs(date: Date, timeZone: string): number {
 }
 
 /** Текущие время (ЧЧ:ММ) и календарная дата (ГГГГ-ММ-ДД) в поясе. */
-export function zonedNow(timeZone: string, now = new Date()): { date: string; time: string } {
+export function zonedNow(
+  timeZone: string,
+  now = new Date(),
+): { date: string; time: string } {
   const { year, month, day, hour, minute } = partsOf(now, timeZone);
   const pad = (value: number) => String(value).padStart(2, "0");
   return {

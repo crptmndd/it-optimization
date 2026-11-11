@@ -4,11 +4,15 @@ import { z } from "zod";
 import { audit } from "../../audit.js";
 import { requireAdmin, requireTeam } from "../../auth/guard.js";
 import { prisma } from "../../db.js";
-import { notifyTaskInBackground } from "../../notify/notifications.js";
+import {
+  actorName,
+  afterTaskUpdate,
+  notifyTaskInBackground,
+} from "../../notify/notifications.js";
 import { taskScope } from "../access.js";
 import { invalidInput } from "../http.js";
 import { briefNotes, listNotes, noteRoutesFor } from "../notes.js";
-import { normalizeTaskStatus, placeCard } from "../columns/columns.js";
+import { normalizeTaskStatus } from "../columns/columns.js";
 import {
   archiveCutoff,
   archivedTaskWhere,
@@ -24,13 +28,11 @@ import {
   updateTaskBody,
 } from "./dto.js";
 import {
-  assertReferences,
-  completedAtFor,
   createTask,
   isClosed,
-  nextPosition,
   reachableTask,
   type TaskStatusValue,
+  updateTask,
 } from "./service.js";
 
 const idParams = z.object({ id: z.string().uuid() });
@@ -171,79 +173,10 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
     const parsed = updateTaskBody.safeParse(request.body);
     if (!parsed.success) return invalidInput(reply, parsed.error);
 
-    const viewer = request.user!;
-    const existing = await prisma.task.findFirst({
-      where: reachableTask(params.data.id, viewer),
-    });
-    if (!existing) return reply.code(404).send({ error: "Задача не найдена" });
-
     const input = parsed.data;
-    const movesSubtask =
-      existing.parentId !== null &&
-      input.projectId !== undefined &&
-      input.projectId !== existing.projectId;
-    if (movesSubtask) {
-      return reply.code(400).send({ error: "Подзадача живёт в проекте своей задачи" });
-    }
-
-    const problem = await assertReferences(viewer, input);
-    if (problem) return reply.code(400).send({ error: problem });
-
-    const data: Prisma.TaskUncheckedUpdateInput = {};
-    if (input.title !== undefined) data.title = input.title;
-    if (input.description !== undefined) data.description = input.description;
-    if (input.priority !== undefined) data.priority = input.priority;
-    if (input.projectId !== undefined) data.projectId = input.projectId;
-    if (input.developers !== undefined) data.developers = input.developers;
-    if (input.dueAt !== undefined) data.dueAt = input.dueAt;
-
-    // Смена колонки или статуса — переезд, поэтому задача встаёт в конец новой колонки.
-    // Иначе она приземлилась бы в середину по старому номеру позиции. Колонка сильнее
-    // статуса; один статус от старой формы оставляет задачу в её колонке, если та того
-    // же типа, иначе ставит в первую колонку типа.
-    let nextStatus: string | undefined;
-    if (input.columnId !== undefined || input.status !== undefined) {
-      const requested = normalizeTaskStatus(input.status);
-      const placed = existing.parentId
-        ? ({ ok: true, columnId: null, status: requested ?? existing.status } as const)
-        : await placeCard(
-            prisma,
-            "task",
-            { columnId: input.columnId ?? undefined, status: requested },
-            existing,
-          );
-      if (!placed.ok) return reply.code(400).send({ error: placed.error });
-      nextStatus = placed.status;
-      if (placed.status !== existing.status || placed.columnId !== existing.columnId) {
-        data.status = placed.status as TaskStatusValue;
-        data.columnId = placed.columnId;
-        data.position = await nextPosition(placed);
-        // Задачу двинули — ею снова занимаются, ручной архив снимается.
-        data.archivedAt = null;
-      }
-    }
-
-    const completedAt = completedAtFor(nextStatus, existing.completedAt);
-    if (completedAt !== undefined) data.completedAt = completedAt;
-
-    const task = await prisma.$transaction(async (tx) => {
-      const updated = await tx.task.update({
-        where: { id: existing.id },
-        data,
-        include: TASK_RELATIONS,
-      });
-
-      // Вместе с лежащими в Корзине: вернувшись, подзадача не должна оказаться в чужом
-      // проекте. Без сравнения с прочитанным выше: оно могло устареть, а здесь строка
-      // родителя уже заблокирована, и подзадачи получают то, что записано в ней.
-      if (input.projectId !== undefined) {
-        await tx.task.updateMany({
-          where: { parentId: existing.id },
-          data: { projectId: input.projectId },
-        });
-      }
-      return updated;
-    });
+    const updated = await updateTask(request.user!, params.data.id, input);
+    if (!updated.ok) return reply.code(updated.code).send({ error: updated.error });
+    const { task, existing } = updated;
 
     await audit(request, {
       entity: "tasks",
@@ -252,14 +185,15 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
       ...(input.notifyChat === false && { diff: { notifyChat: false } }),
     });
 
-    // Тэгаем только новых: форма присылает весь список при каждом сохранении, и
-    // сравнение с прежним не даёт будить всех исполнителей из-за правки названия.
-    const added = task.developers.filter((name) => !existing.developers.includes(name));
-    if (added.length > 0 && !isClosed(task.status)) {
-      notifyTaskInBackground(task, added, request.log, {
+    afterTaskUpdate(
+      {
+        existing,
+        task,
+        actor: { id: request.user!.id, name: actorName(request.user!) },
         teamChat: input.notifyChat !== false,
-      });
-    }
+      },
+      request.log,
+    );
 
     return reply.send({ task: toTaskDto(task) });
   });

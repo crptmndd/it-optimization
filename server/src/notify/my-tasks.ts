@@ -1,18 +1,19 @@
-import type { TaskPriority } from "@prisma/client";
+import type { Prisma, TaskPriority } from "@prisma/client";
 import { liveTask, taskScope, type Viewer } from "../crm/access.js";
 import { OPEN_TASK_STATUSES } from "../crm/tasks/dto.js";
 import { prisma } from "../db.js";
 import { env } from "../env.js";
-import { escapeHtml, fitMessage, type LinkButton } from "./telegram.js";
+import { escapeHtml, type InlineButton, type Keyboard } from "./telegram.js";
 import { formatDay, startOfToday, startOfTomorrow } from "./zone.js";
 
 /**
- * `/tasks` — всё открытое, что висит на человеке: задачи и подзадачи, где он исполнитель.
- * Сводка `/today` отвечает на «что горит», а здесь — «что на мне вообще»: туда не
- * попадает задача без срока, а именно её и забывают.
+ * Списки задач в телеграме: `/tasks` (всё открытое на человеке), напоминания о сроках и
+ * ответы на вопросы. Вид один: задачи пронумерованы, под списком кнопки с номерами —
+ * нажатие присылает задачу с кнопками «Готово», «В работу», «На завтра». Название ведёт в
+ * карточку CRM, если есть боевой адрес.
  *
- * Видимость та же, что в CRM (`taskScope`), архив руками и закрытые не показываются.
- * Подзадача под архивной задачей тоже уходит: в CRM её не видно, пока родитель в архиве.
+ * Видимость всегда та же, что в CRM (`taskScope`); закрытые, удалённые, убранные в архив
+ * руками и подзадачи под архивной задачей не показываются.
  */
 
 const SELECT = {
@@ -21,23 +22,31 @@ const SELECT = {
   priority: true,
   status: true,
   dueAt: true,
+  completedAt: true,
+  developers: true,
   parent: { select: { id: true, title: true, archivedAt: true } },
   project: { select: { title: true } },
 } as const;
 
-type Row = Awaited<ReturnType<typeof loadTasks>>[number];
+export type TaskRow = Prisma.TaskGetPayload<{ select: typeof SELECT }>;
 
-function loadTasks(viewer: Viewer, person: string) {
-  return prisma.task.findMany({
+/** Задачи по условию, видимые человеку. `open: false` — и закрытые тоже. */
+export async function findTaskRows(
+  viewer: Viewer,
+  where: Prisma.TaskWhereInput,
+  options: { open?: boolean } = {},
+): Promise<TaskRow[]> {
+  const rows = await prisma.task.findMany({
     where: {
-      developers: { has: person },
-      status: { in: [...OPEN_TASK_STATUSES] },
+      ...where,
+      ...(options.open !== false && { status: { in: [...OPEN_TASK_STATUSES] } }),
       archivedAt: null,
       AND: [liveTask, taskScope(viewer)],
     },
     select: SELECT,
     take: 300,
   });
+  return rows.filter((row) => !row.parent?.archivedAt);
 }
 
 /** От срочной к низкой: `TASK_PRIORITIES` идёт наоборот. */
@@ -52,11 +61,11 @@ const PRIORITY_RANK: Record<TaskPriority, number> = {
 const PRIORITY_MARK: Record<TaskPriority, string> = {
   high: "🔴",
   important: "🟠",
-  normal: "•",
-  low: "•",
+  normal: "",
+  low: "",
 };
 
-function byUrgency(a: Row, b: Row): number {
+export function byUrgency(a: TaskRow, b: TaskRow): number {
   const due = (a.dueAt?.getTime() ?? Infinity) - (b.dueAt?.getTime() ?? Infinity);
   if (due !== 0 && Number.isFinite(due)) return due;
   if (a.dueAt && !b.dueAt) return -1;
@@ -65,54 +74,100 @@ function byUrgency(a: Row, b: Row): number {
   return rank !== 0 ? rank : a.title.localeCompare(b.title, "ru");
 }
 
-function byPriority(a: Row, b: Row): number {
+export function byPriority(a: TaskRow, b: TaskRow): number {
   const rank = PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority];
   return rank !== 0 ? rank : byUrgency(a, b);
 }
 
-/**
- * Название ведёт в карточку, если есть боевой адрес CRM: так список заменяет поиск.
- * У подзадачи своей карточки нет, ссылка открывает родителя.
- */
-function titleOf(task: Row): string {
+/** У подзадачи своей карточки нет, ссылка открывает родителя. */
+function titleOf(task: TaskRow): string {
   const title = escapeHtml(task.title);
   const origin = env.CRM_ORIGIN;
   if (!origin?.startsWith("https://")) return title;
   return `<a href="${origin}/#/tasks?open=${task.parent?.id ?? task.id}">${title}</a>`;
 }
 
-function lineOf(task: Row, withDue: boolean): string {
-  const meta: string[] = [];
-  if (task.parent) meta.push(`в «${escapeHtml(task.parent.title)}»`);
-  if (task.project) meta.push(escapeHtml(task.project.title));
-  if (withDue && task.dueAt) meta.push(`до ${formatDay(task.dueAt, env.TIMEZONE)}`);
-  if (task.status === "in_progress") meta.push("в работе");
-  const tail = meta.length > 0 ? ` — ${meta.join(" · ")}` : "";
-  return `${PRIORITY_MARK[task.priority]} ${titleOf(task)}${tail}`;
+export interface LineOptions {
+  /** Показывать срок: в разделе «На сегодня» он и так понятен. */
+  due?: boolean;
+  /** Показывать исполнителей: в чужом списке важно, на ком задача. */
+  people?: boolean;
 }
 
-export async function myTasksMessage(
-  viewer: Viewer,
-): Promise<{ text: string; button?: LinkButton }> {
-  const person = viewer.memberName;
-  if (!person) {
-    return {
-      text: "Ваша учётка не связана с человеком из команды, поэтому задач на ней нет. Связь ставит админ: CRM → Настройки → Команда.",
-    };
+function lineOf(task: TaskRow, number: number, options: LineOptions): string {
+  const meta: string[] = [];
+  if (options.people && task.developers.length > 0) {
+    meta.push(escapeHtml(task.developers.join(", ")));
   }
+  if (task.parent) meta.push(`в «${escapeHtml(task.parent.title)}»`);
+  if (task.project) meta.push(escapeHtml(task.project.title));
+  if (options.due !== false && task.dueAt) {
+    meta.push(`до ${formatDay(task.dueAt, env.TIMEZONE)}`);
+  }
+  if (task.status === "in_progress") meta.push("в работе");
+  if (task.status === "done") meta.push("✅ готово");
+  const tail = meta.length > 0 ? ` — ${meta.join(" · ")}` : "";
+  const mark = PRIORITY_MARK[task.priority];
+  return `${number}. ${mark ? `${mark} ` : ""}${titleOf(task)}${tail}`;
+}
 
-  const tasks = (await loadTasks(viewer, person)).filter(
-    (task) => !task.parent?.archivedAt,
-  );
+export interface TaskGroup {
+  /** Подзаголовок раздела; `null` — без него. */
+  title: string | null;
+  tasks: TaskRow[];
+  options?: LineOptions;
+}
+
+/**
+ * Пронумерованных строк не больше этого: под каждой — кнопка, а сообщение длиннее
+ * 4096 символов телеграм не примет. Остальное честно сказано в хвосте.
+ */
+const LIST_LIMIT = 30;
+const BUTTONS_PER_ROW = 6;
+
+export function renderTaskList(
+  header: string,
+  groups: TaskGroup[],
+): { text: string; keyboard: Keyboard } {
+  const lines = [header];
+  const shown: TaskRow[] = [];
+  let hidden = 0;
+
+  for (const group of groups) {
+    if (group.tasks.length === 0) continue;
+    const room = LIST_LIMIT - shown.length;
+    if (room <= 0) {
+      hidden += group.tasks.length;
+      continue;
+    }
+    lines.push("");
+    if (group.title) lines.push(`<b>${escapeHtml(group.title)}</b>`);
+    for (const task of group.tasks.slice(0, room)) {
+      shown.push(task);
+      lines.push(lineOf(task, shown.length, group.options ?? {}));
+    }
+    hidden += Math.max(0, group.tasks.length - room);
+  }
+  if (hidden > 0) lines.push("", `…и ещё ${hidden} — в CRM`);
+
+  const numbers: InlineButton[] = shown.map((task, index) => ({
+    text: String(index + 1),
+    callback_data: `o:${task.id}`,
+  }));
+  const keyboard: Keyboard = [];
+  for (let index = 0; index < numbers.length; index += BUTTONS_PER_ROW) {
+    keyboard.push(numbers.slice(index, index + BUTTONS_PER_ROW));
+  }
   const origin = env.CRM_ORIGIN;
-  const button = origin?.startsWith("https://")
-    ? { text: "Открыть задачи в CRM", url: `${origin}/#/tasks` }
-    : undefined;
-
-  if (tasks.length === 0) {
-    return { text: "На вас нет открытых задач.", button };
+  if (origin?.startsWith("https://")) {
+    keyboard.push([{ text: "Открыть задачи в CRM", url: `${origin}/#/tasks` }]);
   }
+  if (shown.length > 0) lines.push("", "Номер под списком открывает задачу с кнопками.");
+  return { text: lines.join("\n"), keyboard };
+}
 
+/** Просрочено, на сегодня и остальное: так человек видит, с чего начать. */
+export function splitByDeadline(tasks: TaskRow[]): TaskGroup[] {
   const today = startOfToday(env.TIMEZONE);
   const tomorrow = startOfTomorrow(env.TIMEZONE);
   const overdue = tasks
@@ -124,23 +179,28 @@ export async function myTasksMessage(
   const rest = tasks
     .filter((task) => !task.dueAt || task.dueAt >= tomorrow)
     .sort(byPriority);
-
-  const lines = [`📋 <b>Ваши задачи: ${tasks.length}</b>`];
-  if (overdue.length > 0) {
-    lines.push("", "<b>Просрочено</b>", ...overdue.map((task) => lineOf(task, true)));
-  }
-  if (dueToday.length > 0) {
-    lines.push("", "<b>На сегодня</b>", ...dueToday.map((task) => lineOf(task, false)));
-  }
-  if (rest.length > 0) {
+  const urgent = overdue.length + dueToday.length > 0;
+  return [
+    { title: "Просрочено", tasks: overdue },
+    { title: "На сегодня", tasks: dueToday, options: { due: false } },
     // Заголовок «Остальное» нужен, только если выше было что-то срочное.
-    if (overdue.length + dueToday.length > 0) lines.push("", "<b>Остальное</b>");
-    else lines.push("");
-    lines.push(...rest.map((task) => lineOf(task, true)));
+    { title: urgent ? "Остальное" : null, tasks: rest },
+  ];
+}
+
+export async function myTasksMessage(
+  viewer: Viewer,
+): Promise<{ text: string; keyboard?: Keyboard }> {
+  const person = viewer.memberName;
+  if (!person) {
+    return {
+      text: "Ваша учётка не связана с человеком из команды, поэтому задач на ней нет. Связь ставит админ: CRM → Настройки → Команда.",
+    };
   }
 
-  return {
-    text: fitMessage(lines, (dropped) => `…и ещё ${dropped} — в CRM`),
-    button,
-  };
+  const tasks = await findTaskRows(viewer, { developers: { has: person } });
+  if (tasks.length === 0) {
+    return renderTaskList("На вас нет открытых задач.", []);
+  }
+  return renderTaskList(`📋 <b>Ваши задачи: ${tasks.length}</b>`, splitByDeadline(tasks));
 }

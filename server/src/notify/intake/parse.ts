@@ -171,13 +171,30 @@ function calendar(today: string): string {
   return days.join(", ");
 }
 
-function contextBlock(context: IntakeContext): string {
-  const weekday = WEEKDAY_NAMES[shiftDay(context.today, 0).getUTCDay()];
+/** Сегодняшняя дата и календарь на две недели — общая шапка всех запросов к модели. */
+export function dateBlock(today: string): string[] {
+  const weekday = WEEKDAY_NAMES[shiftDay(today, 0).getUTCDay()];
+  return [`Сегодня ${weekday}, ${today}.`, `Календарь: ${calendar(today)}.`];
+}
+
+/** Команда списком: имя, ник, кто автор. Исполнителей модель берёт только отсюда. */
+export function teamBlock(context: {
+  people: Person[];
+  author: string | null;
+}): string[] {
   const people = context.people.map((person) => {
     const handle = person.handle ? ` (ник @${person.handle})` : "";
     const author = person.name === context.author ? " — автор сообщения" : "";
     return `- ${person.name}${handle}${author}`;
   });
+  return [
+    "Команда (исполнитель — только из этого списка, имя пиши ровно как здесь, без ника):",
+    ...(people.length > 0 ? people : ["(пусто)"]),
+    ...(context.author ? [] : ["Автор сообщения в списке команды не значится."]),
+  ];
+}
+
+function contextBlock(context: IntakeContext): string {
   const projects = [...context.projects].map(
     ([code, project]) => `${code}: ${project.title}`,
   );
@@ -187,12 +204,9 @@ function contextBlock(context: IntakeContext): string {
   });
 
   return [
-    `Сегодня ${weekday}, ${context.today}.`,
-    `Календарь: ${calendar(context.today)}.`,
+    ...dateBlock(context.today),
     "",
-    "Команда (исполнитель — только из этого списка, имя пиши ровно как здесь, без ника):",
-    ...(people.length > 0 ? people : ["(пусто)"]),
-    ...(context.author ? [] : ["Автор сообщения в списке команды не значится."]),
+    ...teamBlock(context),
     "",
     "Проекты:",
     ...(projects.length > 0 ? projects : ["(нет)"]),
@@ -327,9 +341,9 @@ export function resolvePerson(
   return matches.length === 1 ? matches[0]!.name : null;
 }
 
-function resolvePeople(
+export function resolvePeople(
   names: string[] | null | undefined,
-  context: IntakeContext,
+  context: { people: Person[]; author: string | null },
 ): { developers: string[]; unknown: string[] } {
   const developers: string[] = [];
   const unknown: string[] = [];
@@ -344,7 +358,7 @@ function resolvePeople(
   return { developers: developers.slice(0, MAX_DEVELOPERS), unknown };
 }
 
-function clip(value: string | null | undefined, max: number): string {
+export function clip(value: string | null | undefined, max: number): string {
   const clean = (value ?? "").trim();
   return clean.length <= max ? clean : `${clean.slice(0, max - 1).trimEnd()}…`;
 }
@@ -354,7 +368,7 @@ function clip(value: string | null | undefined, max: number): string {
  * внутри нужных суток при любом поясе в пределах ±11 часов. Даты в прошлом и дальше двух
  * лет — почти наверняка ошибка модели, такой срок не ставится вовсе.
  */
-function dueFrom(value: string | null | undefined, today: string): Date | null {
+export function dueFrom(value: string | null | undefined, today: string): Date | null {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
   const [year, month, day] = value.split("-").map(Number);
   const noon = new Date(Date.UTC(year!, month! - 1, day!, 12));
@@ -365,7 +379,7 @@ function dueFrom(value: string | null | undefined, today: string): Date | null {
   return new Date(startOfTomorrow(env.TIMEZONE, noon).getTime() - 1000);
 }
 
-function priorityFrom(value: string | null | undefined): TaskPriority {
+export function priorityFrom(value: string | null | undefined): TaskPriority {
   return (TASK_PRIORITIES as readonly string[]).includes(value ?? "")
     ? (value as TaskPriority)
     : "normal";
@@ -425,24 +439,33 @@ export class PlanError extends Error {
   override name = "PlanError";
 }
 
-/** Пустой список значит «поручения здесь нет»: это ответ, а не сбой. */
-export async function planTasks(
-  context: IntakeContext,
-  message: string,
-): Promise<PlannedTask[]> {
-  const prompt = buildPrompt(context, message);
+/**
+ * Запрос к модели с ответом в JSON по схеме. Вторая попытка — на случай оборванного или
+ * кривого JSON: такое бывает редко и не повторяется подряд.
+ */
+export async function askModel<T>(
+  prompt: string,
+  schema: z.ZodType<T>,
+  maxTokens = 2000,
+): Promise<T> {
   let lastError: unknown;
-  // Вторая попытка — на случай оборванного или кривого JSON: такое бывает редко и не
-  // повторяется подряд.
   for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const answer = await complete(prompt, 2000);
+    const answer = await complete(prompt, maxTokens);
     try {
-      return toPlan(rawPlan.parse(extractJson(answer)), context);
+      return schema.parse(extractJson(answer));
     } catch (cause) {
       lastError = cause;
     }
   }
   throw new PlanError(`модель вернула не то: ${String(lastError)}`);
+}
+
+/** Пустой список значит «поручения здесь нет»: это ответ, а не сбой. */
+export async function planTasks(
+  context: IntakeContext,
+  message: string,
+): Promise<PlannedTask[]> {
+  return toPlan(await askModel(buildPrompt(context, message), rawPlan), context);
 }
 
 /**

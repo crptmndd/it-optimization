@@ -1,11 +1,16 @@
-import type { Prisma } from "@prisma/client";
+import type { Prisma, Task } from "@prisma/client";
 import type { z } from "zod";
 import { prisma } from "../../db.js";
 import { liveTask, projectScope, taskScope, type Viewer } from "../access.js";
 import { normalizeTaskStatus, placeCard } from "../columns/columns.js";
 import { createNote } from "../notes.js";
 import { assertDevelopers } from "../people.js";
-import { CLOSED_TASK_STATUSES, TASK_RELATIONS, type createTaskBody } from "./dto.js";
+import {
+  CLOSED_TASK_STATUSES,
+  TASK_RELATIONS,
+  type createTaskBody,
+  type updateTaskBody,
+} from "./dto.js";
 
 /**
  * Постановка задачи — одна, кто бы её ни ставил: форма CRM через `POST /tasks` или бот из
@@ -158,4 +163,93 @@ export async function createTask(
     if (input.note) await createNote("task", task.id, viewer.id, input.note, tx);
     return { ok: true, task };
   });
+}
+
+export type UpdateTaskInput = z.infer<typeof updateTaskBody>;
+
+export type UpdateTaskResult =
+  | { ok: true; task: CreatedTask; existing: Task }
+  | { ok: false; code: 400 | 404; error: string };
+
+/**
+ * Правка задачи — та же, что у `PATCH /tasks/:id`: её зовут и форма CRM, и кнопки с
+ * ответами в телеграме. Журнал и уведомления остаются вызывающему, как и у `createTask`.
+ */
+export async function updateTask(
+  viewer: Viewer,
+  id: string,
+  input: UpdateTaskInput,
+): Promise<UpdateTaskResult> {
+  const existing = await prisma.task.findFirst({
+    where: reachableTask(id, viewer),
+  });
+  if (!existing) return { ok: false, code: 404, error: "Задача не найдена" };
+
+  const movesSubtask =
+    existing.parentId !== null &&
+    input.projectId !== undefined &&
+    input.projectId !== existing.projectId;
+  if (movesSubtask) {
+    return { ok: false, code: 400, error: "Подзадача живёт в проекте своей задачи" };
+  }
+
+  const problem = await assertReferences(viewer, input);
+  if (problem) return { ok: false, code: 400, error: problem };
+
+  const data: Prisma.TaskUncheckedUpdateInput = {};
+  if (input.title !== undefined) data.title = input.title;
+  if (input.description !== undefined) data.description = input.description;
+  if (input.priority !== undefined) data.priority = input.priority;
+  if (input.projectId !== undefined) data.projectId = input.projectId;
+  if (input.developers !== undefined) data.developers = input.developers;
+  if (input.dueAt !== undefined) data.dueAt = input.dueAt;
+
+  // Смена колонки или статуса — переезд, поэтому задача встаёт в конец новой колонки.
+  // Иначе она приземлилась бы в середину по старому номеру позиции. Колонка сильнее
+  // статуса; один статус от старой формы оставляет задачу в её колонке, если та того
+  // же типа, иначе ставит в первую колонку типа.
+  let nextStatus: string | undefined;
+  if (input.columnId !== undefined || input.status !== undefined) {
+    const requested = normalizeTaskStatus(input.status);
+    const placed = existing.parentId
+      ? ({ ok: true, columnId: null, status: requested ?? existing.status } as const)
+      : await placeCard(
+          prisma,
+          "task",
+          { columnId: input.columnId ?? undefined, status: requested },
+          existing,
+        );
+    if (!placed.ok) return { ok: false, code: 400, error: placed.error };
+    nextStatus = placed.status;
+    if (placed.status !== existing.status || placed.columnId !== existing.columnId) {
+      data.status = placed.status as TaskStatusValue;
+      data.columnId = placed.columnId;
+      data.position = await nextPosition(placed);
+      // Задачу двинули — ею снова занимаются, ручной архив снимается.
+      data.archivedAt = null;
+    }
+  }
+
+  const completedAt = completedAtFor(nextStatus, existing.completedAt);
+  if (completedAt !== undefined) data.completedAt = completedAt;
+
+  const task = await prisma.$transaction(async (tx) => {
+    const updated = await tx.task.update({
+      where: { id: existing.id },
+      data,
+      include: TASK_RELATIONS,
+    });
+
+    // Вместе с лежащими в Корзине: вернувшись, подзадача не должна оказаться в чужом
+    // проекте. Без сравнения с прочитанным выше: оно могло устареть, а здесь строка
+    // родителя уже заблокирована, и подзадачи получают то, что записано в ней.
+    if (input.projectId !== undefined) {
+      await tx.task.updateMany({
+        where: { parentId: existing.id },
+        data: { projectId: input.projectId },
+      });
+    }
+    return updated;
+  });
+  return { ok: true, task, existing };
 }

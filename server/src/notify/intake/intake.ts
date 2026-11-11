@@ -1,16 +1,17 @@
 import { ReplicateError, transcribe } from "../../ai/replicate.js";
 import { auditAs } from "../../audit.js";
-import { WITH_MEMBER } from "../../auth/session.js";
-import { liveTask, memberNameOf, taskScope, type Viewer } from "../../crm/access.js";
+import { liveTask, taskScope } from "../../crm/access.js";
 import { createNote, NOTE_MAX_LENGTH } from "../../crm/notes.js";
 import { OPEN_TASK_STATUSES } from "../../crm/tasks/dto.js";
 import { createTask } from "../../crm/tasks/service.js";
 import { prisma } from "../../db.js";
 import { env } from "../../env.js";
 import { isPrivateChat } from "../notifications.js";
+import { teamUserOf, type TeamUser } from "../team-user.js";
 import {
   downloadFile,
   editMessage,
+  sendTyping,
   escapeHtml,
   postMessage,
   type Keyboard,
@@ -26,6 +27,7 @@ import {
   scheduleNotice,
   type Log,
 } from "./cards.js";
+import { handleTaskReply } from "./reply.js";
 import {
   loadContext,
   planTasks,
@@ -192,25 +194,6 @@ export async function stopIntake(): Promise<void> {
   await flushNotices();
 }
 
-interface Author {
-  viewer: Viewer;
-  name: string | null;
-}
-
-/**
- * Автор — учётка, к которой привязан его телеграм. В личке идентификатор чата и есть
- * идентификатор человека, поэтому в общем чате автор находится по нему же.
- */
-async function authorOf(telegramId: number): Promise<Author | null> {
-  const user = await prisma.user.findFirst({
-    where: { telegramChatId: String(telegramId), disabledAt: null },
-    include: WITH_MEMBER,
-  });
-  if (!user || (user.role !== "admin" && user.role !== "employee")) return null;
-  const memberName = memberNameOf(user);
-  return { viewer: { id: user.id, role: user.role, memberName }, name: memberName };
-}
-
 function fullName(user: TgUser | undefined): string {
   if (!user) return "кого-то";
   const name = [user.first_name, user.last_name].filter(Boolean).join(" ");
@@ -282,8 +265,9 @@ async function sourceOf(
   messages: TgMessage[],
   context: IntakeContext,
   log: Log,
-): Promise<{ text: string; problem: string | null }> {
+): Promise<{ text: string; plain: string; problem: string | null }> {
   const blocks: string[] = [];
+  const plain: string[] = [];
   const problems: string[] = [];
   let words = false;
 
@@ -325,6 +309,8 @@ async function sourceOf(
     if (parts.length === 0) continue;
 
     const origin = originOf(message);
+    const said = parts.join("\n");
+    plain.push(origin ? `Переслано от ${origin}: ${said}` : said);
     blocks.push(
       `${origin ? `Переслано от ${origin}` : "Автор пишет"}:\n${parts.join("\n")}`,
     );
@@ -333,11 +319,26 @@ async function sourceOf(
   const text = blocks.join("\n\n");
   return {
     text: words ? text.slice(0, MAX_SOURCE) : "",
+    plain: words ? plain.join("\n\n").slice(0, MAX_SOURCE) : "",
     problem: problems[0] ?? null,
   };
 }
 
-/** Карточка, на которую ответили. У подзадачи берётся родитель: вложенность одна. */
+/**
+ * Задача, на сообщение о которой ответили: уведомление, карточку или задачу из `/tasks`.
+ * Ответ — это разговор о ней, а не новая задача: его разбирает `handleTaskReply`.
+ */
+function replyTargetOf(messages: TgMessage[]): string | null {
+  for (const message of messages) {
+    const reply = message.reply_to_message;
+    if (!reply || !identity || reply.from?.id !== identity.id) continue;
+    const id = cardTaskId(reply.reply_markup);
+    if (id) return id;
+  }
+  return null;
+}
+
+/** Карточка, на которую ответили командой /task. У подзадачи берётся родитель. */
 async function focusOf(messages: TgMessage[]): Promise<string | null> {
   for (const message of messages) {
     const reply = message.reply_to_message;
@@ -383,11 +384,22 @@ const NO_AI =
 async function processBundle(bundle: Bundle, log: Log): Promise<void> {
   const messages = [...bundle.messages].sort((a, b) => a.message_id - b.message_id);
   const anchor = messages.find(isAddressed) ?? messages[0]!;
-  const author = await authorOf(bundle.fromId);
+  const command = messages.some((message) => isTaskCommand(message.text));
+  const target = command ? null : replyTargetOf(messages);
+  const author = await teamUserOf(bundle.fromId);
   if (!author) {
+    // На «ок» под уведомлением в общем чате от того, кто не подключил бота, молчим.
+    const explicit =
+      isPrivateChat(bundle.chatId) || command || messages.some(mentionsBot);
+    if (!explicit) return;
     await postMessage(bundle.chatId, NOT_LINKED, { replyTo: anchor.message_id }).catch(
       (cause: unknown) => log.warn({ err: cause }, "ответ боту не отправлен"),
     );
+    return;
+  }
+
+  if (target) {
+    await processReply(bundle, messages, anchor, author, target, log);
     return;
   }
 
@@ -404,7 +416,7 @@ async function processBundle(bundle: Bundle, log: Log): Promise<void> {
   try {
     const context = await loadContext(
       author.viewer,
-      author.name,
+      author.viewer.memberName,
       await focusOf(messages),
     );
     const source = await sourceOf(messages, context, log);
@@ -449,11 +461,57 @@ async function processBundle(bundle: Bundle, log: Log): Promise<void> {
   }
 }
 
+/**
+ * Ответ на сообщение о задаче. «Разбираю…» не пишем: на простое «ок» бот промолчит, и
+ * висящая заглушка осталась бы в чате. Вместо неё — «печатает…» в шапке чата.
+ */
+async function processReply(
+  bundle: Bundle,
+  messages: TgMessage[],
+  anchor: TgMessage,
+  author: TeamUser,
+  taskId: string,
+  log: Log,
+): Promise<void> {
+  await sendTyping(bundle.chatId).catch(() => {});
+  try {
+    const context = await loadContext(author.viewer, author.viewer.memberName, null);
+    const source = await sourceOf(messages, context, log);
+    if (!source.text) {
+      if (source.problem) {
+        await postMessage(bundle.chatId, source.problem, { replyTo: anchor.message_id });
+      }
+      return;
+    }
+    await handleTaskReply(
+      {
+        author,
+        taskId,
+        source: source.text,
+        plain: source.plain,
+        context,
+        chatId: bundle.chatId,
+        replyTo: anchor.message_id,
+      },
+      log,
+    );
+  } catch (cause) {
+    const owner = cause instanceof ReplicateError && cause.needsOwner;
+    log.error(
+      { err: cause },
+      owner ? "Replicate отказал в доступе" : "разбор ответа сорвался",
+    );
+    await postMessage(bundle.chatId, owner ? NO_AI : FAILED, {
+      replyTo: anchor.message_id,
+    }).catch(() => {});
+  }
+}
+
 type Outcome =
   { ok: true; taskId: string; warnings: string[] } | { ok: false; error: string };
 
 async function createFromPlan(
-  author: Author,
+  author: TeamUser,
   plan: PlannedTask,
   log: Log,
 ): Promise<Outcome> {
@@ -508,7 +566,7 @@ async function createFromPlan(
     });
   }
 
-  scheduleNotice({ taskId: task.id, author: author.name, skip: [] }, log);
+  scheduleNotice({ taskId: task.id, author: viewer.memberName, skip: [] }, log);
 
   for (const sub of plan.subtasks) {
     const child = await createTask(viewer, {
@@ -534,7 +592,7 @@ async function createFromPlan(
       log,
     );
     scheduleNotice(
-      { taskId: child.task.id, author: author.name, skip: plan.developers },
+      { taskId: child.task.id, author: viewer.memberName, skip: plan.developers },
       log,
     );
   }

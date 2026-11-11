@@ -6,6 +6,7 @@ import { prisma } from "../db.js";
 import { canIntake, env } from "../env.js";
 import { buildDigest } from "./digest.js";
 import { myTasksMessage } from "./my-tasks.js";
+import { handleTaskAction, isTaskAction } from "./task-actions.js";
 import { handleCardAction } from "./intake/cards.js";
 import {
   acceptMessage,
@@ -258,7 +259,7 @@ async function handleCommand(
       role,
       memberName: memberNameOf(user!),
     });
-    await trySendMessage(chatId, list.text, log, 3, list.button);
+    await trySendMessage(chatId, list.text, log, 3, list.keyboard);
     return;
   }
 
@@ -355,7 +356,11 @@ const TASK_HINT_GROUP =
 
 async function handleUpdate(update: TelegramUpdate, log: Log): Promise<void> {
   // Кнопки карточек работают и без Replicate: им нужна только база.
-  if (update.callback_query) return handleCardAction(update.callback_query, log);
+  if (update.callback_query) {
+    return isTaskAction(update.callback_query.data)
+      ? handleTaskAction(update.callback_query, log)
+      : handleCardAction(update.callback_query, log);
+  }
 
   const message = update.message;
   if (!message) return;

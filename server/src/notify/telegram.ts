@@ -111,10 +111,13 @@ export interface LinkButton {
   url: string;
 }
 
+/** Под сообщением: одна кнопка-ссылка или целая клавиатура с действиями. */
+export type Markup = LinkButton | Keyboard;
+
 export async function sendMessage(
   chatId: string,
   text: string,
-  button?: LinkButton,
+  markup?: Markup,
 ): Promise<void> {
   await callBotApi("sendMessage", {
     chat_id: chatId,
@@ -122,7 +125,9 @@ export async function sendMessage(
     parse_mode: "HTML",
     // Ссылки на CRM разворачивать не во что — она за логином.
     link_preview_options: { is_disabled: true },
-    ...(button && { reply_markup: { inline_keyboard: [[button]] } }),
+    ...(markup && {
+      reply_markup: { inline_keyboard: Array.isArray(markup) ? markup : [[markup]] },
+    }),
   });
 }
 
@@ -138,11 +143,11 @@ export async function trySendMessage(
   text: string,
   log: { warn: (obj: unknown, msg: string) => void },
   attempts = 3,
-  button?: LinkButton,
+  markup?: Markup,
 ): Promise<boolean> {
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      await sendMessage(chatId, text, button);
+      await sendMessage(chatId, text, markup);
       return true;
     } catch (cause) {
       // Заблокировал бота или удалил чат — повторять бессмысленно, ответ не
@@ -210,6 +215,11 @@ export async function editMessage(
     if (cause instanceof TelegramError && /not modified/i.test(cause.message)) return;
     throw cause;
   }
+}
+
+/** «Печатает…» в шапке чата на несколько секунд: видно, что бот занят ответом. */
+export async function sendTyping(chatId: string): Promise<void> {
+  await callBotApi("sendChatAction", { chat_id: chatId, action: "typing" });
 }
 
 /** Без ответа на нажатие кнопка крутит часики ещё полминуты. */
@@ -313,6 +323,6 @@ export interface TgMessage {
 export interface TgCallbackQuery {
   id: string;
   from: TgUser;
-  message?: { message_id: number; chat: { id: number } };
+  message?: { message_id: number; chat: { id: number }; text?: string };
   data?: string;
 }
