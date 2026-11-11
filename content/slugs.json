@@ -35,6 +35,10 @@
     "support": { "en": "website-support", "es": "soporte-web" }
   },
   "posts": {
+    "pochemu-sajt-ne-prinosit-zayavki": {
+      "en": "why-your-website-gets-no-enquiries",
+      "es": "por-que-tu-web-no-genera-solicitudes"
+    },
     "redizajn-sajta": {
       "en": "website-redesign-without-losing-seo",
       "es": "rediseno-web-sin-perder-posicionamiento"

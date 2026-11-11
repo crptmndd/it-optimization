@@ -1,4 +1,145 @@
 {
+  "pochemu-sajt-ne-prinosit-zayavki": {
+    "title": "Why a website brings no enquiries: what a commercial audit checks",
+    "excerpt": "Where to look when there are visitors but no enquiries: whether requests arrive at all, whether ads bring the right people, whether the offer is clear, whether prices and proof are visible, whether it is easy to get in touch — and how a commercial audit checks all of it.",
+    "category": "Websites",
+    "lead": "The site is built, the ads are running, analytics shows visitors — and enquiries come in ones and twos. The first instinct is usually to redesign or raise the ad budget. More often both miss: people leave not because of the button colour or because there are too few of them, but because they did not find an answer to their question, could not make sense of the price or could not get in touch quickly. Here we look at where websites most often lose enquiries, how to find the exact point of the leak and what a commercial audit checks.",
+    "metaTitle": "Why your website brings no enquiries: causes and audit",
+    "metaDescription": "Visitors but no enquiries? Common causes: broken forms, the wrong traffic, a weak offer, hidden prices — and what a commercial website audit checks.",
+    "sections": [
+      {
+        "heading": "First find the stage where people are lost",
+        "body": [
+          "\"The website brings no enquiries\" is a symptom, and the cause almost always sits in one of three places: before the site, on the site itself or after it. It only makes sense to fix the one that is actually leaking.",
+          "Before the site, there are too few visitors or the wrong ones. Then reworking the pages will achieve almost nothing: the problem lies with the ads, with search or with who they bring in.",
+          "On the site, there are enough visitors, but they leave without getting in touch. This is the territory of a commercial audit: the offer, prices, trust, the path to an enquiry.",
+          "After the site, enquiries arrive but get lost: emails land in spam, the manager calls back the next day, messenger chats are read once a week. From the outside it looks exactly the same — \"nothing comes from the website\"."
+        ]
+      },
+      {
+        "heading": "Check that enquiries actually arrive",
+        "body": [
+          "It is worth starting with the simplest and most painful check. Send an enquiry through every form on the site and see where it arrives and how long it takes. Forms break silently: after a plugin update or a change of mailbox or hosting, the site keeps showing \"Thank you, we will be in touch\" while the email goes nowhere.",
+          "Call the number in the header and tap it on a phone: it should dial with a single touch. Open the messenger links — they should lead to a working chat, not to the account of a manager who left a year ago.",
+          "Make sure enquiries go where someone reads them: a shared inbox or a CRM, not one employee's personal email. And that analytics counts a form submission as a goal — otherwise there is no way to know how many enquiries the site really brings."
+        ]
+      },
+      {
+        "heading": "Visitors come for something else",
+        "body": [
+          "A site can work well for some people and not at all for the people being sent to it. The ad promises one thing, the page talks about another — and the visitor leaves within seconds, even though the offer might have suited them.",
+          "A typical picture: an ad for a specific service leads to the home page, where that service gets one block halfway down. Or the site is found through searches that have little to do with the business — traffic grows, enquiries don't.",
+          "This is checked in the reports: which searches and which ads people come from, which pages they land on and how long they stay. Every noticeable source should have a page that answers exactly its question."
+        ]
+      },
+      {
+        "heading": "The first screen doesn't say what is on offer",
+        "body": [
+          "The first screen has a few seconds to make three things clear: what is offered here, who it is for and why it is worth reading on. If the answer requires scrolling, many people don't scroll.",
+          "\"We are a team of professionals with many years of experience\" answers none of these questions. \"Turnkey office renovation in 30 days with a fixed estimate\" answers all three.",
+          "The same first screen should show the next step: an enquiry button, a phone number or a messenger. Not necessarily loud, but impossible to miss."
+        ]
+      },
+      {
+        "heading": "No reason to choose you",
+        "body": [
+          "People almost never look at just one site. They open three to five tabs and compare, and if everyone promises \"an individual approach\", \"high quality\" and \"affordable prices\", the choice comes down to a random detail — most often simply the price.",
+          "The difference has to be specific and verifiable: a deadline, a guarantee, a specialisation, terms others don't offer. Even \"we work only with clinics\" is stronger than \"we take on any task\".",
+          "A good way to find it is to ask your current clients why they chose you. The answers usually differ noticeably from what the website says."
+        ]
+      },
+      {
+        "heading": "A price you have to beg for",
+        "body": [
+          "\"Price on request\" is one of the most common reasons to leave. People don't want to hand over their phone number just to find out whether the offer is within their budget at all, and they go where a guide price is visible straight away.",
+          "An exact price can't always be given, but a guide almost always can: \"from\", packages, a range, a sample calculation for a typical case. Next to it — what the cost is made up of and what makes it go up.",
+          "The fear of scaring people off with a price is usually unfounded. Those for whom it is too expensive see it at once, not after two calls from a manager, and for everyone else the main question that stopped them from writing disappears."
+        ]
+      },
+      {
+        "heading": "Nothing to back up the words",
+        "body": [
+          "Any promise on a website carries little weight until something backs it up. Trust is built by case studies with the client's task and a result in numbers, reviews with names and company names, client logos, photos of the real team and real work, clear guarantees.",
+          "Anonymous reviews like \"Everything was great, highly recommend! Anna\" work against the site: nobody believes them, and they cast a shadow over everything else.",
+          "And simple things that get checked more often than you'd think: company registration details, an address, a privacy policy, real contacts. A site that doesn't show who is behind it leaves the feeling that the money would be sent into the void."
+        ]
+      },
+      {
+        "heading": "Questions left unanswered",
+        "body": [
+          "Before getting in touch, every client has a few questions, and if the site doesn't answer them, the person either writes — or, more often, leaves. Timelines, payment terms, what happens if the result is not satisfactory, whether anything needs preparing in advance, whether you work in their city.",
+          "The most reliable source of these questions is the sales team. Whatever managers explain on the phone ten times a day should be on the website: in the service description, in a questions-and-answers block, next to the price.",
+          "An answer to a doubt works best where the doubt arises: the guarantee next to the price, timelines next to the description of the work — not on a separate page nobody visits."
+        ]
+      },
+      {
+        "heading": "Too hard to get in touch",
+        "body": [
+          "Even a convinced visitor may never reach the enquiry if the path is awkward: a form with ten required fields, a captcha that fails on the first try, a button only at the very end of a long page.",
+          "A form keeps only what is truly needed to get in touch: a name and a phone number or messenger. The manager will clarify the rest in conversation.",
+          "There should be several ways to get in touch, because people differ: some are happy to call, some will write in a messenger but would never dial a number, some leave an enquiry at night. And after sending it, the person should know what happens next and when they will hear back."
+        ]
+      },
+      {
+        "heading": "Phones and speed",
+        "body": [
+          "Most visitors arrive on a phone, and there the site must work no worse than on a computer: text readable without zooming, buttons tappable with a finger, the form fitting on the screen, the number dialling with one touch.",
+          "A slow site loses people before they have seen anything. If a page takes several seconds to load on mobile internet, some visitors close it without waiting — and in the reports this looks like an ordinary bounce.",
+          "It needs checking on a real phone and a mobile network, not on an office computer with fast internet. That is usually where half the problems are."
+        ]
+      },
+      {
+        "heading": "How a commercial audit works",
+        "body": [
+          "A commercial audit looks at the website as a sales tool. It starts with data: analytics, traffic sources, how visitors move between pages, session recordings and click maps where available — and a conversation with the people who handle enquiries.",
+          "Then the client's path is walked the way an outsider walks it: from an ad or a search, on a phone and on a computer, all the way to a sent enquiry. The offer, prices, trust, answers to questions, calls to action and forms are assessed, and the site is compared with the competitors the client will open in neighbouring tabs.",
+          "The result is not a list of general advice like \"improve usability\" but specific changes tied to pages and ranked by priority: first what gives the most for the least effort. The report is reviewed together, so the team understands not only what to change but why."
+        ]
+      },
+      {
+        "heading": "Commercial audit, content analysis and SEO",
+        "body": [
+          "They are often confused because all three look at the same website. A commercial audit answers the question of why visitors don't become clients: the offer, prices, trust, the path to an enquiry.",
+          "Content analysis is about the texts: whether the pages cover what the audience and search engines are looking for, whether the services are fully described, where the copy doesn't sell and what is missing compared with competitors.",
+          "The technical side of search is about how pages are built for search engines: headings, meta tags, structured data, indexing. It brings visitors but is not responsible for what they do on the site. If there are few visitors, start there; if there are enough but no enquiries, start with a commercial audit."
+        ]
+      },
+      {
+        "heading": "How to tell that things got better",
+        "body": [
+          "Before any changes, the starting figures are recorded: how many visitors, how many enquiries and what share of visitors leave one — for the site as a whole and for the key pages. Without this baseline, a month later there is no telling whether the changes helped.",
+          "It is better to change things in batches rather than all at once. If you rewrite the first screen, add prices and shorten the form at the same time, enquiries may grow, but it will stay unclear what worked and what could have been left alone.",
+          "Equal periods are compared, adjusting for season and advertising. And where there is enough traffic, two versions of a page are shown to different visitors at the same time and compared directly."
+        ]
+      },
+      {
+        "heading": "What it costs and how long it takes",
+        "body": [
+          "An express audit — the funnel and the offer, calls to action, the main points where enquiries are lost, a short report and a walkthrough of the results — from {price:50000} and from one week.",
+          "A full commercial audit — conversion along the whole client path, the offer, prices and trust, comparison with competitors and a prioritised plan of changes — from {price:90000} and from two weeks. An extended one, with work on the offer and support during implementation, from {price:150000} and from three weeks.",
+          "If the question is mainly about the texts, a content analysis of the website costs from {price:30000} and takes from three days.",
+          "The findings can be implemented in-house or as part of website support and development: work on pages, the offer and forms with a monthly report costs from {price:40000/mo} with us."
+        ]
+      },
+      {
+        "heading": "Where to start this week",
+        "body": [
+          "Send an enquiry through every form on the site, call the number in the header and write to every messenger. Time how long it takes to get a reply — and whether you get one at all.",
+          "Check in analytics how many visitors there were last month and how many of them left an enquiry. If goals are not set up, set them up now: without them every other decision is made blind.",
+          "Open the site on a phone through the eyes of a new client and go from the first screen to a sent enquiry. Write down every place where you had to search, wait or hesitate.",
+          "Ask the sales team which five questions clients ask most often, and check whether the site answers them. Then open the websites of three competitors — the way your client will."
+        ]
+      }
+    ],
+    "takeaways": [
+      "No enquiries is a symptom. First find out where people are lost: before the site (too few visitors or the wrong ones), on the site (they leave without writing) or after it (enquiries arrive but nobody handles them).",
+      "The first thing to check is whether enquiries arrive at all: forms, the number in the header, messenger links and analytics goals break silently and unnoticed.",
+      "From the first screen a visitor should understand what is offered, for whom and why it is worth reading on, and among competitors find a specific reason to choose you.",
+      "A visible guide price, case studies and reviews with names, answers to common questions, a short form and several ways to get in touch remove the main reasons to leave.",
+      "A commercial audit walks the client's path through the data and through an outsider's eyes, and delivers specific page-by-page changes ranked by priority rather than general advice.",
+      "An express audit costs from {price:50000} and a week, a full one from {price:90000} and two weeks, a content analysis from {price:30000}, implementing changes as part of website support from {price:40000/mo}."
+    ]
+  },
   "redizajn-sajta": {
     "title": "Website redesign: when it is time and how to keep your search rankings",
     "excerpt": "The signs that a website needs a redesign and when targeted fixes are enough, where to start, what breaks search rankings and how to keep them, how to launch the updated site — and what it costs.",

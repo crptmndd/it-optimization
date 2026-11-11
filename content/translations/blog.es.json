@@ -1,4 +1,145 @@
 {
+  "pochemu-sajt-ne-prinosit-zayavki": {
+    "title": "Por qué una web no trae solicitudes: qué revisa una auditoría comercial",
+    "excerpt": "Dónde buscar la causa cuando hay visitas pero no llegan contactos: si las solicitudes llegan de verdad, si la publicidad trae a la gente adecuada, si la oferta se entiende, si se ven los precios y las pruebas, si es fácil contactar, y cómo lo revisa todo una auditoría comercial.",
+    "category": "Sitios web",
+    "lead": "La web está hecha, la publicidad funciona, la analítica muestra visitas, y las solicitudes llegan con cuentagotas. Lo primero que se le ocurre a uno es rediseñar o subir el presupuesto de publicidad. Casi siempre las dos cosas fallan el tiro: la gente no se va por el color de los botones ni porque sea poca, sino porque no encontró respuesta a su pregunta, no entendió el precio o no pudo contactar rápido. Veamos dónde pierden contactos las webs con más frecuencia, cómo encontrar el punto exacto de la fuga y qué revisa una auditoría comercial.",
+    "metaTitle": "Por qué tu web no genera solicitudes: causas y auditoría",
+    "metaDescription": "¿Hay visitas pero no solicitudes? Causas habituales: formularios rotos, tráfico equivocado, oferta débil, precios ocultos, y qué revisa una auditoría comercial.",
+    "sections": [
+      {
+        "heading": "Primero, encontrar el tramo donde se pierde la gente",
+        "body": [
+          "«La web no trae solicitudes» es un síntoma, y la causa casi siempre está en uno de tres tramos: antes de la web, en la propia web o después de ella. Solo tiene sentido arreglar el que de verdad pierde.",
+          "Antes de la web: hay pocas visitas o llegan las personas equivocadas. Entonces rehacer las páginas apenas servirá: el problema está en la publicidad, en los buscadores o en a quién atraen.",
+          "En la web: las visitas son suficientes, pero se van sin dejar ningún contacto. Este es el terreno de la auditoría comercial: la oferta, los precios, la confianza, el camino hasta la solicitud.",
+          "Después de la web: las solicitudes llegan, pero se pierden. Los correos caen en spam, el comercial devuelve la llamada al día siguiente, los mensajes se leen una vez por semana. Desde fuera se ve exactamente igual: «de la web no llega nada»."
+        ]
+      },
+      {
+        "heading": "Comprobar que las solicitudes llegan",
+        "body": [
+          "Conviene empezar por lo más sencillo y lo más doloroso. Envía una solicitud desde cada formulario de la web y comprueba adónde llega y cuánto tarda. Los formularios se rompen en silencio: tras actualizar un plugin o cambiar de correo o de hosting, la web sigue mostrando «Gracias, nos pondremos en contacto», y el correo no va a ninguna parte.",
+          "Llama al número de la cabecera y púlsalo desde el móvil: debe marcarse con un solo toque. Abre los enlaces a las apps de mensajería: deben llevar a un chat activo, no a la cuenta de un comercial que se fue hace un año.",
+          "Asegúrate de que las solicitudes van adonde alguien las lee: un buzón común o un CRM, no el correo personal de un solo empleado. Y de que la analítica cuenta el envío del formulario como objetivo; si no, es imposible saber cuántos contactos trae la web en realidad."
+        ]
+      },
+      {
+        "heading": "Las visitas llegan buscando otra cosa",
+        "body": [
+          "Una web puede funcionar bien para unas personas y nada en absoluto para las que se le envían. El anuncio promete una cosa, la página habla de otra, y la persona se va en pocos segundos, aunque quizá la oferta le habría servido.",
+          "Un caso típico: un anuncio sobre un servicio concreto lleva a la página de inicio, donde a ese servicio le toca un bloque a media página. O la web aparece en búsquedas que poco tienen que ver con el negocio: el tráfico sube y las solicitudes no.",
+          "Se comprueba en los informes: con qué búsquedas y desde qué anuncios llega la gente, a qué páginas entra y cuánto tiempo se queda. Cada fuente relevante debe tener una página que responda justo a su pregunta."
+        ]
+      },
+      {
+        "heading": "La primera pantalla no explica qué se ofrece",
+        "body": [
+          "La primera pantalla tiene unos segundos para dejar claras tres cosas: qué se ofrece, para quién es y por qué merece la pena seguir leyendo. Si para responder hay que desplazarse, muchos no se desplazan.",
+          "«Somos un equipo de profesionales con muchos años de experiencia» no responde a ninguna de estas preguntas. «Reforma integral de oficinas en 30 días con presupuesto cerrado» responde a las tres.",
+          "En esa misma primera pantalla debe verse el siguiente paso: un botón de solicitud, un teléfono o una app de mensajería. No hace falta que grite, pero no debe haber que buscarlo."
+        ]
+      },
+      {
+        "heading": "No hay motivo para elegirte a ti",
+        "body": [
+          "Casi nadie mira una sola web. Se abren de tres a cinco pestañas y se compara, y si todos prometen «trato personalizado», «alta calidad» y «precios asequibles», la elección se decide por un detalle al azar; casi siempre, simplemente por el precio.",
+          "La diferencia debe ser concreta y verificable: un plazo, una garantía, una especialización, condiciones que otros no ofrecen. Incluso «solo trabajamos con clínicas» pesa más que «aceptamos cualquier encargo».",
+          "Una buena forma de encontrarla es preguntar a tus clientes actuales por qué te eligieron. Las respuestas suelen diferir bastante de lo que dice la web."
+        ]
+      },
+      {
+        "heading": "Un precio que hay que mendigar",
+        "body": [
+          "«Precio a consultar» es uno de los motivos más habituales para irse. Nadie quiere dejar su teléfono solo para saber si la oferta entra en su presupuesto, y la gente se va adonde ve una referencia desde el principio.",
+          "No siempre se puede dar un precio exacto, pero una referencia casi siempre: «desde», paquetes, una horquilla, un cálculo de ejemplo para un caso típico. Y al lado, de qué se compone el coste y qué lo encarece.",
+          "El miedo a espantar con el precio no suele estar justificado. A quien le resulta caro lo ve enseguida, no después de dos llamadas del comercial, y para los demás desaparece la principal pregunta que les impedía escribir."
+        ]
+      },
+      {
+        "heading": "Nada que respalde las palabras",
+        "body": [
+          "Cualquier promesa en una web pesa poco mientras nada la respalde. La confianza se construye con casos de éxito que cuentan la tarea del cliente y el resultado en cifras, reseñas con nombres y empresas, logotipos de clientes, fotos del equipo y de los trabajos reales, garantías claras.",
+          "Las reseñas anónimas del tipo «¡Todo perfecto, lo recomiendo! Ana» juegan en contra: nadie se las cree y proyectan sombra sobre todo lo demás.",
+          "Y cosas sencillas que se revisan más de lo que parece: los datos fiscales de la empresa, una dirección, la política de privacidad, contactos reales. Una web en la que no se ve quién hay detrás deja la sensación de que el dinero se enviaría al vacío."
+        ]
+      },
+      {
+        "heading": "Preguntas sin respuesta",
+        "body": [
+          "Antes de escribir, cada cliente tiene varias preguntas, y si la web no las responde, la persona escribe o, más a menudo, se va. Plazos, forma de pago, qué pasa si el resultado no convence, si hay que preparar algo de antemano, si trabajas en su ciudad.",
+          "La fuente más fiable de estas preguntas es el equipo comercial. Lo que los comerciales explican por teléfono diez veces al día debe estar en la web: en la descripción del servicio, en un bloque de preguntas frecuentes, junto al precio.",
+          "La respuesta a una duda funciona mejor allí donde surge la duda: la garantía junto al precio, los plazos junto a la descripción del trabajo, no en una página aparte que nadie visita."
+        ]
+      },
+      {
+        "heading": "Contactar es demasiado difícil",
+        "body": [
+          "Incluso una persona convencida puede no llegar a la solicitud si el camino es incómodo: un formulario con diez campos obligatorios, un captcha que no pasa a la primera, un botón solo al final de una página larga.",
+          "En el formulario se deja solo lo imprescindible para contactar: el nombre y un teléfono o una app de mensajería. El resto, el comercial lo aclarará en la conversación.",
+          "Debe haber varias formas de contacto, porque la gente es distinta: unos prefieren llamar, otros escriben por mensajería pero jamás marcarían un número, otros dejan la solicitud de noche. Y tras enviarla, la persona debe saber qué pasará después y cuándo le contestarán."
+        ]
+      },
+      {
+        "heading": "El móvil y la velocidad",
+        "body": [
+          "La mayoría de las visitas llega desde el móvil, y ahí la web debe funcionar igual de bien que en el ordenador: texto legible sin ampliar, botones que se pulsan con el dedo, un formulario que cabe en la pantalla, un número que se marca con un toque.",
+          "Una web lenta pierde gente antes de que haya visto nada. Si una página tarda varios segundos en cargar con datos móviles, parte de las visitas la cierra sin esperar, y en los informes eso parece un rebote cualquiera.",
+          "Hay que comprobarlo en un móvil real y con una red móvil, no en el ordenador de la oficina con una conexión rápida. Ahí suele estar la mitad de los problemas."
+        ]
+      },
+      {
+        "heading": "Cómo se hace una auditoría comercial",
+        "body": [
+          "La auditoría comercial mira la web como una herramienta de ventas. Empieza por los datos: analítica, fuentes de tráfico, el recorrido de las visitas por las páginas, grabaciones de sesiones y mapas de clics si los hay, y una conversación con quienes atienden las solicitudes.",
+          "Después se recorre el camino del cliente tal como lo recorre alguien de fuera: desde un anuncio o una búsqueda, en el móvil y en el ordenador, hasta enviar la solicitud. Se evalúan la oferta, los precios, la confianza, las respuestas a las preguntas, las llamadas a la acción y los formularios, y se compara la web con la competencia que el cliente abrirá en las pestañas de al lado.",
+          "El resultado no es una lista de consejos generales del tipo «mejorar la usabilidad», sino cambios concretos ligados a páginas y ordenados por prioridad: primero lo que más aporta con menos esfuerzo. El informe se revisa juntos, para que el equipo entienda no solo qué cambiar, sino por qué."
+        ]
+      },
+      {
+        "heading": "Auditoría comercial, análisis de contenido y SEO",
+        "body": [
+          "Se confunden a menudo porque las tres miran la misma web. La auditoría comercial responde a por qué las visitas no se convierten en clientes: la oferta, los precios, la confianza, el camino hasta la solicitud.",
+          "El análisis de contenido trata de los textos: si las páginas responden a lo que buscan el público y los buscadores, si los servicios están bien explicados, dónde el texto no vende y qué falta en comparación con la competencia.",
+          "La parte técnica para los buscadores trata de cómo están construidas las páginas para ellos: encabezados, metaetiquetas, datos estructurados, indexación. Trae visitas, pero no responde de lo que hacen en la web. Si hay pocas visitas, se empieza por ella; si hay suficientes y no llegan solicitudes, por la auditoría comercial."
+        ]
+      },
+      {
+        "heading": "Cómo saber que ha mejorado",
+        "body": [
+          "Antes de cambiar nada se anotan las cifras de partida: cuántas visitas, cuántas solicitudes y qué parte de las visitas las deja, para la web en conjunto y para las páginas clave. Sin ese punto de referencia, un mes después no hay forma de saber si los cambios han servido.",
+          "Es mejor cambiar por partes y no todo a la vez. Si se reescribe la primera pantalla, se añaden precios y se acorta el formulario al mismo tiempo, puede que lleguen más solicitudes, pero no quedará claro qué funcionó y qué se podía haber dejado como estaba.",
+          "Se comparan periodos equivalentes teniendo en cuenta la temporada y la publicidad. Y donde hay tráfico suficiente, se muestran dos versiones de una página a visitas distintas a la vez y se comparan directamente."
+        ]
+      },
+      {
+        "heading": "Cuánto cuesta y cuánto dura",
+        "body": [
+          "Una auditoría exprés —el embudo y la oferta, las llamadas a la acción, los principales puntos donde se pierden solicitudes, un informe breve y la revisión de los resultados—: desde {price:50000} y desde una semana.",
+          "Una auditoría comercial completa —la conversión en todo el camino del cliente, la oferta, los precios y la confianza, la comparación con la competencia y un plan de cambios priorizado—: desde {price:90000} y desde dos semanas. La ampliada, con trabajo sobre la oferta y acompañamiento en la implantación: desde {price:150000} y desde tres semanas.",
+          "Si la cuestión está sobre todo en los textos, un análisis del contenido de la web cuesta desde {price:30000} y lleva desde tres días.",
+          "Lo encontrado se puede implantar con el equipo propio o dentro del soporte y la evolución de la web: el trabajo sobre páginas, oferta y formularios con un informe mensual cuesta con nosotros desde {price:40000/mo}."
+        ]
+      },
+      {
+        "heading": "Por dónde empezar esta semana",
+        "body": [
+          "Envía una solicitud desde cada formulario de la web, llama al número de la cabecera y escribe a cada app de mensajería. Cronometra cuánto tardan en contestarte, y si te contestan.",
+          "Mira en la analítica cuántas visitas hubo el último mes y cuántas dejaron una solicitud. Si no hay objetivos configurados, configúralos ahora: sin ellos, todas las demás decisiones se toman a ciegas.",
+          "Abre la web en el móvil con los ojos de un cliente nuevo y recorre el camino desde la primera pantalla hasta enviar la solicitud. Apunta cada punto donde tuviste que buscar, esperar o dudar.",
+          "Pregunta al equipo comercial cuáles son las cinco preguntas que más hacen los clientes y comprueba si la web las responde. Y después abra las webs de tres competidores, tal como lo hará tu cliente."
+        ]
+      }
+    ],
+    "takeaways": [
+      "La falta de solicitudes es un síntoma. Primero se averigua dónde se pierde la gente: antes de la web (pocas visitas o las equivocadas), en la web (se van sin escribir) o después (las solicitudes llegan, pero nadie las atiende).",
+      "Lo primero que se comprueba es si las solicitudes llegan siquiera: los formularios, el número de la cabecera, los enlaces de mensajería y los objetivos de la analítica se rompen en silencio.",
+      "Desde la primera pantalla la visita debe entender qué se ofrece, para quién y por qué seguir leyendo, y entre la competencia encontrar un motivo concreto para elegirte a ti.",
+      "Una referencia de precio visible, casos y reseñas con nombres, respuestas a las preguntas frecuentes, un formulario corto y varias formas de contacto eliminan los principales motivos para irse.",
+      "La auditoría comercial recorre el camino del cliente con los datos y con los ojos de alguien de fuera, y entrega cambios concretos por página ordenados por prioridad, no consejos generales.",
+      "Auditoría exprés: desde {price:50000} y una semana; completa: desde {price:90000} y dos semanas; análisis de contenido: desde {price:30000}; implantación de cambios dentro del soporte de la web: desde {price:40000/mo}."
+    ]
+  },
   "redizajn-sajta": {
     "title": "Rediseño web: cuándo toca y cómo no perder posiciones en los buscadores",
     "excerpt": "Las señales de que una web necesita un rediseño y cuándo bastan unos ajustes, por dónde empezar, qué hunde las posiciones en los buscadores y cómo conservarlas, cómo lanzar la web renovada y cuánto cuesta.",
