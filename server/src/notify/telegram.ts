@@ -323,6 +323,11 @@ export interface TgMessage {
 export interface TgCallbackQuery {
   id: string;
   from: TgUser;
-  message?: { message_id: number; chat: { id: number }; text?: string };
+  message?: {
+    message_id: number;
+    chat: { id: number };
+    text?: string;
+    reply_markup?: { inline_keyboard?: { callback_data?: string }[][] };
+  };
   data?: string;
 }

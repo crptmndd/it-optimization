@@ -14,7 +14,7 @@ import { TASK_RELATIONS } from "../../crm/tasks/dto.js";
 import { isClosed, reachableTask } from "../../crm/tasks/service.js";
 import { prisma } from "../../db.js";
 import { env } from "../../env.js";
-import { notifyTask, taskButton, taskMessage } from "../notifications.js";
+import { notifyTask, taskKeyboard, taskMessage } from "../notifications.js";
 import {
   answerCallback,
   editMessage,
@@ -141,7 +141,8 @@ export async function renderCard(
   if (files) lines.push(files);
   if (extras.length > 0) lines.push("", ...extras);
 
-  const cancel: InlineButton = { text: "↩️ Отменить", callback_data: `c:${task.id}` };
+  // Не «↩️»: эта стрелка теперь у «Вернуть в работу», а «Отменить» удаляет задачу.
+  const cancel: InlineButton = { text: "🗑 Отменить", callback_data: `c:${task.id}` };
 
   if (view === "people") {
     // Отключённый человек, который уже стоит на задаче, тоже в списке: его можно снять.
@@ -155,22 +156,25 @@ export async function renderCard(
       text: `${task.developers.includes(name) ? "✅ " : ""}${name}`,
       callback_data: `t:${task.id}:${personKey(name)}`,
     }));
-    lines.push("", "Отметьте исполнителей и нажмите «Готово».");
+    lines.push("", "Отметьте исполнителей: сохраняется сразу.");
     return {
       text: lines.join("\n"),
       keyboard: [
         ...rows(people, 2),
-        [{ text: "Готово", callback_data: `d:${task.id}` }, cancel],
+        // Не «Готово»: в карточке «✅ Готово» закрывает саму задачу.
+        [{ text: "⬅️ Назад", callback_data: `d:${task.id}` }, cancel],
       ],
     };
   }
 
+  // Первым рядом — те же «Готово / В работу / На завтра», что под уведомлением: карточку
+  // видит автор, и задачу, поставленную себе, закрывают отсюда же. Ссылка в CRM — внизу.
+  const [actions = [], ...rest] = taskKeyboard(task);
   const keyboard: Keyboard = [
-    [cancel, { text: "👤 Исполнители", callback_data: `p:${task.id}` }],
+    actions,
+    [{ text: "👤 Исполнители", callback_data: `p:${task.id}` }, cancel],
+    ...rest,
   ];
-  // У подзадачи своей карточки в CRM нет, открывается родитель.
-  const link = taskButton(task.parent?.id ?? task.id, env.CRM_ORIGIN);
-  if (link) keyboard.push([link]);
   return { text: lines.join("\n"), keyboard };
 }
 

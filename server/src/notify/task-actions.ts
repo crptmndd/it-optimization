@@ -9,6 +9,7 @@ import {
 import { prisma } from "../db.js";
 import { env } from "../env.js";
 import { afterTaskUpdate, taskKeyboard, taskMessage } from "./notifications.js";
+import { loadCardTask, renderCard } from "./intake/cards.js";
 import { attachmentsLine } from "./intake/files.js";
 import { teamUserOf } from "./team-user.js";
 import {
@@ -176,6 +177,25 @@ export async function handleTaskAction(query: TgCallbackQuery, log: Log): Promis
   );
 
   await answerCallback(query.id, action.toast);
+
+  // Карточка поставленной задачи остаётся карточкой: с «Исполнителями» и «Отменить», а
+  // строка о действии встаёт вниз. Узнаётся она по своей кнопке «Отменить» (`c:`).
+  const isCard = message.reply_markup?.inline_keyboard
+    ?.flat()
+    .some((button) => button.callback_data?.startsWith("c:"));
+  if (isCard) {
+    const card = await loadCardTask(task.id);
+    if (!card) return;
+    const view = await renderCard(card, "main", [footerOf(code, card, presser.name)]);
+    await editMessage(
+      String(message.chat.id),
+      message.message_id,
+      view.text,
+      view.keyboard,
+    );
+    return;
+  }
+
   const fresh = await prisma.task.findUnique({
     where: { id: task.id },
     include: TASK_VIEW,
