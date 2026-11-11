@@ -223,9 +223,20 @@ function contextBlock(context: IntakeContext): string {
 }
 
 const RULES = `Верни только JSON без пояснений и без markdown, вида:
-{"tasks":[{"title":"...","note":null,"assignees":["..."],"project":null,"parent":null,"due":null,"priority":"normal","subtasks":[{"title":"...","assignees":[]}]}]}
+{"intent":"task","tasks":[{"title":"...","note":null,"assignees":["..."],"project":null,"parent":null,"due":null,"priority":"normal","subtasks":[{"title":"...","assignees":[]}]}],"query":null}
 
-Правила:
+Сначала реши, что это:
+- intent "task" — поручение: что-то нужно сделать. Тогда заполни tasks, query null.
+- intent "question" — автор спрашивает о задачах или проектах, а не поручает («что у Вадима просрочено?», «какие задачи по кошельку?», «что я закрыл на этой неделе?», «что на завтра?»). Тогда tasks пустой, а query такой:
+  {"people":["..."],"project":null,"when":"any","state":"open","text":null}
+  - people: о ком спрашивают, именами из списка команды; «я», «мои», «у меня» — автор; ни о ком конкретно — пустой список.
+  - project: код проекта, если спрашивают о нём, иначе null.
+  - when: "overdue" — просроченные; "today" — на сегодня; "tomorrow" — на завтра; "week" — на ближайшую неделю, а для закрытых — за последнюю неделю; иначе "any".
+  - state: "done" — если спрашивают, что сделано или закрыто; иначе "open".
+  - text: слово или короткая фраза для поиска по названиям задач, если спрашивают о конкретной теме, которой нет среди проектов; иначе null.
+- Сомневаешься — это поручение.
+
+Правила для задач:
 - title: коротко, как в трекере задач, до 100 символов. Без имени исполнителя и срока: «Фиксы по кошельку Камилю» → «Фиксы по кошельку».
 - assignees: кому поручено. Имена в любом падеже («Камилю», «на Вадима», «для Тимура») и ники приводи к имени из списка команды. «Мне», «себе», «я» — автор сообщения. Никто не назван — пустой список.
 - project: код проекта, если задача явно про него (по названию, клиенту, продукту), иначе null. Не угадывай.
@@ -236,7 +247,7 @@ const RULES = `Верни только JSON без пояснений и без 
 - subtasks: список пунктов одной работы (нумерованный, через дефис или перечислением) — это подзадачи (до 15), а не note. У каждой свой исполнитель, если он назван отдельно. Нет списка — пустой список.
 - Несколько задач — только если в сообщении явно разные поручения (разным людям или про разное). Обычно задача одна.
 - Автор пересланного сообщения — не исполнитель, если его не назначили.
-- Если в сообщении нет поручения, верни {"tasks":[]}.`;
+- Если это не поручение и не вопрос, верни {"intent":"task","tasks":[],"query":null}.`;
 
 export function buildPrompt(context: IntakeContext, message: string): string {
   return [
@@ -254,7 +265,17 @@ export function buildPrompt(context: IntakeContext, message: string): string {
 }
 
 /** Ответ модели как есть: строже проверять здесь нельзя, иначе одна мелочь губит всё. */
+const rawQuery = z.object({
+  people: z.array(z.string()).nullish(),
+  project: z.string().nullish(),
+  when: z.string().nullish(),
+  state: z.string().nullish(),
+  text: z.string().nullish(),
+});
+
 const rawPlan = z.object({
+  intent: z.string().nullish(),
+  query: rawQuery.nullish(),
   tasks: z.array(
     z.object({
       title: z.string(),
@@ -460,12 +481,43 @@ export async function askModel<T>(
   throw new PlanError(`модель вернула не то: ${String(lastError)}`);
 }
 
-/** Пустой список значит «поручения здесь нет»: это ответ, а не сбой. */
-export async function planTasks(
-  context: IntakeContext,
-  message: string,
-): Promise<PlannedTask[]> {
-  return toPlan(await askModel(buildPrompt(context, message), rawPlan), context);
+/** Вопрос о задачах: о ком, по какому проекту, за какое время. Код превращает его в выборку. */
+export interface TaskQuery {
+  people: string[];
+  projectId: string | null;
+  projectTitle: string | null;
+  when: "overdue" | "today" | "tomorrow" | "week" | "any";
+  state: "open" | "done";
+  text: string | null;
+}
+
+const WHEN = ["overdue", "today", "tomorrow", "week", "any"] as const;
+
+function toQuery(raw: z.infer<typeof rawQuery>, context: IntakeContext): TaskQuery {
+  const project = context.projects.get(code(raw.project));
+  return {
+    people: resolvePeople(raw.people, context).developers,
+    projectId: project?.id ?? null,
+    projectTitle: project?.title ?? null,
+    when: WHEN.find((value) => value === raw.when) ?? "any",
+    state: raw.state === "done" ? "done" : "open",
+    text: clip(raw.text, 100) || null,
+  };
+}
+
+export type Plan =
+  { intent: "task"; tasks: PlannedTask[] } | { intent: "question"; query: TaskQuery };
+
+/**
+ * Поручение или вопрос. Пустой список задач значит «поручения здесь нет»: это ответ, а
+ * не сбой. Сомнение решается в пользу поручения: лишнюю задачу отменяют одной кнопкой.
+ */
+export async function planTasks(context: IntakeContext, message: string): Promise<Plan> {
+  const raw = await askModel(buildPrompt(context, message), rawPlan);
+  if (raw.intent === "question" && raw.query) {
+    return { intent: "question", query: toQuery(raw.query, context) };
+  }
+  return { intent: "task", tasks: toPlan(raw, context) };
 }
 
 /**

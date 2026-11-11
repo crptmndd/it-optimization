@@ -27,6 +27,7 @@ import {
   scheduleNotice,
   type Log,
 } from "./cards.js";
+import { answerQuestion } from "../questions.js";
 import { handleTaskReply } from "./reply.js";
 import {
   loadContext,
@@ -427,7 +428,19 @@ async function processBundle(bundle: Bundle, log: Log): Promise<void> {
       return;
     }
 
-    const plans = await planTasks(context, source.text);
+    const plan = await planTasks(context, source.text);
+    if (plan.intent === "question") {
+      // В общем чате ответ увидели бы все, а собран он по правам спросившего.
+      if (!isPrivateChat(bundle.chatId)) {
+        await say("На вопросы о задачах я отвечаю в личном чате.");
+        return;
+      }
+      const answer = await answerQuestion(author.viewer, plan.query);
+      await say(answer.text, answer.keyboard);
+      return;
+    }
+
+    const plans = plan.tasks;
     if (plans.length === 0) {
       await say(NO_TASK);
       return;

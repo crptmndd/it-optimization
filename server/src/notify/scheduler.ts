@@ -2,6 +2,7 @@ import { runMonthlyDocumentsIfDue } from "../crm/projects/monthly-documents.js";
 import { prisma } from "../db.js";
 import { canNotify, env } from "../env.js";
 import { sendMorningDigest } from "./digest.js";
+import { runRemindersIfDue } from "./reminders.js";
 import { zonedNow } from "./zone.js";
 
 /**
@@ -61,6 +62,9 @@ export function startScheduler(log: Log): () => void {
       if (canNotify) {
         await runDigestIfDue(log).catch((cause: unknown) => {
           log.error({ err: cause }, "рассылка дайджеста не удалась");
+        });
+        await runRemindersIfDue(log).catch((cause: unknown) => {
+          log.error({ err: cause }, "напоминания о сроках не разосланы");
         });
       }
     } finally {
