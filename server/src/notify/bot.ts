@@ -5,6 +5,7 @@ import { collectToday, collectTodayFor, teamChatSnapshot } from "../crm/today.js
 import { prisma } from "../db.js";
 import { canIntake, env } from "../env.js";
 import { buildDigest } from "./digest.js";
+import { myTasksMessage } from "./my-tasks.js";
 import { handleCardAction } from "./intake/cards.js";
 import {
   acceptMessage,
@@ -18,6 +19,7 @@ import {
   callBotApi,
   escapeHtml,
   getMe,
+  setMyCommands,
   trySendMessage,
   type TgCallbackQuery,
   type TgMessage,
@@ -52,7 +54,7 @@ const INTAKE_HELP = canIntake
       "<b>Поставить задачу</b> — просто напишите, перешлите или наговорите голосом:",
       "«Фиксы по кошельку Камилю до пятницы». Я заведу задачу в CRM с исполнителем,",
       "проектом и сроком и пришлю карточку с кнопкой «Отменить».",
-      "В общем чате — командой /task или ответом на мою карточку.",
+      "В общем чате — /task текст, ответ командой /task на чужое сообщение или ответ на мою карточку.",
       "",
     ]
   : [];
@@ -61,6 +63,7 @@ const HELP = [
   "Я напоминаю о задачах, сроках и деньгах: сотрудникам в общем чате, админам лично.",
   "",
   ...INTAKE_HELP,
+  "<b>/tasks</b> — все ваши открытые задачи",
   ...(canIntake ? ["<b>/task</b> текст — поставить задачу"] : []),
   "<b>/today</b> — что горит прямо сейчас",
   "<b>/chatid</b> — идентификатор этого чата",
@@ -234,6 +237,31 @@ async function handleCommand(
     return;
   }
 
+  if (command === "/tasks") {
+    // Список личный: в группе его увидели бы все, а там сидят и те, кому он не нужен.
+    if (!isPrivateChat(chatId)) {
+      await trySendMessage(chatId, "Свои задачи я показываю в личном чате.", log);
+      return;
+    }
+    // Та же проверка, что у /today: бот отвечает любому аккаунту телеграма.
+    const role = user && !user.disabledAt ? user.role : null;
+    if (role !== "admin" && role !== "employee") {
+      await trySendMessage(
+        chatId,
+        "Задачи доступны только команде. Подключите бота: CRM → Настройки → «Подключить телеграм».",
+        log,
+      );
+      return;
+    }
+    const list = await myTasksMessage({
+      id: user!.id,
+      role,
+      memberName: memberNameOf(user!),
+    });
+    await trySendMessage(chatId, list.text, log, 3, list.button);
+    return;
+  }
+
   if (command === "/today") {
     // Общий чат получает общую сводку, кто бы ни спросил: утром туда приходит она же.
     if (chatId === env.TELEGRAM_TEAM_CHAT_ID) {
@@ -267,6 +295,64 @@ async function handleCommand(
   await trySendMessage(chatId, HELP, log);
 }
 
+/**
+ * Меню бота — кнопка у поля ввода со списком команд. В личке — своё: задачи, сводка,
+ * постановка. В группе — то, что имеет смысл при всех: личные списки там не показываются.
+ */
+const PRIVATE_COMMANDS = [
+  { command: "tasks", description: "Мои задачи" },
+  { command: "today", description: "Что горит сегодня" },
+  ...(canIntake ? [{ command: "task", description: "Поставить задачу" }] : []),
+  { command: "help", description: "Что умеет бот" },
+  { command: "stop", description: "Отвязать этот чат от учётки" },
+];
+
+const GROUP_COMMANDS = [
+  ...(canIntake
+    ? [
+        {
+          command: "task",
+          description: "Поставить задачу: /task текст или ответом на сообщение",
+        },
+      ]
+    : []),
+  { command: "today", description: "Сводка команды" },
+  { command: "chatid", description: "Идентификатор этого чата" },
+];
+
+/**
+ * Меню ставится при каждом старте: список зависит от того, включён ли разбор задач, и
+ * правка в коде доезжает до телеграма сама, без похода в @BotFather. Сбой здесь опрос не
+ * останавливает: бот без меню хуже, чем бот, но лучше, чем никакого.
+ */
+async function registerCommands(log: Log): Promise<boolean> {
+  try {
+    await setMyCommands(PRIVATE_COMMANDS, "all_private_chats");
+    await setMyCommands(GROUP_COMMANDS, "all_group_chats");
+    return true;
+  } catch (cause) {
+    log.warn({ err: cause }, "меню команд бота не обновилось");
+    return false;
+  }
+}
+
+/**
+ * `/task` без текста — так он приходит, когда команду нажали в меню. Разбирать нечего, но
+ * молчать нельзя: человек не поймёт, что дальше. Ответом на сообщение в чате голая
+ * команда — это «сделай задачу из этого», её разбирает общий путь.
+ */
+function isBareTask(message: TgMessage): boolean {
+  const text = message.text?.trim() ?? "";
+  return (
+    /^\/task(@\w+)?$/i.test(text) && isTaskCommand(text) && !message.reply_to_message
+  );
+}
+
+const TASK_HINT_PRIVATE =
+  "Просто напишите, что сделать и кому, например: «Фиксы по кошельку Камилю до пятницы». Можно переслать сообщение или записать голосовое.";
+const TASK_HINT_GROUP =
+  "Напишите задачу после команды: /task Фиксы по кошельку Камилю до пятницы. Или ответьте командой /task на сообщение, из которого нужна задача.";
+
 async function handleUpdate(update: TelegramUpdate, log: Log): Promise<void> {
   // Кнопки карточек работают и без Replicate: им нужна только база.
   if (update.callback_query) return handleCardAction(update.callback_query, log);
@@ -276,6 +362,12 @@ async function handleUpdate(update: TelegramUpdate, log: Log): Promise<void> {
   const chatId = String(message.chat.id);
   const text = message.text;
   const command = text?.startsWith("/") && !isTaskCommand(text);
+
+  if (canIntake && isBareTask(message)) {
+    const hint = isPrivateChat(chatId) ? TASK_HINT_PRIVATE : TASK_HINT_GROUP;
+    await trySendMessage(chatId, hint, log);
+    return;
+  }
 
   // Разбор занимает секунды, поэтому идёт в фоне: опрос не ждёт его и не держит кнопки.
   if (canIntake && !command && acceptsMessage(message)) {
@@ -294,6 +386,8 @@ export function startBot(log: Log): () => Promise<void> {
   const controller = new AbortController();
   let offset = 0;
   let knowsSelf = !canIntake;
+  let menuAttempts = 0;
+  let menuReady = false;
 
   async function poll(): Promise<void> {
     while (!controller.signal.aborted) {
@@ -303,6 +397,11 @@ export function startBot(log: Log): () => Promise<void> {
         if (!knowsSelf) {
           setIdentity(await getMe());
           knowsSelf = true;
+        }
+        // Несколько попыток, а не вечные: неудача тут не мешает работе, а лог засорила бы.
+        if (!menuReady && menuAttempts < 5) {
+          menuAttempts += 1;
+          menuReady = await registerCommands(log);
         }
 
         const updates = await callBotApi<TelegramUpdate[]>(

@@ -220,6 +220,17 @@ export async function answerCallback(id: string, text?: string): Promise<void> {
   });
 }
 
+/**
+ * Список команд в меню бота (кнопка «Меню» у поля ввода). Область — личные чаты или
+ * группы: в группе свои команды и чужие подсказки там только мешают.
+ */
+export async function setMyCommands(
+  commands: { command: string; description: string }[],
+  scope: "all_private_chats" | "all_group_chats",
+): Promise<void> {
+  await callBotApi("setMyCommands", { commands, scope: { type: scope } });
+}
+
 export async function getMe(): Promise<{ id: number; username?: string }> {
   return callBotApi("getMe");
 }
