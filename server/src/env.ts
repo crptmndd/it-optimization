@@ -42,7 +42,11 @@ const schema = z.object({
   SESSION_TTL_DAYS: z.coerce.number().int().positive().default(14),
 
   UPLOAD_DIR: z.string().default("./uploads"),
-  MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(15 * 1024 * 1024),
+  MAX_UPLOAD_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(15 * 1024 * 1024),
 
   /**
    * Бот уведомлений. Токен не задан — бот просто не запускается, остальной
@@ -69,6 +73,25 @@ const schema = z.object({
     .default("09:00"),
   /** Пояс, в котором считаются «сегодня» и время дайджеста. */
   TIMEZONE: z.string().default("Europe/Moscow"),
+
+  /**
+   * Постановка задач боту обычным сообщением, голосом или пересылкой. Разбор делает
+   * языковая модель на Replicate, голос расшифровывает Whisper там же. Токен не задан —
+   * бот работает как раньше и отвечает на свободный текст справкой.
+   */
+  REPLICATE_API_TOKEN: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim() || undefined),
+  /**
+   * Модель разбора: «владелец/имя» официальной модели Replicate. Открытая модель, а не
+   * закрытая: у тех свои ограничения по странам. Сменить, если Replicate её снимет.
+   */
+  REPLICATE_LLM_MODEL: z.string().default("qwen/qwen3-235b-a22b-instruct-2507"),
+  /** Версия openai/whisper: модель не официальная, без версии её не вызвать. */
+  REPLICATE_WHISPER_VERSION: z
+    .string()
+    .default("8099696689d249cf8b122d833c36ac3f75505c666a395ca40ef26f68e7d3d16e"),
 
   /**
    * Ключ паролей и секретов 2FA: 32 байта в base64. Живёт только здесь: в базе и
@@ -120,6 +143,9 @@ export const canPublish = Boolean(env.GITHUB_TOKEN);
 
 /** Бот поднимается, только если выдан токен. */
 export const canNotify = Boolean(env.TELEGRAM_BOT_TOKEN);
+
+/** Задачи из сообщений: нужен и бот, и доступ к Replicate. */
+export const canIntake = canNotify && Boolean(env.REPLICATE_API_TOKEN);
 
 if (isProduction && !env.COOKIE_SECURE) {
   // Не падаем: бывает деплой за доверенным прокси, который сам держит TLS.

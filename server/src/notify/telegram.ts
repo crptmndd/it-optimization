@@ -158,3 +158,150 @@ export async function trySendMessage(
   }
   return false;
 }
+
+/** Кнопка под сообщением: ссылка или действие, которое бот получит обратно. */
+export type InlineButton = LinkButton | { text: string; callback_data: string };
+export type Keyboard = InlineButton[][];
+
+/**
+ * Отправка с номером сообщения: карточку задачи потом правят на месте, когда нажимают
+ * «Отменить» или меняют исполнителя. `replyTo` привязывает ответ к сообщению, из которого
+ * он сделан: в общем чате иначе непонятно, чья это задача.
+ */
+export async function postMessage(
+  chatId: string,
+  text: string,
+  options: { keyboard?: Keyboard; replyTo?: number } = {},
+): Promise<number> {
+  const message = await callBotApi<{ message_id: number }>("sendMessage", {
+    chat_id: chatId,
+    text,
+    parse_mode: "HTML",
+    link_preview_options: { is_disabled: true },
+    ...(options.keyboard && { reply_markup: { inline_keyboard: options.keyboard } }),
+    ...(options.replyTo && {
+      reply_parameters: {
+        message_id: options.replyTo,
+        allow_sending_without_reply: true,
+      },
+    }),
+  });
+  return message.message_id;
+}
+
+export async function editMessage(
+  chatId: string,
+  messageId: number,
+  text: string,
+  keyboard: Keyboard = [],
+): Promise<void> {
+  try {
+    await callBotApi("editMessageText", {
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: { inline_keyboard: keyboard },
+    });
+  } catch (cause) {
+    // Тот же текст с теми же кнопками телеграм считает ошибкой, хотя всё уже как надо:
+    // так бывает при двойном нажатии.
+    if (cause instanceof TelegramError && /not modified/i.test(cause.message)) return;
+    throw cause;
+  }
+}
+
+/** Без ответа на нажатие кнопка крутит часики ещё полминуты. */
+export async function answerCallback(id: string, text?: string): Promise<void> {
+  await callBotApi("answerCallbackQuery", {
+    callback_query_id: id,
+    ...(text && { text }),
+  });
+}
+
+export async function getMe(): Promise<{ id: number; username?: string }> {
+  return callBotApi("getMe");
+}
+
+/**
+ * Файл из сообщения, например голосовое. Адрес скачивания содержит токен бота, поэтому
+ * он не попадает ни в журнал, ни в текст ошибки, и наружу файл уходит только байтами.
+ */
+export async function downloadFile(fileId: string, maxBytes: number): Promise<Buffer> {
+  const file = await callBotApi<{ file_path?: string; file_size?: number }>("getFile", {
+    file_id: fileId,
+  });
+  if (!file.file_path) throw new Error("телеграм не отдал путь к файлу");
+  if (file.file_size && file.file_size > maxBytes)
+    throw new Error("файл слишком большой");
+
+  const response = await fetch(
+    `${API}/file/bot${env.TELEGRAM_BOT_TOKEN}/${file.file_path}`,
+    { signal: AbortSignal.timeout(60_000) },
+  );
+  if (!response.ok) throw new Error(`файл не скачался: ${response.status}`);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (bytes.length > maxBytes) throw new Error("файл слишком большой");
+  return bytes;
+}
+
+/**
+ * То немногое из Bot API, что читает бот. Поля, которые не нужны, не описаны: телеграм
+ * присылает их десятками.
+ */
+export interface TgUser {
+  id: number;
+  is_bot?: boolean;
+  first_name?: string;
+  last_name?: string;
+  username?: string;
+}
+
+export interface TgEntity {
+  type: string;
+  offset: number;
+  length: number;
+  url?: string;
+}
+
+export interface TgFile {
+  file_id: string;
+  file_size?: number;
+  duration?: number;
+  mime_type?: string;
+  file_name?: string;
+}
+
+/** Откуда переслано. Неизвестный тип тоже бывает: телеграм добавляет их без спроса. */
+export type TgOrigin =
+  | { type: "user"; sender_user: TgUser }
+  | { type: "hidden_user"; sender_user_name: string }
+  | { type: "chat"; sender_chat: { title?: string } }
+  | { type: "channel"; chat: { title?: string } };
+
+export interface TgMessage {
+  message_id: number;
+  chat: { id: number; type: string };
+  from?: TgUser;
+  text?: string;
+  entities?: TgEntity[];
+  caption?: string;
+  caption_entities?: TgEntity[];
+  voice?: TgFile;
+  audio?: TgFile;
+  video_note?: TgFile;
+  video?: TgFile;
+  photo?: TgFile[];
+  document?: TgFile;
+  forward_origin?: TgOrigin;
+  reply_to_message?: TgMessage;
+  reply_markup?: { inline_keyboard?: { text: string; callback_data?: string }[][] };
+}
+
+export interface TgCallbackQuery {
+  id: string;
+  from: TgUser;
+  message?: { message_id: number; chat: { id: number } };
+  data?: string;
+}

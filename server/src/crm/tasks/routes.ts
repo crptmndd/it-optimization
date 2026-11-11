@@ -5,11 +5,10 @@ import { audit } from "../../audit.js";
 import { requireAdmin, requireTeam } from "../../auth/guard.js";
 import { prisma } from "../../db.js";
 import { notifyTaskInBackground } from "../../notify/notifications.js";
-import { liveTask, projectScope, taskScope, type Viewer } from "../access.js";
+import { taskScope } from "../access.js";
 import { invalidInput } from "../http.js";
-import { briefNotes, createNote, listNotes, noteRoutesFor } from "../notes.js";
+import { briefNotes, listNotes, noteRoutesFor } from "../notes.js";
 import { normalizeTaskStatus, placeCard } from "../columns/columns.js";
-import { assertDevelopers } from "../people.js";
 import {
   archiveCutoff,
   archivedTaskWhere,
@@ -24,82 +23,17 @@ import {
   toTaskDto,
   updateTaskBody,
 } from "./dto.js";
+import {
+  assertReferences,
+  completedAtFor,
+  createTask,
+  isClosed,
+  nextPosition,
+  reachableTask,
+  type TaskStatusValue,
+} from "./service.js";
 
 const idParams = z.object({ id: z.string().uuid() });
-
-function isClosed(status: string): boolean {
-  return (CLOSED_TASK_STATUSES as readonly string[]).includes(status);
-}
-
-/**
- * Дата выполнения ставится и снимается автоматически. Руками её никто не
- * проставит, а без неё нельзя ответить на вопрос «сколько задач закрыли за
- * неделю» — и «выполнено» перестаёт отличаться от «висит с прошлого года».
- */
-function completedAtFor(
-  status: string | undefined,
-  current: Date | null,
-): Date | null | undefined {
-  if (status === undefined) return undefined;
-  if (isClosed(status)) return current ?? new Date();
-  return null;
-}
-
-/** Чужой проект для сотрудника не существует, поэтому и ответ тот же, что на пустой id. */
-async function assertReferences(
-  viewer: Viewer,
-  input: { projectId?: string | null; developers?: string[] },
-): Promise<string | null> {
-  if (input.projectId) {
-    const found = await prisma.project.count({
-      where: { id: input.projectId, deletedAt: null, AND: [projectScope(viewer)] },
-    });
-    if (!found) return "Проект не найден";
-  }
-  return assertDevelopers(input.developers);
-}
-
-type TaskStatusValue = Prisma.EnumTaskStatusFilter["equals"] & string;
-
-/**
- * Новая задача встаёт в конец своей колонки. На доске только верхний уровень. У двух
- * колонок одного типа номера свои; задача без колонки (отменённая, подзадача) считается
- * по статусу, как раньше.
- */
-async function nextPosition(slot: {
-  columnId: string | null;
-  status: string;
-}): Promise<number> {
-  const last = await prisma.task.aggregate({
-    where: {
-      ...(slot.columnId
-        ? { columnId: slot.columnId }
-        : { status: slot.status as TaskStatusValue }),
-      deletedAt: null,
-      parentId: null,
-    },
-    _max: { position: true },
-  });
-  return (last._max.position ?? -1) + 1;
-}
-
-/** Запись, с которой человек может работать. Чужая отвечает тем же 404, что и пустой id. */
-function reachableTask(id: string, viewer: Viewer): Prisma.TaskWhereInput {
-  return { id, AND: [liveTask, taskScope(viewer)] };
-}
-
-/**
- * Родитель новой подзадачи. Строка держится до конца транзакции: иначе смена проекта у
- * родителя проскочила бы между чтением и вставкой, и подзадача осталась бы в старом
- * проекте. Блокировка разделяемая: две подзадачи одной задачи друг другу не мешают.
- */
-async function readParent(tx: Prisma.TransactionClient, id: string, viewer: Viewer) {
-  await tx.$queryRaw`SELECT id FROM tasks WHERE id = ${id}::uuid FOR SHARE`;
-  return tx.task.findFirst({
-    where: reachableTask(id, viewer),
-    select: { parentId: true, projectId: true },
-  });
-}
 
 /**
  * Какие позиции займут переставленные задачи. Сотрудник присылает не всю колонку, а
@@ -193,68 +127,8 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
     if (!parsed.success) return invalidInput(reply, parsed.error);
 
     const input = parsed.data;
-    const viewer = request.user!;
-    const parentId = input.parentId ?? null;
-
-    // Своего окна у подзадачи нет, и заметку к ней никто бы не увидел. Отказ честнее:
-    // текст остаётся у того, кто его написал, а не пропадает в невидимой записи.
-    if (parentId && input.note) {
-      return reply.code(400).send({ error: "У подзадачи не бывает заметок" });
-    }
-
-    // Проект подзадачи всегда родительский, присланный ни на что не влияет.
-    const problem = await assertReferences(
-      viewer,
-      parentId ? { developers: input.developers } : input,
-    );
-    if (problem) return reply.code(400).send({ error: problem });
-
-    // Колонка сильнее статуса. У подзадачи колонки нет: на доске её не бывает.
-    const requested = normalizeTaskStatus(input.status) ?? "todo";
-    const placed = parentId
-      ? ({ ok: true, columnId: null, status: requested } as const)
-      : await placeCard(prisma, "task", {
-          columnId: input.columnId ?? undefined,
-          status: input.columnId ? undefined : requested,
-        });
-    if (!placed.ok) return reply.code(400).send({ error: placed.error });
-    const status = placed.status as TaskStatusValue;
-    const position = await nextPosition(placed);
-
-    const created = await prisma.$transaction(async (tx) => {
-      let projectId = input.projectId ?? null;
-
-      if (parentId) {
-        const parent = await readParent(tx, parentId, viewer);
-        if (!parent) return { code: 404, error: "Задача не найдена" } as const;
-        if (parent.parentId) {
-          return { code: 400, error: "У подзадачи не бывает своих подзадач" } as const;
-        }
-        projectId = parent.projectId;
-      }
-
-      const task = await tx.task.create({
-        data: {
-          title: input.title,
-          description: input.description ?? null,
-          status,
-          columnId: placed.columnId,
-          priority: input.priority ?? "normal",
-          projectId,
-          parentId,
-          developers: input.developers ?? [],
-          createdById: viewer.id,
-          dueAt: input.dueAt ?? null,
-          completedAt: completedAtFor(status, null) ?? null,
-          position,
-        },
-        include: TASK_RELATIONS,
-      });
-      if (input.note) await createNote("task", task.id, viewer.id, input.note, tx);
-      return { task };
-    });
-
-    if (created.error) return reply.code(created.code).send({ error: created.error });
+    const created = await createTask(request.user!, input);
+    if (!created.ok) return reply.code(created.code).send({ error: created.error });
     const { task } = created;
 
     await audit(request, {

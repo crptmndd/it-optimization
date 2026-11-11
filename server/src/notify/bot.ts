@@ -3,10 +3,25 @@ import { WITH_MEMBER } from "../auth/session.js";
 import { memberNameOf } from "../crm/access.js";
 import { collectToday, collectTodayFor, teamChatSnapshot } from "../crm/today.js";
 import { prisma } from "../db.js";
-import { env } from "../env.js";
+import { canIntake, env } from "../env.js";
 import { buildDigest } from "./digest.js";
+import { handleCardAction } from "./intake/cards.js";
+import {
+  acceptMessage,
+  acceptsMessage,
+  isTaskCommand,
+  setIdentity,
+  stopIntake,
+} from "./intake/intake.js";
 import { isPrivateChat } from "./notifications.js";
-import { callBotApi, escapeHtml, trySendMessage } from "./telegram.js";
+import {
+  callBotApi,
+  escapeHtml,
+  getMe,
+  trySendMessage,
+  type TgCallbackQuery,
+  type TgMessage,
+} from "./telegram.js";
 
 /**
  * Бот работает на длинных опросах (getUpdates), а не на вебхуках. Вебхук
@@ -27,16 +42,26 @@ interface Log {
 
 interface TelegramUpdate {
   update_id: number;
-  message?: {
-    chat: { id: number; type: string };
-    from?: { id: number; first_name?: string; username?: string };
-    text?: string;
-  };
+  message?: TgMessage;
+  callback_query?: TgCallbackQuery;
 }
+
+/** Без ключа Replicate этой части нет, и справка о ней молчит. */
+const INTAKE_HELP = canIntake
+  ? [
+      "<b>Поставить задачу</b> — просто напишите, перешлите или наговорите голосом:",
+      "«Фиксы по кошельку Камилю до пятницы». Я заведу задачу в CRM с исполнителем,",
+      "проектом и сроком и пришлю карточку с кнопкой «Отменить».",
+      "В общем чате — командой /task или ответом на мою карточку.",
+      "",
+    ]
+  : [];
 
 const HELP = [
   "Я напоминаю о задачах, сроках и деньгах: сотрудникам в общем чате, админам лично.",
   "",
+  ...INTAKE_HELP,
+  ...(canIntake ? ["<b>/task</b> текст — поставить задачу"] : []),
   "<b>/today</b> — что горит прямо сейчас",
   "<b>/chatid</b> — идентификатор этого чата",
   "<b>/stop</b> — отвязать этот чат от учётки",
@@ -242,16 +267,47 @@ async function handleCommand(
   await trySendMessage(chatId, HELP, log);
 }
 
+async function handleUpdate(update: TelegramUpdate, log: Log): Promise<void> {
+  // Кнопки карточек работают и без Replicate: им нужна только база.
+  if (update.callback_query) return handleCardAction(update.callback_query, log);
+
+  const message = update.message;
+  if (!message) return;
+  const chatId = String(message.chat.id);
+  const text = message.text;
+  const command = text?.startsWith("/") && !isTaskCommand(text);
+
+  // Разбор занимает секунды, поэтому идёт в фоне: опрос не ждёт его и не держит кнопки.
+  if (canIntake && !command && acceptsMessage(message)) {
+    acceptMessage(message, log);
+    return;
+  }
+
+  if (!text) return;
+  // Обычная переписка в группе бота не касается: там он отвечает только на команды. Иначе
+  // с выключенной приватностью он отвечал бы справкой на каждое сообщение чата.
+  if (!isPrivateChat(chatId) && !text.startsWith("/")) return;
+  await handleCommand(chatId, text, message.from?.username, log);
+}
+
 export function startBot(log: Log): () => Promise<void> {
   const controller = new AbortController();
   let offset = 0;
+  let knowsSelf = !canIntake;
 
   async function poll(): Promise<void> {
     while (!controller.signal.aborted) {
       try {
+        // Своё имя нужно, чтобы узнать обращение в общем чате. Спрашивается в цикле: при
+        // старте телеграм бывает недоступен, а бот без этого не должен вставать.
+        if (!knowsSelf) {
+          setIdentity(await getMe());
+          knowsSelf = true;
+        }
+
         const updates = await callBotApi<TelegramUpdate[]>(
           "getUpdates",
-          { offset, timeout: 30, allowed_updates: ["message"] },
+          { offset, timeout: 30, allowed_updates: ["message", "callback_query"] },
           controller.signal,
           // Длинный опрос держит соединение 30 секунд намеренно, поэтому свой
           // таймаут должен быть заведомо больше — иначе он обрывал бы каждый
@@ -261,16 +317,9 @@ export function startBot(log: Log): () => Promise<void> {
 
         for (const update of updates) {
           offset = update.update_id + 1;
-          const text = update.message?.text;
-          const chatId = update.message?.chat.id;
-          if (!text || chatId === undefined) continue;
-
-          const username = update.message?.from?.username;
-          await handleCommand(String(chatId), text, username, log).catch(
-            (cause: unknown) => {
-              log.error({ err: cause }, "ошибка обработки сообщения бота");
-            },
-          );
+          await handleUpdate(update, log).catch((cause: unknown) => {
+            log.error({ err: cause }, "ошибка обработки сообщения бота");
+          });
         }
       } catch (cause) {
         if (controller.signal.aborted) return;
@@ -288,5 +337,6 @@ export function startBot(log: Log): () => Promise<void> {
 
   return async () => {
     controller.abort();
+    await stopIntake();
   };
 }

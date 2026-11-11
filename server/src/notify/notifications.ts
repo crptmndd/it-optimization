@@ -224,7 +224,7 @@ async function taskNote(task: TaskNotice): Promise<string | null> {
   return note?.body ?? task.description;
 }
 
-async function notifyTask(
+export async function notifyTask(
   task: TaskNotice,
   people: string[],
   log: Log,

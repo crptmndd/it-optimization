@@ -32,3 +32,32 @@ export async function audit(
     request.log.error({ cause }, "не удалось записать audit_log");
   }
 }
+
+/**
+ * Запись без HTTP-запроса: бот действует от имени человека, но приходит не из браузера,
+ * и адреса у такого действия нет. Правило то же: журнал не роняет саму операцию.
+ */
+export async function auditAs(
+  userId: string,
+  entry: {
+    entity: string;
+    entityId?: string;
+    action: string;
+    diff?: Prisma.InputJsonValue;
+  },
+  log: { error: (obj: unknown, msg: string) => void },
+): Promise<void> {
+  try {
+    await prisma.auditLog.create({
+      data: {
+        userId,
+        entity: entry.entity,
+        entityId: entry.entityId ?? null,
+        action: entry.action,
+        diff: entry.diff,
+      },
+    });
+  } catch (cause) {
+    log.error({ err: cause }, "не удалось записать audit_log");
+  }
+}
