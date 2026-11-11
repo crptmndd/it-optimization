@@ -28,6 +28,7 @@ import {
   type Log,
 } from "./cards.js";
 import { answerQuestion } from "../questions.js";
+import { attachFiles, filesOf } from "./files.js";
 import { handleTaskReply } from "./reply.js";
 import {
   loadContext,
@@ -106,7 +107,10 @@ function hasContent(message: TgMessage): boolean {
     message.voice ||
     message.audio ||
     message.video_note ||
-    message.forward_origin,
+    message.forward_origin ||
+    message.photo ||
+    message.document ||
+    message.video,
   );
 }
 
@@ -153,6 +157,13 @@ async function withSlot(job: () => Promise<void>): Promise<void> {
   }
 }
 
+function repliesToTask(message: TgMessage): boolean {
+  const reply = message.reply_to_message;
+  return Boolean(
+    reply && identity && reply.from?.id === identity.id && cardTaskId(reply.reply_markup),
+  );
+}
+
 function ownWords(bundle: Bundle): boolean {
   return bundle.messages.some(
     (message) =>
@@ -173,7 +184,9 @@ export function acceptMessage(message: TgMessage, log: Log): void {
   bundle.messages.push(message);
   clearTimeout(bundle.timer);
 
-  const quiet = ownWords(bundle) ? QUIET_MS : QUIET_FORWARD_MS;
+  // Ответ на сообщение о задаче подписи не ждёт: скриншот в ответ — уже законченная мысль.
+  const quiet =
+    ownWords(bundle) || bundle.messages.some(repliesToTask) ? QUIET_MS : QUIET_FORWARD_MS;
   const wait =
     bundle.messages.length >= MAX_MESSAGES
       ? 0
@@ -454,11 +467,21 @@ async function processBundle(bundle: Bundle, log: Log): Promise<void> {
         );
         continue;
       }
+      const extras = [...outcome.warnings];
+      if (index === 0) {
+        if (source.problem) extras.push(`⚠️ ${source.problem}`);
+        // Файлы — к первой задаче: в пачке почти всегда одна. У подзадачи своего окна нет,
+        // и её файлы видны в окне родителя.
+        const files = await attachFiles(
+          plan.parentId ?? outcome.taskId,
+          filesOf(messages, identity?.id ?? null),
+          author.viewer.id,
+          log,
+        );
+        extras.push(...files.problems.map((problem) => `⚠️ ${problem}`));
+      }
       const task = await loadCardTask(outcome.taskId);
       if (!task) continue;
-
-      const extras = [...outcome.warnings];
-      if (index === 0 && source.problem) extras.push(`⚠️ ${source.problem}`);
       // Никого не назвали или назвали не того — сразу список людей, а не кнопка к нему.
       const view = task.developers.length === 0 ? "people" : "main";
       const card = await renderCard(task, view, extras.map(escapeHtml));
@@ -490,7 +513,8 @@ async function processReply(
   try {
     const context = await loadContext(author.viewer, author.viewer.memberName, null);
     const source = await sourceOf(messages, context, log);
-    if (!source.text) {
+    const files = filesOf(messages, identity?.id ?? null);
+    if (!source.text && files.length === 0) {
       if (source.problem) {
         await postMessage(bundle.chatId, source.problem, { replyTo: anchor.message_id });
       }
@@ -502,6 +526,7 @@ async function processReply(
         taskId,
         source: source.text,
         plain: source.plain,
+        files,
         context,
         chatId: bundle.chatId,
         replyTo: anchor.message_id,

@@ -2,6 +2,7 @@ import type { Prisma } from "@prisma/client";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { audit } from "../../audit.js";
+import { attachmentRoutes } from "./attachments.js";
 import { requireAdmin, requireTeam } from "../../auth/guard.js";
 import { prisma } from "../../db.js";
 import {
@@ -324,4 +325,6 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
     "Задача не найдена",
     requireTeam,
   );
+
+  await attachmentRoutes(app);
 }

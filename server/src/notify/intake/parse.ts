@@ -243,7 +243,7 @@ const RULES = `Верни только JSON без пояснений и без 
 - parent: код задачи, только если автор прямо называет сообщение подзадачей, пунктом или частью задачи из списка («в задачу про кошелёк добавь…», «подзадача к…»). Похожее или совпадающее название — не повод: это новая задача, parent null. При parent поля project и subtasks не заполняй.
 - due: срок в формате ГГГГ-ММ-ДД, если назван («завтра», «до пятницы», «к 15-му»): бери дату из календаря. День недели — ближайший будущий, не сегодняшний: «к среде», сказанное в среду, — среда через неделю. «Сегодня» — сегодняшняя дата. Нет срока — null.
 - priority: "high" — срочно, горит, asap; "important" — важно; "low" — не срочно, когда-нибудь; иначе "normal".
-- note: детали, нужные исполнителю и не вошедшие в название: ссылки, шаги, телефоны, суммы, слова клиента. Исполнителя, срок, срочность и кто поручил в note не пиши: для них есть поля. Пункты, ставшие подзадачами, в note не повторяй. Нечего добавить — null. Ничего не выдумывай.
+- note: детали, нужные исполнителю и не вошедшие в название: ссылки, шаги, телефоны, суммы, слова клиента. Исполнителя, срок, срочность и кто поручил в note не пиши: для них есть поля. Пункты, ставшие подзадачами, в note не повторяй. Пометки [фото], [видео], [файл] — это вложения, они прикрепятся к задаче сами: в note о них не пиши. Нечего добавить — null. Ничего не выдумывай.
 - subtasks: список пунктов одной работы (нумерованный, через дефис или перечислением) — это подзадачи (до 15), а не note. У каждой свой исполнитель, если он назван отдельно. Нет списка — пустой список.
 - Несколько задач — только если в сообщении явно разные поручения (разным людям или про разное). Обычно задача одна.
 - Автор пересланного сообщения — не исполнитель, если его не назначили.
@@ -410,13 +410,41 @@ function code(value: string | null | undefined): string {
   return (value ?? "").trim().toUpperCase();
 }
 
-function toPlan(raw: z.infer<typeof rawPlan>, context: IntakeContext): PlannedTask[] {
+/**
+ * Пометки «[фото]», «[файл «…»]» нужны модели, чтобы понять сообщение, но в описании
+ * задачи им не место: сами файлы лежат во вложениях. Модель их иногда переносит.
+ */
+function withoutMarks(note: string | null | undefined): string {
+  return (note ?? "").replace(/\[(?:фото|видео|файл[^\]]*)\]/gi, "").trim();
+}
+
+/**
+ * Подзадачей сообщение становится, только если автор сказал это прямо или ответил на
+ * карточку задачи. Модель охотно цепляет новую задачу к похожей по названию («кнопка
+ * оплаты съехала» → «Баг в оплате»), и правило в запросе её не удерживает: граница в коде.
+ */
+const EXPLICIT_PARENT = /подзадач|в задач|к задач|пункт|в рамках/i;
+
+function projectOfTask(task: { project: string | null }, context: IntakeContext) {
+  return task.project ? context.projects.get(task.project) : undefined;
+}
+
+function toPlan(
+  raw: z.infer<typeof rawPlan>,
+  context: IntakeContext,
+  allowParent: boolean,
+): PlannedTask[] {
   return raw.tasks.slice(0, MAX_TASKS).flatMap((item): PlannedTask[] => {
     const title = clip(item.title, 300);
     if (!title) return [];
 
-    const parent = context.tasks.get(code(item.parent));
-    const project = parent ? undefined : context.projects.get(code(item.project));
+    const suggested = context.tasks.get(code(item.parent));
+    const parent = allowParent ? suggested : undefined;
+    // Отвергнутый родитель всё же подсказывает проект: задача про то же самое.
+    const project = parent
+      ? undefined
+      : (context.projects.get(code(item.project)) ??
+        (suggested ? projectOfTask(suggested, context) : undefined));
     const people = resolvePeople(item.assignees, context);
 
     const subtasks = parent
@@ -431,7 +459,7 @@ function toPlan(raw: z.infer<typeof rawPlan>, context: IntakeContext): PlannedTa
     return [
       {
         title,
-        note: clip(item.note, NOTE_MAX_LENGTH) || null,
+        note: clip(withoutMarks(item.note), NOTE_MAX_LENGTH) || null,
         ...people,
         projectId: project?.id ?? null,
         parentId: parent?.id ?? null,
@@ -517,7 +545,8 @@ export async function planTasks(context: IntakeContext, message: string): Promis
   if (raw.intent === "question" && raw.query) {
     return { intent: "question", query: toQuery(raw.query, context) };
   }
-  return { intent: "task", tasks: toPlan(raw, context) };
+  const allowParent = Boolean(context.focus) || EXPLICIT_PARENT.test(message);
+  return { intent: "task", tasks: toPlan(raw, context, allowParent) };
 }
 
 /**

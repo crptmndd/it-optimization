@@ -16,6 +16,7 @@ import type { TeamUser } from "../team-user.js";
 import { escapeHtml, postMessage } from "../telegram.js";
 import { formatDate } from "../zone.js";
 import { scheduleNotice, type Log } from "./cards.js";
+import { attachFiles, type IncomingFile } from "./files.js";
 import {
   askModel,
   clip,
@@ -142,6 +143,8 @@ export async function handleTaskReply(
     source: string;
     /** Слова человека как есть: они и станут заметкой. */
     plain: string;
+    /** Скриншоты и документы из ответа: они ложатся в задачу. */
+    files: IncomingFile[];
     context: IntakeContext;
     chatId: string;
     replyTo: number;
@@ -159,10 +162,23 @@ export async function handleTaskReply(
     return;
   }
 
-  const parsed = await askModel(buildPrompt(task, context, input.source), rawReply, 1000);
+  // Только файлы, без слов — разбирать нечего, модель не нужна.
+  const parsed = input.source
+    ? await askModel(buildPrompt(task, context, input.source), rawReply, 1000)
+    : rawReply.parse({});
   const subtask = Boolean(task.parentId);
   const lines: string[] = [];
   const problems: string[] = [];
+
+  // Своего окна у подзадачи нет: её файлы ложатся в задачу, где их увидят.
+  const files = await attachFiles(
+    task.parentId ?? task.id,
+    input.files,
+    author.viewer.id,
+    log,
+  );
+  if (files.saved > 0) lines.push(`📎 Прикреплено файлов: ${files.saved}`);
+  problems.push(...files.problems);
 
   // Заметка — слова человека, а не пересказ модели: в карточке должно остаться сказанное.
   if (parsed.comment && input.plain.trim()) {

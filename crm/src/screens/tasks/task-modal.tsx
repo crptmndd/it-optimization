@@ -22,6 +22,7 @@ import {
   type DraftSubtask,
   type SubtasksHandle,
 } from "./subtasks";
+import { AttachmentsPanel } from "./attachments";
 import { TaskFields, type TaskFormValues } from "./task-form";
 
 /** Окно задачи: и новой, и заведённой. У новой заметка и подзадачи пока только черновики. */
@@ -74,6 +75,10 @@ export function TaskModal({
   // Один ответ на подзадачи и заметки: оба блока стоят на одной карточке задачи.
   const [card] = useState(() => (taskId ? getTask(taskId) : null));
   const subtaskList = useMemo(() => card?.then(({ task }) => task.subtaskList), [card]);
+  const attachments = useMemo(
+    () => card?.then(({ task }) => task.attachments ?? []),
+    [card],
+  );
   // Функция постоянная, иначе заметки перезапрашивались бы на каждую букву в форме.
   const loadNotes = useCallback(async () => (await card)?.notes ?? [], [card]);
 
@@ -185,6 +190,12 @@ export function TaskModal({
             />
           )}
         </div>
+
+        {taskId && attachments && (
+          <div className="mt-5">
+            <AttachmentsPanel taskId={taskId} load={attachments} />
+          </div>
+        )}
 
         <div className="mt-5">
           {taskId ? (

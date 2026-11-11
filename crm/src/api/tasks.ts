@@ -78,8 +78,23 @@ export interface Subtask {
 }
 
 /** Подзадачи целиком приходят только в карточке: на доске хватает прогресса. */
+/** Файл к задаче: скриншот, документ. Отдаётся только через API, тем, кому видна задача. */
+export interface TaskAttachment {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  size: number;
+  createdAt: string;
+  /** Путь в API: полный адрес даёт `apiUrl`. */
+  url: string;
+  /** Картинка, которую можно показать миниатюрой. */
+  image: boolean;
+}
+
 export interface TaskDetail extends Task {
   subtaskList: Subtask[];
+  /** Нет у старого API во время выката. */
+  attachments?: TaskAttachment[];
 }
 
 /**
@@ -144,6 +159,23 @@ export interface TaskWithNotes {
 
 export async function getTask(id: string): Promise<TaskWithNotes> {
   return api.get<TaskWithNotes>(`/tasks/${id}`);
+}
+
+export async function uploadTaskAttachment(
+  taskId: string,
+  file: File,
+): Promise<TaskAttachment> {
+  const form = new FormData();
+  form.append("file", file);
+  const { attachment } = await api.upload<{ attachment: TaskAttachment }>(
+    `/tasks/${taskId}/attachments`,
+    form,
+  );
+  return attachment;
+}
+
+export async function deleteTaskAttachment(taskId: string, id: string): Promise<void> {
+  await api.delete(`/tasks/${taskId}/attachments/${id}`);
 }
 
 export async function createTask(input: NewTaskInput): Promise<Task> {

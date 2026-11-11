@@ -1,4 +1,5 @@
 import { buildApp } from "./app.js";
+import { purgeOrphanAttachments } from "./crm/tasks/attachments.js";
 import { purgeDeleted } from "./crm/trash/purge.js";
 import { purgeExpiredSessions, purgeExpiredTickets } from "./auth/session.js";
 import { canVault, checkVaultKey } from "./crypto/sealed.js";
@@ -27,21 +28,29 @@ if (isProduction && !env.CRM_ORIGIN) {
 // Бот необязателен: без токена CRM работает полностью, просто молча.
 const stopBot = canNotify
   ? startBot(app.log)
-  : (app.log.warn("TELEGRAM_BOT_TOKEN не задан: напоминания отключены."),
-    async () => {});
+  : (app.log.warn("TELEGRAM_BOT_TOKEN не задан: напоминания отключены."), async () => {});
 
 // Раз в сутки подчищаем истёкшие сессии и корзину — иначе таблицы растут вечно.
 const cleanup = setInterval(
   () => {
     purgeExpiredSessions()
       .then((count) => count && app.log.info({ count }, "удалены истёкшие сессии"))
-      .catch((cause: unknown) => app.log.error({ err: cause }, "очистка сессий не удалась"));
+      .catch((cause: unknown) =>
+        app.log.error({ err: cause }, "очистка сессий не удалась"),
+      );
     purgeExpiredTickets().catch((cause: unknown) =>
       app.log.error({ err: cause }, "очистка билетов входа не удалась"),
     );
     purgeDeleted()
       .then((count) => count && app.log.info({ count }, "корзина очищена"))
-      .catch((cause: unknown) => app.log.error({ err: cause }, "очистка корзины не удалась"));
+      .catch((cause: unknown) =>
+        app.log.error({ err: cause }, "очистка корзины не удалась"),
+      );
+    purgeOrphanAttachments()
+      .then((count) => count && app.log.info({ count }, "удалены файлы без задач"))
+      .catch((cause: unknown) =>
+        app.log.error({ err: cause }, "уборка вложений не удалась"),
+      );
   },
   24 * 60 * 60 * 1000,
 );

@@ -9,6 +9,7 @@ import {
 import { prisma } from "../db.js";
 import { env } from "../env.js";
 import { afterTaskUpdate, taskKeyboard, taskMessage } from "./notifications.js";
+import { attachmentsLine } from "./intake/files.js";
 import { teamUserOf } from "./team-user.js";
 import {
   answerCallback,
@@ -77,6 +78,8 @@ export async function renderTask(
   if (options.project && task.project) {
     lines.push(`📁 Проект: ${escapeHtml(task.project.title)}`);
   }
+  const files = await attachmentsLine(task.parent?.id ?? task.id);
+  if (files) lines.push(files);
   if (options.footer) lines.push("", options.footer);
   return { text: lines.join("\n"), keyboard: taskKeyboard(task) };
 }

@@ -1,8 +1,9 @@
-import type { Prisma, Project, Task } from "@prisma/client";
+import type { Prisma, Project, Task, TaskAttachment } from "@prisma/client";
 import { z } from "zod";
 import { optionalDate, optionalText, optionalUuid, requiredTitle } from "../fields.js";
 import { NOTE_MAX_LENGTH } from "../notes.js";
 import { MAX_DEVELOPERS } from "../people.js";
+import { toAttachmentDto, type AttachmentDto } from "./attachment-dto.js";
 
 export const TASK_STATUSES = [
   "backlog",
@@ -164,6 +165,7 @@ export interface SubtaskDto {
 
 export interface TaskDetailDto extends TaskDto {
   subtaskList: SubtaskDto[];
+  attachments: AttachmentDto[];
 }
 
 type TaskWithRelations = Task & {
@@ -173,6 +175,7 @@ type TaskWithRelations = Task & {
 
 type TaskWithSubtasks = Omit<TaskWithRelations, "subtasks"> & {
   subtasks: Pick<Task, "id" | "title" | "status" | "developers" | "completedAt">[];
+  attachments: TaskAttachment[];
 };
 
 export function toTaskDto(item: TaskWithRelations): TaskDto {
@@ -210,6 +213,7 @@ export function toTaskDetailDto(item: TaskWithSubtasks): TaskDetailDto {
       developers: subtask.developers,
       completedAt: subtask.completedAt?.toISOString() ?? null,
     })),
+    attachments: item.attachments.map(toAttachmentDto),
   };
 }
 
@@ -234,4 +238,5 @@ export const TASK_DETAIL_RELATIONS = {
     orderBy: SUBTASK_ORDER,
     select: { id: true, title: true, status: true, developers: true, completedAt: true },
   },
+  attachments: { orderBy: { createdAt: "asc" } },
 } as const;

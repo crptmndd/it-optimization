@@ -31,6 +31,8 @@ type RequestOptions = Omit<RequestInit, "body"> & { body?: unknown };
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { body, headers, ...rest } = options;
+  // Файл уходит как есть: границу частей в Content-Type браузер ставит сам.
+  const form = body instanceof FormData;
 
   let response: Response;
   try {
@@ -38,10 +40,10 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
       ...rest,
       credentials: "include",
       headers: {
-        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+        ...(body === undefined || form ? {} : { "Content-Type": "application/json" }),
         ...headers,
       },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : form ? body : JSON.stringify(body),
     });
   } catch {
     // fetch падает только на сетевом уровне: API недоступен или нет интернета.
@@ -77,4 +79,14 @@ export const api = {
   put: <T>(path: string, body?: unknown) => request<T>(path, { method: "PUT", body }),
   patch: <T>(path: string, body?: unknown) => request<T>(path, { method: "PATCH", body }),
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
+  upload: <T>(path: string, form: FormData) =>
+    request<T>(path, { method: "POST", body: form }),
 };
+
+/**
+ * Полный адрес в API — для того, что грузит сам браузер: картинки и ссылки на файлы. Кука
+ * уходит и с ними: API и CRM на одном сайте, а кука выписана на общий домен.
+ */
+export function apiUrl(path: string): string {
+  return `${BASE}${path}`;
+}

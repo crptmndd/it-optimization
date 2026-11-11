@@ -23,6 +23,7 @@ import {
   type Keyboard,
   type TgCallbackQuery,
 } from "../telegram.js";
+import { attachmentsLine } from "./files.js";
 import { loadPeople } from "./parse.js";
 
 /**
@@ -136,6 +137,8 @@ export async function renderCard(
       lines.push(`${sub.status === "done" ? "☑️" : "▫️"} ${escapeHtml(sub.title)}${who}`);
     }
   }
+  const files = await attachmentsLine(task.parentId ?? task.id);
+  if (files) lines.push(files);
   if (extras.length > 0) lines.push("", ...extras);
 
   const cancel: InlineButton = { text: "↩️ Отменить", callback_data: `c:${task.id}` };

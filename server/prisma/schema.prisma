@@ -245,9 +245,10 @@ model User {
   /// Человек из команды, которым значится эта учётка. Есть не у каждой.
   member        TeamMember?
 
-  ownedLeads   Lead[] @relation("LeadOwner")
-  createdTasks Task[] @relation("TaskAuthor")
-  notes        Note[] @relation("NoteAuthor")
+  ownedLeads   Lead[]           @relation("LeadOwner")
+  createdTasks Task[]           @relation("TaskAuthor")
+  attachments  TaskAttachment[] @relation("AttachmentAuthor")
+  notes        Note[]           @relation("NoteAuthor")
 
   createdAt  DateTime  @default(now()) @map("created_at")
   updatedAt  DateTime  @updatedAt @map("updated_at")
@@ -321,6 +322,28 @@ model TeamMember {
   updatedAt        DateTime @updatedAt @map("updated_at")
 
   @@map("team_members")
+}
+
+/// Файл к задаче: скриншот бага, документ или голосовое от клиента. Чаще всего приходит
+/// из телеграма вместе с поручением. Сам файл лежит на диске в UPLOAD_DIR/attachments,
+/// под случайным именем: исходное бывает каким угодно, и в путь его пускать нельзя.
+/// Отдаётся только через API тем, кому видна задача: в нём бывают данные клиентов.
+model TaskAttachment {
+  id          String   @id @default(uuid()) @db.Uuid
+  taskId      String   @map("task_id") @db.Uuid
+  task        Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  /// Имя для человека: под ним файл и скачивается.
+  fileName    String   @map("file_name")
+  mimeType    String   @map("mime_type")
+  size        Int
+  /// Имя на диске. Уникально, поэтому запись и файл однозначно находят друг друга.
+  storageKey  String   @unique @map("storage_key")
+  createdById String?  @map("created_by_id") @db.Uuid
+  createdBy   User?    @relation("AttachmentAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([taskId])
+  @@map("task_attachments")
 }
 
 /// Кто, что и когда изменил.
@@ -686,6 +709,8 @@ model Task {
   developers  String[]
   createdById String?  @map("created_by_id") @db.Uuid
   createdBy   User?    @relation("TaskAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+
+  attachments TaskAttachment[]
 
   dueAt       DateTime? @map("due_at")
   completedAt DateTime? @map("completed_at")
