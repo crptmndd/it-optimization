@@ -125,9 +125,17 @@ export interface TaskGroup {
 const LIST_LIMIT = 30;
 const BUTTONS_PER_ROW = 6;
 
+/**
+ * Откуда список: «мои задачи» (`/tasks`), вечерние сроки или ответ на вопрос. Едет в
+ * кнопке-номере, чтобы «Назад» из открытой задачи собрал тот же список заново, а не
+ * какой-то другой.
+ */
+export type ListKind = "m" | "r" | "q";
+
 export function renderTaskList(
   header: string,
   groups: TaskGroup[],
+  kind: ListKind = "m",
 ): { text: string; keyboard: Keyboard } {
   const lines = [header];
   const shown: TaskRow[] = [];
@@ -152,7 +160,7 @@ export function renderTaskList(
 
   const numbers: InlineButton[] = shown.map((task, index) => ({
     text: String(index + 1),
-    callback_data: `o:${task.id}`,
+    callback_data: `o:${kind}:${task.id}`,
   }));
   const keyboard: Keyboard = [];
   for (let index = 0; index < numbers.length; index += BUTTONS_PER_ROW) {

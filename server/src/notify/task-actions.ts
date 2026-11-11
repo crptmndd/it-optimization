@@ -11,12 +11,14 @@ import { env } from "../env.js";
 import { afterTaskUpdate, taskKeyboard, taskMessage } from "./notifications.js";
 import { loadCardTask, renderCard } from "./intake/cards.js";
 import { attachmentsLine } from "./intake/files.js";
-import { teamUserOf } from "./team-user.js";
+import { myTasksMessage, renderTaskList, type ListKind } from "./my-tasks.js";
+import { answerQuestion, recallQuestion } from "./questions.js";
+import { deadlinesList } from "./reminders.js";
+import { teamUserOf, type TeamUser } from "./team-user.js";
 import {
   answerCallback,
   editMessage,
   escapeHtml,
-  postMessage,
   type Keyboard,
   type TgCallbackQuery,
 } from "./telegram.js";
@@ -66,7 +68,7 @@ async function noteOf(task: { id: string; description: string | null }) {
  */
 export async function renderTask(
   task: CreatedTask & { project: { title: string } | null },
-  options: { footer?: string; project?: boolean } = {},
+  options: { footer?: string; project?: boolean; back?: ListKind } = {},
 ): Promise<{ text: string; keyboard: Keyboard }> {
   const lines = [
     taskMessage({
@@ -82,7 +84,58 @@ export async function renderTask(
   const files = await attachmentsLine(task.parent?.id ?? task.id);
   if (files) lines.push(files);
   if (options.footer) lines.push("", options.footer);
-  return { text: lines.join("\n"), keyboard: taskKeyboard(task) };
+  const keyboard = taskKeyboard(task);
+  if (options.back) withBack(keyboard, options.back);
+  return { text: lines.join("\n"), keyboard };
+}
+
+/**
+ * «⬅️ Назад» к списку, из которого открыли задачу, — слева от «Открыть задачу». Без
+ * боевого адреса CRM ссылки нет, и кнопка встаёт одна.
+ */
+function withBack(keyboard: Keyboard, kind: ListKind): void {
+  const back = { text: "⬅️ Назад", callback_data: `b:${kind}` };
+  const linkRow = keyboard.find((row) => row.some((button) => "url" in button));
+  if (linkRow) linkRow.unshift(back);
+  else keyboard.push([back]);
+}
+
+const LIST_KINDS: readonly string[] = ["m", "r", "q"];
+
+function listKindOf(value: string | undefined): ListKind {
+  return LIST_KINDS.includes(value ?? "") ? (value as ListKind) : "m";
+}
+
+/** Из какого списка открыта задача — по её кнопке «Назад». Нет кнопки — ни из какого. */
+function backOf(message: NonNullable<TgCallbackQuery["message"]>): ListKind | undefined {
+  const data = message.reply_markup?.inline_keyboard
+    ?.flat()
+    .find((button) => button.callback_data?.startsWith("b:"))?.callback_data;
+  return data ? listKindOf(data.slice(2)) : undefined;
+}
+
+/**
+ * Список заново, в том же сообщении: закрытая только что задача из него уже ушла. Сроки
+ * и «мои задачи» собираются из базы, вопрос — из памяти (`recallQuestion`); забытый
+ * после перезапуска вопрос даёт «Мои задачи».
+ */
+async function listFor(
+  kind: ListKind,
+  viewer: TeamUser["viewer"],
+  chatId: string,
+  messageId: number,
+): Promise<{ text: string; keyboard?: Keyboard }> {
+  if (kind === "r") {
+    return (
+      (await deadlinesList(viewer)) ??
+      renderTaskList("⏰ Сроков на сегодня и завтра больше нет.", [], "r")
+    );
+  }
+  if (kind === "q") {
+    const asked = recallQuestion(chatId, messageId);
+    if (asked) return answerQuestion(viewer, asked);
+  }
+  return myTasksMessage(viewer);
 }
 
 const ACTIONS: Record<string, { input: () => UpdateTaskInput; toast: string }> = {
@@ -106,16 +159,20 @@ function footerOf(code: string, task: { dueAt: Date | null }, who: string): stri
   }
 }
 
-/** `s:<действие>:<id>` — действие с задачей, `o:<id>` — открыть её из списка. */
+/**
+ * `s:<действие>:<id>` — действие с задачей, `o:<список>:<id>` — открыть её из списка
+ * (у старых сообщений без списка: `o:<id>`), `b:<список>` — назад к списку.
+ */
 export function isTaskAction(data: string | undefined): boolean {
-  return Boolean(data && /^[so]:/.test(data));
+  return Boolean(data && /^[sob]:/.test(data));
 }
 
 export async function handleTaskAction(query: TgCallbackQuery, log: Log): Promise<void> {
   const parts = (query.data ?? "").split(":");
   const taskId = parts.at(-1) ?? "";
   const message = query.message;
-  if (!message || !UUID.test(taskId)) {
+  const back = parts[0] === "b";
+  if (!message || (!back && !UUID.test(taskId))) {
     await answerCallback(query.id);
     return;
   }
@@ -126,6 +183,22 @@ export async function handleTaskAction(query: TgCallbackQuery, log: Log): Promis
     return;
   }
 
+  const chatId = String(message.chat.id);
+
+  if (back) {
+    const list = await listFor(
+      listKindOf(parts[1]),
+      presser.viewer,
+      chatId,
+      message.message_id,
+    );
+    await answerCallback(query.id);
+    await editMessage(chatId, message.message_id, list.text, list.keyboard ?? []);
+    return;
+  }
+
+  // Задача открывается на месте списка, а «Назад» возвращает список: так переписка не
+  // растёт от каждой открытой задачи, и путь обратно — одна кнопка.
   if (parts[0] === "o") {
     const task = await prisma.task.findFirst({
       where: reachableTask(taskId, presser.viewer),
@@ -133,8 +206,9 @@ export async function handleTaskAction(query: TgCallbackQuery, log: Log): Promis
     });
     await answerCallback(query.id, task ? undefined : "Эта задача вам недоступна.");
     if (!task) return;
-    const view = await renderTask(task, { project: true });
-    await postMessage(String(message.chat.id), view.text, { keyboard: view.keyboard });
+    const kind = listKindOf(parts.length === 3 ? parts[1] : "m");
+    const view = await renderTask(task, { project: true, back: kind });
+    await editMessage(chatId, message.message_id, view.text, view.keyboard);
     return;
   }
 
@@ -201,11 +275,13 @@ export async function handleTaskAction(query: TgCallbackQuery, log: Log): Promis
     include: TASK_VIEW,
   });
   if (!fresh) return;
-  // Карточка из `/tasks` показывает проект, уведомление — нет. Различаются они только
-  // текстом, поэтому перерисовка смотрит, была ли строка проекта в самом сообщении.
+  // Задача из списка показывает проект и «Назад», уведомление — ни того ни другого.
+  // Различает их кнопка «Назад» в самом сообщении, а у старых — строка проекта.
+  const listKind = backOf(message);
   const view = await renderTask(fresh, {
     footer: footerOf(code, fresh, presser.name),
-    project: Boolean(message.text?.includes("📁 Проект:")),
+    project: Boolean(listKind) || Boolean(message.text?.includes("📁 Проект:")),
+    back: listKind,
   });
   await editMessage(
     String(message.chat.id),

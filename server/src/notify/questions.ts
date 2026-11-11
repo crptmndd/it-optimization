@@ -97,7 +97,7 @@ export async function answerQuestion(
     // бы как «у Тимура всё в порядке», а это может быть неправдой.
     const scope =
       viewer.role === "admin" ? "" : " Вам видны только задачи, в которых вы участвуете.";
-    return renderTaskList(`🔎 ${head}: ничего не нашёл.${scope}`, []);
+    return renderTaskList(`🔎 ${head}: ничего не нашёл.${scope}`, [], "q");
   }
 
   // Когда спрашивают не об одном человеке, в строке важно, на ком задача.
@@ -115,5 +115,29 @@ export async function answerQuestion(
             options: { people, due: query.state === "open" },
           },
         ];
-  return renderTaskList(`🔎 <b>${head}: ${rows.length}</b>`, groups);
+  return renderTaskList(`🔎 <b>${head}: ${rows.length}</b>`, groups, "q");
+}
+
+/**
+ * Какой вопрос стоит за сообщением со списком. «Назад» из открытой задачи задаёт его
+ * снова и показывает свежий ответ. Вопрос в данные кнопки не помещается (64 байта), а
+ * ради кнопки «Назад» таблица в базе была бы лишней, поэтому память здесь. После
+ * перезапуска она пуста, и «Назад» откроет «Мои задачи» — это лучше, чем ошибка.
+ */
+const asked = new Map<string, TaskQuery>();
+const ASKED_LIMIT = 500;
+
+export function rememberQuestion(
+  chatId: string,
+  messageId: number,
+  query: TaskQuery,
+): void {
+  asked.delete(`${chatId}:${messageId}`);
+  asked.set(`${chatId}:${messageId}`, query);
+  // Самый старый уходит первым: Map хранит порядок добавления.
+  if (asked.size > ASKED_LIMIT) asked.delete(asked.keys().next().value!);
+}
+
+export function recallQuestion(chatId: string, messageId: number): TaskQuery | null {
+  return asked.get(`${chatId}:${messageId}`) ?? null;
 }

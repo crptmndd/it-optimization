@@ -27,7 +27,7 @@ import {
   scheduleNotice,
   type Log,
 } from "./cards.js";
-import { answerQuestion } from "../questions.js";
+import { answerQuestion, rememberQuestion } from "../questions.js";
 import { attachFiles, filesOf } from "./files.js";
 import { handleTaskReply } from "./reply.js";
 import {
@@ -371,18 +371,19 @@ async function focusOf(messages: TgMessage[]): Promise<string | null> {
 /** Ответ в чат: первый заменяет «Разбираю…», остальные идут новыми сообщениями. */
 function replier(chatId: string, replyTo: number, placeholder: number | null) {
   let slot = placeholder;
-  return async (text: string, keyboard?: Keyboard): Promise<void> => {
+  /** Номер сообщения, где оказался ответ: по нему «Назад» найдёт заданный вопрос. */
+  return async (text: string, keyboard?: Keyboard): Promise<number> => {
     if (slot !== null) {
       const id = slot;
       slot = null;
       try {
         await editMessage(chatId, id, text, keyboard);
-        return;
+        return id;
       } catch {
         // «Разбираю…» могли удалить: тогда просто новое сообщение.
       }
     }
-    await postMessage(chatId, text, { keyboard, replyTo });
+    return postMessage(chatId, text, { keyboard, replyTo });
   };
 }
 
@@ -449,7 +450,8 @@ async function processBundle(bundle: Bundle, log: Log): Promise<void> {
         return;
       }
       const answer = await answerQuestion(author.viewer, plan.query);
-      await say(answer.text, answer.keyboard);
+      const messageId = await say(answer.text, answer.keyboard);
+      rememberQuestion(bundle.chatId, messageId, plan.query);
       return;
     }
 
