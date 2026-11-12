@@ -279,6 +279,50 @@ export async function collectToday(filter: TodayFilter = {}): Promise<TodaySnaps
 }
 
 /**
+ * Личная утренняя сводка и личный `/today`: только работа этого человека — его задачи и
+ * сроки его проектов. Чужие задачи в ней шумели: каждый листал всю команду в поисках
+ * своего. Админу вдобавок деньги — счета, невыставленные месяцы, продления: их ничья
+ * сводка больше не напомнит. Сотруднику денег нет, как и на экране. Админ без
+ * связанного человека получает одни деньги: задач на нём нет.
+ */
+export async function personalSnapshot(viewer: Viewer): Promise<TodaySnapshot> {
+  const member = memberNameOf(viewer);
+  if (!isAdmin(viewer)) {
+    return member
+      ? collectToday({ developer: member, workOnly: true, viewer })
+      : emptySnapshot();
+  }
+  // Деньги — все, а не суженные до человека: срез по имени оставил бы только продления,
+  // оформленные на него, и счета его проектов, и ничейный домен не напомнил бы никому.
+  const [team, own] = await Promise.all([
+    collectToday(),
+    member ? collectToday({ developer: member }) : emptySnapshot(),
+  ]);
+  return {
+    ...team,
+    tasks: own.tasks,
+    projects: { ...team.projects, urgent: own.projects.urgent, soon: own.projects.soon },
+  };
+}
+
+/**
+ * Утро в общем чате: только ничьи задачи, чтобы их кто-то взял. Свои задачи каждый
+ * получил лично, и повторять их при всех незачем. Ничьих нет — сводка молчит.
+ */
+export function unassignedSnapshot(source: TodaySnapshot): TodaySnapshot {
+  const nobody = (task: TaskFull) => task.developers.length === 0;
+  const empty = emptySnapshot();
+  return {
+    ...empty,
+    tasks: {
+      overdue: source.tasks.overdue.filter(nobody),
+      today: source.tasks.today.filter(nobody),
+      unassigned: source.tasks.unassigned,
+    },
+  };
+}
+
+/**
  * Срез, положенный этому человеку. Админ видит всё и может сузить до любого имени.
  * Сотруднику параметр не важен: только он сам, только работа. Учётка без связанного
  * человека ни на ком не значится, поэтому срез пустой: показать вместо него общий
@@ -293,38 +337,6 @@ export async function collectTodayFor(
   const member = memberNameOf(viewer);
   if (!member) return emptySnapshot();
   return collectToday({ developer: member, workOnly: true, viewer });
-}
-
-/**
- * Что можно показать общему чату: работа сотрудников и задачи, ждущие исполнителя. Там
- * сидят сотрудники, поэтому денег, продлений и работы только админов здесь нет, это
- * уходит админам лично. Человек без учётки считается сотрудником: написать ему лично
- * всё равно некуда.
- */
-export async function teamChatSnapshot(source: TodaySnapshot): Promise<TodaySnapshot> {
-  const admins = await prisma.teamMember.findMany({
-    where: { user: { role: "admin", disabledAt: null } },
-    select: { name: true },
-  });
-  const adminNames = new Set(admins.map((member) => member.name));
-  const hasEmployee = (developers: string[]) =>
-    developers.some((name) => !adminNames.has(name));
-  const visible = (task: TaskFull) =>
-    task.developers.length === 0 || hasEmployee(task.developers);
-
-  const empty = emptySnapshot();
-  return {
-    ...empty,
-    tasks: {
-      overdue: source.tasks.overdue.filter(visible),
-      today: source.tasks.today.filter(visible),
-      unassigned: source.tasks.unassigned,
-    },
-    projects: {
-      ...empty.projects,
-      urgent: source.projects.urgent.filter((project) => hasEmployee(project.developers)),
-    },
-  };
 }
 
 function emptySnapshot(): TodaySnapshot {

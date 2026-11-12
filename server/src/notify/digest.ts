@@ -1,21 +1,31 @@
 import { formatMoney } from "../crm/currency.js";
 import type { BillDto } from "../crm/projects/bills.js";
+import { WITH_MEMBER } from "../auth/session.js";
+import { memberNameOf } from "../crm/access.js";
 import {
   collectToday,
   isQuietSnapshot,
-  teamChatSnapshot,
+  personalSnapshot,
+  unassignedSnapshot,
   type TodaySnapshot,
 } from "../crm/today.js";
+import { prisma } from "../db.js";
 import { env } from "../env.js";
-import { notifyAdmins } from "./notifications.js";
-import { escapeHtml, fitMessage, sendMessage, TelegramError } from "./telegram.js";
+import { isPrivateChat } from "./notifications.js";
+import {
+  escapeHtml,
+  fitMessage,
+  sendMessage,
+  TelegramError,
+  trySendMessage,
+} from "./telegram.js";
 import { daysOverdue, daysUntil, periodTitle, pluralDays } from "./zone.js";
 
 /**
- * Утренняя сводка. Админы получают полную лично: в ней деньги, продления и вся работа
- * команды. В общий чат уходит та же сводка из меньшего снимка, `teamChatSnapshot`:
- * только работа сотрудников. Личный срез сотрудника бывает только по запросу, `/today`
- * в своём чате.
+ * Утренняя сводка. Каждый, кто подключил бота, получает лично только свою работу: свои
+ * задачи и сроки своих проектов, а админ — ещё и деньги (счета, невыставленные месяцы,
+ * продления). Так хотел владелец: в общей сводке каждый листал всю команду в поисках
+ * своего. В общий чат утром уходят только ничьи задачи, чтобы их кто-то взял.
  *
  * Если напоминать не о чем, сообщение не отправляется вовсе. Ежедневное «всё
  * чисто» приучает не открывать бота, и тогда важное сообщение тоже пролистают.
@@ -178,19 +188,43 @@ export async function buildDigest(source?: TodaySnapshot): Promise<string | null
   );
 }
 
-/** Отправляет полную сводку админам лично и урезанную в общий чат. */
+/**
+ * Каждому, кто подключил бота, — лично его сводка (`personalSnapshot`), в общий чат —
+ * только ничьи задачи. Один заблокировавший бота не должен оставить без сводки
+ * остальных, поэтому сбой одного только пишется в журнал.
+ */
 export async function sendMorningDigest(log: Log): Promise<void> {
-  const snapshot = await collectToday();
+  const users = await prisma.user.findMany({
+    where: {
+      disabledAt: null,
+      telegramChatId: { not: null },
+      role: { in: ["admin", "employee"] },
+    },
+    include: WITH_MEMBER,
+  });
 
-  const full = await buildDigest(snapshot);
-  if (full) await notifyAdmins(full, log);
-
-  if (!env.TELEGRAM_TEAM_CHAT_ID) {
-    log.warn({}, "TELEGRAM_TEAM_CHAT_ID не задан — сводку слать некуда");
-    return;
+  let sent = 0;
+  for (const user of users) {
+    const chatId = user.telegramChatId;
+    if (!chatId || !isPrivateChat(chatId)) continue;
+    const text = await buildDigest(
+      await personalSnapshot({
+        id: user.id,
+        role: user.role,
+        memberName: memberNameOf(user),
+      }),
+    );
+    if (!text) continue;
+    try {
+      if (await trySendMessage(chatId, text, log)) sent += 1;
+    } catch (cause) {
+      log.warn({ err: cause, chatId }, "личная сводка не доставлена");
+    }
   }
+  if (sent > 0) log.info({ sent }, "утренняя сводка разослана лично");
 
-  const text = await buildDigest(await teamChatSnapshot(snapshot));
+  if (!env.TELEGRAM_TEAM_CHAT_ID) return;
+  const text = await buildDigest(unassignedSnapshot(await collectToday()));
   if (!text) return;
 
   try {

@@ -1,7 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { WITH_MEMBER } from "../auth/session.js";
 import { memberNameOf } from "../crm/access.js";
-import { collectToday, collectTodayFor, teamChatSnapshot } from "../crm/today.js";
+import { collectToday, personalSnapshot, unassignedSnapshot } from "../crm/today.js";
 import { prisma } from "../db.js";
 import { canIntake, env } from "../env.js";
 import { buildDigest } from "./digest.js";
@@ -62,7 +62,7 @@ const INTAKE_HELP = canIntake
   : [];
 
 const HELP = [
-  "Я напоминаю о задачах, сроках и деньгах: сотрудникам в общем чате, админам лично.",
+  "Я напоминаю о задачах и сроках — каждому лично о его работе.",
   "",
   ...INTAKE_HELP,
   "<b>/tasks</b> — все ваши открытые задачи",
@@ -71,8 +71,8 @@ const HELP = [
   "<b>/chatid</b> — идентификатор этого чата",
   "<b>/stop</b> — отвязать этот чат от учётки",
   "",
-  "Каждое утро пишу в общий чат просроченное и запланированное на сегодня,",
-  "а админам лично полную сводку.",
+  "Каждое утро пишу каждому лично его просроченное и задачи на сегодня,",
+  "а в общий чат — задачи без исполнителя.",
   "Если писать не о чем — молчу.",
 ].join("\n");
 
@@ -160,8 +160,8 @@ async function linkByCode(
   log.info({ email: user.email }, "телеграм привязан");
   const next =
     user.role === "admin"
-      ? "Счета, сводка, новые проекты и ваши задачи будут приходить сюда."
-      : "Команда /today покажет здесь вашу работу, а задачи приходят в общий чат.";
+      ? "Утренняя сводка по вашим задачам и деньгам, счета, новые проекты и ваши задачи будут приходить сюда."
+      : "Утренняя сводка по вашим задачам, новые задачи и напоминания о сроках будут приходить сюда.";
   await trySendMessage(
     chatId,
     `Готово, ${escapeHtml(user.name ?? user.email)}. Чат привязан. ${next}\n\n${HELP}`,
@@ -265,9 +265,10 @@ async function handleCommand(
   }
 
   if (command === "/today") {
-    // Общий чат получает общую сводку, кто бы ни спросил: утром туда приходит она же.
+    // В общем чате — то же, что туда приходит утром: только ничьи задачи. Своё каждый
+    // смотрит в личке, где сводка его собственная.
     if (chatId === env.TELEGRAM_TEAM_CHAT_ID) {
-      const digest = await buildDigest(await teamChatSnapshot(await collectToday()));
+      const digest = await buildDigest(unassignedSnapshot(await collectToday()));
       await trySendMessage(chatId, digest ?? NOTHING_BURNS, log);
       return;
     }
@@ -287,8 +288,9 @@ async function handleCommand(
       return;
     }
 
+    // Та же сводка, что приходит утром: свои задачи и проекты, админу ещё деньги.
     const digest = await buildDigest(
-      await collectTodayFor({ id: user!.id, role, memberName: memberNameOf(user!) }),
+      await personalSnapshot({ id: user!.id, role, memberName: memberNameOf(user!) }),
     );
     await trySendMessage(chatId, digest ?? NOTHING_BURNS, log);
     return;
