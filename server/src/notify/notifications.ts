@@ -206,33 +206,46 @@ export function taskButton(
   return { text: "Открыть задачу", url: `${origin}/#/tasks?open=${id}` };
 }
 
-/**
- * Кнопки под сообщением о задаче: закрыть, взять в работу, перенести на завтра — не
- * открывая CRM. Нажимает кто угодно из чата, а право проверяется при нажатии тем же
- * правилом, что и правка в CRM (`notify/task-actions.ts`). Закрытой задаче остаётся
- * только «Вернуть в работу»: случайное «Готово» должно отменяться там же, где нажато.
- */
-export function taskKeyboard(task: {
+interface KeyboardTask {
   id: string;
   status: string;
   parent?: { id: string } | null;
-}): Keyboard {
-  // У подзадачи в CRM только «сделано» и «не сделано», срока на ней не видно: ей одна
-  // кнопка, иначе нажатие меняло бы то, чего в карточке нет.
-  const subtask = Boolean(task.parent);
-  const rows: Keyboard = isClosed(task.status)
-    ? [[{ text: "↩️ Вернуть в работу", callback_data: `s:back:${task.id}` }]]
-    : [
-        [
-          { text: "✅ Готово", callback_data: `s:done:${task.id}` },
-          ...(task.status === "in_progress" || subtask
-            ? []
-            : [{ text: "▶️ В работу", callback_data: `s:work:${task.id}` }]),
-          ...(subtask
-            ? []
-            : [{ text: "📅 На завтра", callback_data: `s:tmrw:${task.id}` }]),
-        ],
-      ];
+}
+
+/**
+ * Действия с задачей без открытия CRM: закрыть, взять в работу, сменить срок, прикрепить
+ * файл. Нажимает кто угодно из чата, а право проверяется при нажатии тем же правилом, что
+ * и правка в CRM (`notify/task-actions.ts`). Закрытой задаче вместо «Готово» —
+ * «Вернуть в работу»: случайное нажатие должно отменяться там же, где сделано.
+ *
+ * Срок и файл просят ответа текстом или файлом (`notify/pending.ts`), поэтому это не
+ * мгновенные кнопки: «На завтра» умел только одно, а срок бывает любым.
+ */
+export function taskActionRows(task: KeyboardTask): Keyboard {
+  const closed = isClosed(task.status);
+  const status = closed
+    ? { text: "↩️ Вернуть в работу", callback_data: `s:back:${task.id}` }
+    : { text: "✅ Готово", callback_data: `s:done:${task.id}` };
+  // У подзадачи в CRM только «сделано» и «не сделано», срока и файлов у неё не видно:
+  // ей одна кнопка, иначе нажатие меняло бы то, чего в карточке нет.
+  if (task.parent) return [[status]];
+
+  const first = [status];
+  if (!closed && task.status !== "in_progress") {
+    first.push({ text: "▶️ В работу", callback_data: `s:work:${task.id}` });
+  }
+  const file = { text: "📎 Прикрепить файл", callback_data: `s:file:${task.id}` };
+  return [
+    first,
+    closed
+      ? [file]
+      : [{ text: "📅 Изменить срок", callback_data: `s:due:${task.id}` }, file],
+  ];
+}
+
+/** Действия и ссылка в карточку CRM последним рядом. */
+export function taskKeyboard(task: KeyboardTask): Keyboard {
+  const rows = taskActionRows(task);
   // Своей карточки у подзадачи нет, открывается родитель.
   const link = taskButton(task.parent?.id ?? task.id, env.CRM_ORIGIN);
   if (link) rows.push([link]);

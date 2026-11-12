@@ -14,7 +14,7 @@ import { TASK_RELATIONS } from "../../crm/tasks/dto.js";
 import { isClosed, reachableTask } from "../../crm/tasks/service.js";
 import { prisma } from "../../db.js";
 import { env } from "../../env.js";
-import { notifyTask, taskKeyboard, taskMessage } from "../notifications.js";
+import { notifyTask, taskActionRows, taskButton, taskMessage } from "../notifications.js";
 import {
   answerCallback,
   editMessage,
@@ -167,14 +167,15 @@ export async function renderCard(
     };
   }
 
-  // Первым рядом — те же «Готово / В работу / На завтра», что под уведомлением: карточку
-  // видит автор, и задачу, поставленную себе, закрывают отсюда же. Ссылка в CRM — внизу.
-  const [actions = [], ...rest] = taskKeyboard(task);
+  // Сверху — те же действия, что под уведомлением: карточку видит автор, и задачу,
+  // поставленную себе, закрывают отсюда же. Ниже свои кнопки карточки, ссылка в CRM — внизу.
   const keyboard: Keyboard = [
-    actions,
+    ...taskActionRows(task),
     [{ text: "👤 Исполнители", callback_data: `p:${task.id}` }, cancel],
-    ...rest,
   ];
+  // У подзадачи своей карточки в CRM нет, открывается родитель.
+  const link = taskButton(task.parent?.id ?? task.id, env.CRM_ORIGIN);
+  if (link) keyboard.push([link]);
   return { text: lines.join("\n"), keyboard };
 }
 

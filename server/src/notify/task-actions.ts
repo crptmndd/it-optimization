@@ -1,19 +1,13 @@
 import { auditAs } from "../audit.js";
-import { TASK_RELATIONS } from "../crm/tasks/dto.js";
-import {
-  reachableTask,
-  updateTask,
-  type CreatedTask,
-  type UpdateTaskInput,
-} from "../crm/tasks/service.js";
+import { reachableTask, updateTask, type UpdateTaskInput } from "../crm/tasks/service.js";
 import { prisma } from "../db.js";
 import { env } from "../env.js";
-import { afterTaskUpdate, taskKeyboard, taskMessage } from "./notifications.js";
-import { loadCardTask, renderCard } from "./intake/cards.js";
-import { attachmentsLine } from "./intake/files.js";
 import { myTasksMessage, renderTaskList, type ListKind } from "./my-tasks.js";
+import { afterTaskUpdate } from "./notifications.js";
+import { askForInput } from "./pending.js";
 import { answerQuestion, recallQuestion } from "./questions.js";
 import { deadlinesList } from "./reminders.js";
+import { listKindOf, refreshTaskMessage, renderTask, TASK_VIEW } from "./task-view.js";
 import { teamUserOf, type TeamUser } from "./team-user.js";
 import {
   answerCallback,
@@ -25,11 +19,11 @@ import {
 import { formatDate, startOfTomorrow } from "./zone.js";
 
 /**
- * Кнопки под сообщениями о задачах: «Готово», «В работу», «На завтра», «Вернуть в
- * работу» и открытие задачи из списка `/tasks`. Правка идёт через `updateTask`, тот же,
- * что у формы CRM: нажать может только тот, кому задача видна в CRM, а колонка, дата
- * закрытия и архив меняются по тем же правилам. После нажатия сообщение перерисовывается
- * из базы, и в общем чате все видят, что задачу уже закрыли.
+ * Кнопки под сообщениями о задачах: «Готово», «В работу», «Вернуть в работу», «Изменить
+ * срок», «Прикрепить файл», открытие задачи из списка и «Назад» к нему. Правка идёт через
+ * `updateTask`, тот же, что у формы CRM: нажать может только тот, кому задача видна в
+ * CRM, а колонка, дата закрытия и архив меняются по тем же правилам. После нажатия
+ * сообщение перерисовывается из базы, и в общем чате все видят, что задачу уже закрыли.
  */
 
 interface Log {
@@ -40,78 +34,11 @@ interface Log {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const TASK_VIEW = {
-  ...TASK_RELATIONS,
-  project: { select: { id: true, title: true } },
-} as const;
-
 /** Конец завтрашнего дня в поясе команды — так срок ставит форма CRM. */
 export function endOfTomorrow(): Date {
   const tomorrow = startOfTomorrow(env.TIMEZONE);
   const after = startOfTomorrow(env.TIMEZONE, new Date(tomorrow.getTime() + 3_600_000));
   return new Date(after.getTime() - 1000);
-}
-
-async function noteOf(task: { id: string; description: string | null }) {
-  const note = await prisma.note.findFirst({
-    where: { entity: "task", entityId: task.id },
-    orderBy: { createdAt: "desc" },
-    select: { body: true },
-  });
-  return note?.body ?? task.description;
-}
-
-/**
- * Задача тем же видом, что и уведомление о ней, плюс строка о последнем действии.
- * Проект показывается только в карточке из `/tasks`: в уведомлении его нет по шаблону
- * владельца, и перерисовка не должна его туда добавлять.
- */
-export async function renderTask(
-  task: CreatedTask & { project: { title: string } | null },
-  options: { footer?: string; project?: boolean; back?: ListKind } = {},
-): Promise<{ text: string; keyboard: Keyboard }> {
-  const lines = [
-    taskMessage({
-      task,
-      note: await noteOf(task),
-      people: task.developers.map(escapeHtml),
-      timeZone: env.TIMEZONE,
-    }),
-  ];
-  if (options.project && task.project) {
-    lines.push(`📁 Проект: ${escapeHtml(task.project.title)}`);
-  }
-  const files = await attachmentsLine(task.parent?.id ?? task.id);
-  if (files) lines.push(files);
-  if (options.footer) lines.push("", options.footer);
-  const keyboard = taskKeyboard(task);
-  if (options.back) withBack(keyboard, options.back);
-  return { text: lines.join("\n"), keyboard };
-}
-
-/**
- * «⬅️ Назад» к списку, из которого открыли задачу, — слева от «Открыть задачу». Без
- * боевого адреса CRM ссылки нет, и кнопка встаёт одна.
- */
-function withBack(keyboard: Keyboard, kind: ListKind): void {
-  const back = { text: "⬅️ Назад", callback_data: `b:${kind}` };
-  const linkRow = keyboard.find((row) => row.some((button) => "url" in button));
-  if (linkRow) linkRow.unshift(back);
-  else keyboard.push([back]);
-}
-
-const LIST_KINDS: readonly string[] = ["m", "r", "q"];
-
-function listKindOf(value: string | undefined): ListKind {
-  return LIST_KINDS.includes(value ?? "") ? (value as ListKind) : "m";
-}
-
-/** Из какого списка открыта задача — по её кнопке «Назад». Нет кнопки — ни из какого. */
-function backOf(message: NonNullable<TgCallbackQuery["message"]>): ListKind | undefined {
-  const data = message.reply_markup?.inline_keyboard
-    ?.flat()
-    .find((button) => button.callback_data?.startsWith("b:"))?.callback_data;
-  return data ? listKindOf(data.slice(2)) : undefined;
 }
 
 /**
@@ -138,6 +65,10 @@ async function listFor(
   return myTasksMessage(viewer);
 }
 
+/**
+ * Мгновенные действия. `tmrw` — «На завтра» у сообщений, отправленных до «Изменить
+ * срок»: их кнопки продолжают работать.
+ */
 const ACTIONS: Record<string, { input: () => UpdateTaskInput; toast: string }> = {
   done: { input: () => ({ status: "done" }), toast: "Задача закрыта" },
   work: { input: () => ({ status: "in_progress" }), toast: "Задача в работе" },
@@ -213,6 +144,32 @@ export async function handleTaskAction(query: TgCallbackQuery, log: Log): Promis
   }
 
   const code = parts[1] ?? "";
+
+  // Срок и файл не меняют задачу сразу: бот спрашивает, ответ разбирает `pending.ts`.
+  if (code === "due" || code === "file") {
+    const task = await prisma.task.count({
+      where: reachableTask(taskId, presser.viewer),
+    });
+    if (!task) {
+      await answerCallback(query.id, "Эта задача вам недоступна.");
+      return;
+    }
+    await answerCallback(query.id);
+    await askForInput({
+      kind: code,
+      taskId,
+      chatId,
+      telegramId: query.from.id,
+      name: presser.name,
+      source: {
+        messageId: message.message_id,
+        markup: message.reply_markup,
+        text: message.text,
+      },
+    });
+    return;
+  }
+
   const action = ACTIONS[code];
   if (!action) {
     await answerCallback(query.id);
@@ -251,42 +208,12 @@ export async function handleTaskAction(query: TgCallbackQuery, log: Log): Promis
   );
 
   await answerCallback(query.id, action.toast);
-
-  // Карточка поставленной задачи остаётся карточкой: с «Исполнителями» и «Отменить», а
-  // строка о действии встаёт вниз. Узнаётся она по своей кнопке «Отменить» (`c:`).
-  const isCard = message.reply_markup?.inline_keyboard
-    ?.flat()
-    .some((button) => button.callback_data?.startsWith("c:"));
-  if (isCard) {
-    const card = await loadCardTask(task.id);
-    if (!card) return;
-    const view = await renderCard(card, "main", [footerOf(code, card, presser.name)]);
-    await editMessage(
-      String(message.chat.id),
-      message.message_id,
-      view.text,
-      view.keyboard,
-    );
-    return;
-  }
-
-  const fresh = await prisma.task.findUnique({
-    where: { id: task.id },
-    include: TASK_VIEW,
+  await refreshTaskMessage({
+    chatId,
+    messageId: message.message_id,
+    markup: message.reply_markup,
+    text: message.text,
+    taskId: task.id,
+    footer: footerOf(code, task, presser.name),
   });
-  if (!fresh) return;
-  // Задача из списка показывает проект и «Назад», уведомление — ни того ни другого.
-  // Различает их кнопка «Назад» в самом сообщении, а у старых — строка проекта.
-  const listKind = backOf(message);
-  const view = await renderTask(fresh, {
-    footer: footerOf(code, fresh, presser.name),
-    project: Boolean(listKind) || Boolean(message.text?.includes("📁 Проект:")),
-    back: listKind,
-  });
-  await editMessage(
-    String(message.chat.id),
-    message.message_id,
-    view.text,
-    view.keyboard,
-  );
 }

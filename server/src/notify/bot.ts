@@ -6,6 +6,7 @@ import { prisma } from "../db.js";
 import { canIntake, env } from "../env.js";
 import { buildDigest } from "./digest.js";
 import { myTasksMessage } from "./my-tasks.js";
+import { consumePending } from "./pending.js";
 import { handleTaskAction, isTaskAction } from "./task-actions.js";
 import { handleCardAction } from "./intake/cards.js";
 import {
@@ -367,6 +368,10 @@ async function handleUpdate(update: TelegramUpdate, log: Log): Promise<void> {
   const chatId = String(message.chat.id);
   const text = message.text;
   const command = text?.startsWith("/") && !isTaskCommand(text);
+
+  // Ответ на «Когда срок?» или «Пришлите файл» — первым: иначе «до ноября» в личке
+  // стало бы новой задачей.
+  if (await consumePending(message, log)) return;
 
   if (canIntake && isBareTask(message)) {
     const hint = isPrivateChat(chatId) ? TASK_HINT_PRIVATE : TASK_HINT_GROUP;

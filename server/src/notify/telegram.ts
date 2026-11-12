@@ -176,7 +176,16 @@ export type Keyboard = InlineButton[][];
 export async function postMessage(
   chatId: string,
   text: string,
-  options: { keyboard?: Keyboard; replyTo?: number } = {},
+  options: {
+    keyboard?: Keyboard;
+    replyTo?: number;
+    /**
+     * Открыть у человека ответ на это сообщение, с подсказкой в поле ввода. В группе ответ
+     * на сообщение бота доходит до него и при включённой приватности. `selective` — только
+     * у упомянутых в тексте, а не у всего чата.
+     */
+    forceReply?: string;
+  } = {},
 ): Promise<number> {
   const message = await callBotApi<{ message_id: number }>("sendMessage", {
     chat_id: chatId,
@@ -184,6 +193,13 @@ export async function postMessage(
     parse_mode: "HTML",
     link_preview_options: { is_disabled: true },
     ...(options.keyboard && { reply_markup: { inline_keyboard: options.keyboard } }),
+    ...(options.forceReply && {
+      reply_markup: {
+        force_reply: true,
+        selective: true,
+        input_field_placeholder: options.forceReply.slice(0, 64),
+      },
+    }),
     ...(options.replyTo && {
       reply_parameters: {
         message_id: options.replyTo,
