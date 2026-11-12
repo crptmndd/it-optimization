@@ -122,10 +122,9 @@ export function TaskCard({
       onClick={onOpen}
       className="flex w-full flex-col gap-2 p-4 text-left"
     >
-      {/* Слева сверху: файлы, потом статус или проект. */}
+      {/* Сверху: слева статус или проект, справа число файлов. */}
       {top && (
         <span className="flex min-w-0 items-center gap-2">
-          <FileCount count={files} />
           {badge && (
             <Badge tone={badge.tone} className="text-[13px]">
               {badge.label}
@@ -136,6 +135,9 @@ export function TaskCard({
               {task.project.title}
             </span>
           )}
+          <span className="ml-auto">
+            <FileCount count={files} />
+          </span>
         </span>
       )}
 
