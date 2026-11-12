@@ -1,4 +1,4 @@
-import { ListChecks } from "lucide-react";
+import { ListChecks, Paperclip } from "lucide-react";
 import { columnOf, useColumns, type BoardColumnDef } from "@/api/columns";
 import {
   TASK_PRIORITIES,
@@ -67,6 +67,29 @@ export function SubtaskCount({ subtasks }: { subtasks: SubtaskProgress }) {
 }
 
 /**
+ * Сколько файлов у задачи. Скриншоты приходят из телеграма, и без этой метки о них не
+ * узнать, не открыв задачу. `compact` — для строки списка, где места на слово нет.
+ */
+export function FileCount({
+  count,
+  compact = false,
+}: {
+  count: number;
+  compact?: boolean;
+}) {
+  if (count <= 0) return null;
+  return (
+    <span
+      title={`Файлов: ${count}`}
+      className="text-muted-foreground flex shrink-0 items-center gap-1 text-[13px] font-semibold tabular-nums"
+    >
+      <Paperclip size={14} strokeWidth={2.25} />
+      {compact ? count : `Файлов: ${count}`}
+    </span>
+  );
+}
+
+/**
  * Карточка задачи на доске: название, проект, срок и люди. Остальное — внутри.
  *
  * `showStatus` — для доски по проектам: проект там уже в заголовке колонки, и вместо его
@@ -86,6 +109,8 @@ export function TaskCard({
   const closedOn = done && task.completedAt ? formatDate(task.completedAt) : null;
   const columns = useColumns("task");
   const badge = showStatus ? statusBadge(task, columns) : null;
+  const files = task.files ?? 0;
+  const top = Boolean(badge) || (!showStatus && Boolean(task.project)) || files > 0;
   const hasFooter =
     deadline || closedOn || task.developers.length > 0 || task.subtasks.total > 0;
 
@@ -97,14 +122,20 @@ export function TaskCard({
       onClick={onOpen}
       className="flex w-full flex-col gap-2 p-4 text-left"
     >
-      {badge && (
-        <Badge tone={badge.tone} className="self-start text-[13px]">
-          {badge.label}
-        </Badge>
-      )}
-      {!showStatus && task.project && (
-        <span className="text-muted-foreground truncate text-[13px] font-medium">
-          {task.project.title}
+      {/* Слева сверху: файлы, потом статус или проект. */}
+      {top && (
+        <span className="flex min-w-0 items-center gap-2">
+          <FileCount count={files} />
+          {badge && (
+            <Badge tone={badge.tone} className="text-[13px]">
+              {badge.label}
+            </Badge>
+          )}
+          {!showStatus && task.project && (
+            <span className="text-muted-foreground min-w-0 truncate text-[13px] font-medium">
+              {task.project.title}
+            </span>
+          )}
         </span>
       )}
 

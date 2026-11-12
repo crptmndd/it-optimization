@@ -145,6 +145,7 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
     if (!isClosed(task.status)) {
       notifyTaskInBackground(task, task.developers, request.log, {
         teamChat: input.notifyChat !== false,
+        skip: request.user!.memberName,
       });
     }
 

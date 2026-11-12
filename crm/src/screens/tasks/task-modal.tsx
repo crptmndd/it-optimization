@@ -40,6 +40,7 @@ export function TaskModal({
   onDelete,
   archive,
   onProgress,
+  onFiles,
 }: {
   title: string;
   submitLabel?: string;
@@ -62,6 +63,8 @@ export function TaskModal({
   /** Ручной архив, только у админа: одно из двух, в зависимости от того, где задача. */
   archive?: { label: "В архив" | "Вернуть из архива"; run: () => Promise<void> };
   onProgress: (taskId: string, progress: SubtaskProgress) => void;
+  /** Число файлов после загрузки или удаления: карточка за окном показывает «Файлов: 2». */
+  onFiles?: (taskId: string, files: number) => void;
 }) {
   const [values, setValues] = useState<TaskFormValues>(initial);
   const [error, setError] = useState<string | null>(notice);
@@ -193,7 +196,7 @@ export function TaskModal({
 
         {taskId && attachments && (
           <div className="mt-5">
-            <AttachmentsPanel taskId={taskId} load={attachments} />
+            <AttachmentsPanel taskId={taskId} load={attachments} onCount={onFiles} />
           </div>
         )}
 

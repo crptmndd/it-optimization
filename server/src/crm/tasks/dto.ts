@@ -147,6 +147,8 @@ export interface TaskDto {
   parentId: string | null;
   /** Прогресс «2 из 5» для карточки и строки списка. Удалённые не считаются. */
   subtasks: { total: number; done: number };
+  /** Сколько файлов прикреплено. У подзадачи ноль: её файлы лежат у родителя. */
+  files: number;
   developers: string[];
   dueAt: string | null;
   completedAt: string | null;
@@ -171,6 +173,7 @@ export interface TaskDetailDto extends TaskDto {
 type TaskWithRelations = Task & {
   project: Pick<Project, "id" | "title"> | null;
   subtasks: Pick<Task, "status">[];
+  _count?: { attachments: number };
 };
 
 type TaskWithSubtasks = Omit<TaskWithRelations, "subtasks"> & {
@@ -194,6 +197,7 @@ export function toTaskDto(item: TaskWithRelations): TaskDto {
       total: item.subtasks.length,
       done: item.subtasks.filter((subtask) => subtask.status === "done").length,
     },
+    files: item._count?.attachments ?? 0,
     developers: item.developers,
     dueAt: item.dueAt?.toISOString() ?? null,
     completedAt: item.completedAt?.toISOString() ?? null,
@@ -222,6 +226,8 @@ export const TASK_RELATIONS = {
   /** Нужен сообщениям бота: подзадача называет родителя и ведёт на него. */
   parent: { select: { id: true, title: true } },
   subtasks: { where: { deletedAt: null }, select: { status: true } },
+  /** «Файлов: 2» на карточке: считается в том же запросе, без второго похода в базу. */
+  _count: { select: { attachments: true } },
 } as const;
 
 /** Второй ключ: при равном времени порядок строк менялся бы от запроса к запросу. */

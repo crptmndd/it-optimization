@@ -56,6 +56,8 @@ export interface Task {
   parentId: string | null;
   /** Прогресс для карточки и строки списка. Удалённые не считаются. */
   subtasks: SubtaskProgress;
+  /** Сколько файлов прикреплено. Нет у старого API во время выката. */
+  files?: number;
   developers: string[];
   dueAt: string | null;
   completedAt: string | null;

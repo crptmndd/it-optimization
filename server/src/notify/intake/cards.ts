@@ -212,7 +212,7 @@ async function sendNotice(notice: Notice, log: Log): Promise<void> {
   // Все исполнители — это автор и те, кому уже пишут: будить некого. Задача без
   // исполнителя уходит в общий чат, как и поставленная в CRM: там её кто-то возьмёт.
   if (task.developers.length > 0 && people.length === 0) return;
-  await notifyTask(task, people, log, { teamChat: true });
+  await notifyTask(task, people, log, { teamChat: true, skip: notice.author });
 }
 
 function fire(taskId: string): Promise<void> {

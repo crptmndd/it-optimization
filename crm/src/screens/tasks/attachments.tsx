@@ -31,8 +31,11 @@ function messageOf(cause: unknown, fallback: string): string {
 export function AttachmentsPanel({
   taskId,
   load,
+  onCount,
 }: {
   taskId: string;
+  /** Сколько файлов стало: метке на карточке за окном незачем ждать перезагрузки. */
+  onCount?: (taskId: string, count: number) => void;
   /** Из той же карточки, что подзадачи и заметки: окно делает один запрос. */
   load: Promise<TaskAttachment[]>;
 }) {
@@ -82,6 +85,10 @@ export function AttachmentsPanel({
       setError(messageOf(cause, "Не удалось удалить"));
     }
   }
+
+  useEffect(() => {
+    if (list) onCount?.(taskId, list.length);
+  }, [list, taskId, onCount]);
 
   function onDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();

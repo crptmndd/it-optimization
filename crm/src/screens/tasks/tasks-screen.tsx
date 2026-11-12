@@ -45,7 +45,14 @@ import { daysFromToday, describeDeadline, formatDate } from "@/lib/dates";
 import { cn } from "@/lib/cn";
 import { ProjectBoard } from "./project-board";
 import { saveDraftSubtasks, type DraftSubtask } from "./subtasks";
-import { byUrgency, isClosed, statusBadge, SubtaskCount, TaskCard } from "./task-card";
+import {
+  byUrgency,
+  FileCount,
+  isClosed,
+  statusBadge,
+  SubtaskCount,
+  TaskCard,
+} from "./task-card";
 import {
   emptyTaskValues,
   taskToValues,
@@ -332,6 +339,14 @@ export function TasksScreen() {
       (current) =>
         current?.map((task) => (task.id === taskId ? { ...task, subtasks } : task)) ??
         null,
+    );
+  }, []);
+
+  /** Файлы добавили или удалили в окне — метка на карточке меняется сразу. */
+  const showFiles = useCallback((taskId: string, files: number) => {
+    setTasks(
+      (current) =>
+        current?.map((task) => (task.id === taskId ? { ...task, files } : task)) ?? null,
     );
   }, []);
 
@@ -687,6 +702,7 @@ export function TasksScreen() {
                   }
                 : {}))}
           onProgress={showProgress}
+          onFiles={showFiles}
         />
       )}
     </section>
@@ -755,6 +771,7 @@ function TaskRow({
             {task.title}
           </span>
           <SubtaskCount subtasks={task.subtasks} />
+          <FileCount count={task.files ?? 0} compact />
           {badge && (
             <Badge tone={badge.tone} className="hidden xl:inline-flex">
               {badge.label}

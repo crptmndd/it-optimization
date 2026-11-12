@@ -60,13 +60,26 @@ export async function notifyAdmins(
   for (const chatId of chats) await sendPrivate(chatId, text, log, button);
 }
 
-/** Люди из списка с учёткой админа. Значение — их чат, если бот подключён. */
-async function adminChatsOf(people: string[]): Promise<Map<string, string | null>> {
+/**
+ * Люди из списка с действующей учёткой: админ ли он и его личный чат, если бот подключён.
+ * Человек без учётки сюда не попадает: писать ему лично некуда, остаётся тэг в чате.
+ */
+async function accountChatsOf(
+  people: string[],
+): Promise<Map<string, { admin: boolean; chatId: string | null }>> {
   const rows = await prisma.teamMember.findMany({
-    where: { name: { in: people }, user: { role: "admin", disabledAt: null } },
-    select: { name: true, user: { select: { telegramChatId: true } } },
+    where: {
+      name: { in: people },
+      user: { role: { in: ["admin", "employee"] }, disabledAt: null },
+    },
+    select: { name: true, user: { select: { role: true, telegramChatId: true } } },
   });
-  return new Map(rows.map((row) => [row.name, row.user?.telegramChatId ?? null]));
+  return new Map(
+    rows.map((row) => [
+      row.name,
+      { admin: row.user?.role === "admin", chatId: row.user?.telegramChatId ?? null },
+    ]),
+  );
 }
 
 /** Сообщение о новом лиде. Лиды закрыты для сотрудника, а в сообщении контакт человека. */
@@ -253,17 +266,22 @@ export function taskKeyboard(task: KeyboardTask): Keyboard {
 }
 
 /**
- * Админу лично, остальным тэгом в общем чате. Работу админа в чате не показываем, поэтому
- * задача только на админов туда не идёт, а в общей отмечены только сотрудники. Задача без
- * исполнителя остаётся в чате: там её кто-то возьмёт.
- */
-/**
+ * Каждому, на кого поставили задачу, — лично, если он подключил бота, и админу, и
+ * сотруднику: тэг в общем чате теряется среди чужих сообщений, а личное видно сразу.
+ * Сотрудники вдобавок отмечены в общем чате, как раньше. Работу админа в чате не
+ * показываем, поэтому задача только на админов туда не идёт. Задача без исполнителя
+ * остаётся в чате: там её кто-то возьмёт.
+ *
  * `teamChat: false` — галочка «Уведомление в общий чат» снята при постановке: задачу
- * обсудили лично, и тэг в чате только шумит. Выключает только чат: админу лично о его
- * задаче бот пишет по-прежнему, это его собственная работа, а не оповещение команды.
+ * обсудили лично, и тэг в чате только шумит. Выключает только чат: лично бот пишет
+ * по-прежнему, это собственная работа человека, а не оповещение команды.
+ *
+ * `skip` — кто поставил задачу. Лично ему не пишем: он её только что видел. Тэг в общем
+ * чате остаётся как был.
  */
 export interface TaskNotifyOptions {
   teamChat?: boolean;
+  skip?: string | null;
 }
 
 /**
@@ -287,8 +305,8 @@ export async function notifyTask(
 ): Promise<void> {
   if (!canNotify) return;
 
-  const admins = await adminChatsOf(people);
-  const others = people.filter((name) => !admins.has(name));
+  const accounts = await accountChatsOf(people);
+  const others = people.filter((name) => !accounts.get(name)?.admin);
   const note = await taskNote(task);
   const button = taskKeyboard(task);
 
@@ -298,16 +316,19 @@ export async function notifyTask(
     people: task.developers.map(escapeHtml),
     timeZone: env.TIMEZONE,
   });
-  for (const [name, chatId] of admins) {
-    if (!chatId || !isPrivateChat(chatId)) {
-      log.warn({ name }, "админ не подключил бота, задача ему не отправлена");
+  for (const [name, account] of accounts) {
+    if (name === options.skip) continue;
+    if (!account.chatId || !isPrivateChat(account.chatId)) {
+      // Админу больше ничего не придёт: в общий чат его работа не идёт. Сотрудника
+      // разбудит тэг в чате, поэтому о нём не пишем.
+      if (account.admin) {
+        log.warn({ name }, "админ не подключил бота, задача ему не отправлена");
+      }
       continue;
     }
-    await sendPrivate(chatId, privateText, log, button);
+    await sendPrivate(account.chatId, privateText, log, button);
   }
 
-  // Запасного пути «всем лично», как у админов, нет намеренно: тэг имеет смысл только
-  // там, где его видят все, а личное сообщение о чужой задаче никому не нужно.
   const chatId = env.TELEGRAM_TEAM_CHAT_ID;
   if (!chatId) return;
   if (options.teamChat === false) return;
@@ -399,7 +420,10 @@ export function afterTaskUpdate(
   const { existing, task, actor } = change;
   const added = task.developers.filter((name) => !existing.developers.includes(name));
   if (added.length > 0 && !isClosed(task.status)) {
-    notifyTaskInBackground(task, added, log, { teamChat: change.teamChat !== false });
+    notifyTaskInBackground(task, added, log, {
+      teamChat: change.teamChat !== false,
+      skip: actor.name,
+    });
   }
 
   const closedNow = !isClosed(existing.status) && isClosed(task.status);
@@ -451,9 +475,10 @@ async function notifyProjectAssigned(
 
   const text = projectMessage(project, env.TIMEZONE);
   const button = projectButton(project.id, env.CRM_ORIGIN);
-  for (const [, chatId] of await adminChatsOf(people)) {
-    if (!chatId || !isPrivateChat(chatId)) continue;
-    await sendPrivate(chatId, text, log, button);
+  // Проект — только админам: в его сообщении клиент, а деньги рядом.
+  for (const [, account] of await accountChatsOf(people)) {
+    if (!account.admin || !account.chatId || !isPrivateChat(account.chatId)) continue;
+    await sendPrivate(account.chatId, text, log, button);
   }
 }
 
