@@ -76,7 +76,7 @@ export function setTelegramLog(log: SlowLog): void {
 }
 
 /** Дольше этого вызов телеграма считается медленным и попадает в журнал. */
-const SLOW_MS = 2_000;
+const SLOW_MS = 1_000;
 let lastCallAt = 0;
 
 /** Ответ и то, шёл ли запрос по уже открытому соединению. */
@@ -185,14 +185,15 @@ export async function callBotApi<T>(
 }
 
 /**
- * Держит одно соединение тёплым: если бот какое-то время молчал, лёгкий `getMe`. Тогда
- * нажатие кнопки после паузы идёт по открытому соединению, а не ждёт нового через туннель.
+ * Держит два соединения тёплыми: если бот какое-то время молчал, два лёгких `getMe`
+ * разом. Два, потому что нажатие кнопки — это ответ на нажатие и правка сообщения
+ * одновременно, и второе иначе ждало бы нового соединения через туннель.
  */
 const WARM_EVERY_MS = 20_000;
 export function keepWarm(): () => void {
   const timer = setInterval(() => {
     if (Date.now() - lastCallAt < WARM_EVERY_MS) return;
-    void callBotApi("getMe").catch(() => {});
+    for (let i = 0; i < 2; i += 1) void callBotApi("getMe").catch(() => {});
   }, WARM_EVERY_MS);
   timer.unref();
   return () => clearInterval(timer);

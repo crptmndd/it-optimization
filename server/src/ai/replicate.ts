@@ -20,7 +20,27 @@ interface Prediction {
   output?: unknown;
   error?: unknown;
   urls?: { get?: string };
+  created_at?: string;
+  started_at?: string;
+  metrics?: { predict_time?: number };
 }
+
+interface ModelLog {
+  warn: (obj: unknown, msg: string) => void;
+}
+
+/** Куда писать о долгих ответах модели: по ним видно, тормозит ли разбор сообщений. */
+let modelLog: ModelLog | null = null;
+export function setModelLog(log: ModelLog): void {
+  modelLog = log;
+}
+
+/**
+ * Дольше этого ответ модели попадает в журнал вместе с разбивкой: сколько предсказание
+ * ждало в очереди Replicate и сколько считалось. Очередь — это холодный старт или нехватка
+ * мощностей у Replicate, счёт — длина ответа и скорость самой модели.
+ */
+const SLOW_MODEL_MS = 4_000;
 
 export class ReplicateError extends Error {
   constructor(
@@ -111,18 +131,42 @@ export async function runPrediction(
   input: Record<string, unknown>,
   deadlineMs: number,
 ): Promise<unknown> {
+  const started = Date.now();
+  const timing: Timing = {};
   try {
-    return await runOnce(target, input, deadlineMs);
+    return await runOnce(target, input, deadlineMs, timing);
   } catch (cause) {
     if (!(cause instanceof ReplicateError) || !cause.transient) throw cause;
-    return runOnce(target, input, deadlineMs);
+    return await runOnce(target, input, deadlineMs, timing);
+  } finally {
+    const ms = Date.now() - started;
+    if (ms > SLOW_MODEL_MS) {
+      modelLog?.warn(
+        { model: "model" in target ? target.model : "whisper", ms, ...timing },
+        "модель отвечала долго",
+      );
+    }
   }
+}
+
+/** Разбивка предсказания: сколько ждало в очереди Replicate и сколько считалось. */
+interface Timing {
+  queueMs?: number;
+  predictMs?: number;
+}
+function readTiming(prediction: Prediction, timing: Timing): void {
+  const created = prediction.created_at ? Date.parse(prediction.created_at) : NaN;
+  const begun = prediction.started_at ? Date.parse(prediction.started_at) : NaN;
+  const predict = prediction.metrics?.predict_time;
+  if (Number.isFinite(begun - created)) timing.queueMs = begun - created;
+  if (typeof predict === "number") timing.predictMs = Math.round(predict * 1000);
 }
 
 async function runOnce(
   target: Target,
   input: Record<string, unknown>,
   deadlineMs: number,
+  timing: Timing,
 ): Promise<unknown> {
   const token = env.REPLICATE_API_TOKEN;
   if (!token) throw new Error("REPLICATE_API_TOKEN не задан");
@@ -169,6 +213,7 @@ async function runOnce(
     );
   }
 
+  readTiming(prediction, timing);
   if (prediction.status !== "succeeded") {
     throw new ReplicateError(
       500,

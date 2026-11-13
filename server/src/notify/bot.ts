@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client";
+import { setModelLog } from "../ai/replicate.js";
 import { WITH_MEMBER } from "../auth/session.js";
 import { memberNameOf } from "../crm/access.js";
 import { collectToday, personalSnapshot, unassignedSnapshot } from "../crm/today.js";
@@ -412,7 +413,7 @@ function kindOf(update: TelegramUpdate): string {
 }
 
 /** Дольше этого обработка апдейта попадает в журнал: так видно, где бот тормозит. */
-const SLOW_UPDATE_MS = 3_000;
+const SLOW_UPDATE_MS = 1_500;
 
 export function startBot(log: Log): () => Promise<void> {
   const controller = new AbortController();
@@ -421,6 +422,7 @@ export function startBot(log: Log): () => Promise<void> {
   let menuAttempts = 0;
   let menuReady = false;
   setTelegramLog(log);
+  setModelLog(log);
   const stopWarm = keepWarm();
 
   /**
