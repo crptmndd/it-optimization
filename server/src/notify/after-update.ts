@@ -18,11 +18,11 @@ import { escapeHtml, postMessage, TelegramError, type Keyboard } from "./telegra
  *
  * - новых исполнителей будим, прежних нет: форма присылает весь список при каждом
  *   сохранении;
- * - сотрудник сделал задачу — админам лично «выполнено, проверьте» с кнопками
- *   «☑️ Проверено» и «↩️ Вернуть в работу»;
- * - задачу вернули в работу — об этом узнают остальные исполнители, а у админов
- *   перерисовывается сообщение «на проверку»;
- * - закрытие верхней задачи чужими руками — повод написать автору.
+ * - закрытие задачи чужими руками — повод написать её автору, и только ему: о чужих
+ *   задачах админа не будим. Если автор админ, а сделал сотрудник, это «выполнено,
+ *   проверьте» с кнопками «☑️ Проверено» и «↩️ Вернуть в работу»;
+ * - задачу вернули в работу — об этом узнают остальные исполнители, а у автора
+ *   перерисовывается сообщение «на проверку».
  *
  * Всё это только о задачах верхнего уровня: подзадача — строка чек-листа, и каждая
  * галочка в нём будила бы людей.
@@ -88,17 +88,11 @@ async function reportStatus(
     change.source,
   );
 
-  const reviewers = task.status === "done" ? await sendReviews(task.id, actor, log) : [];
-
   const closedNow = !isClosed(existing.status) && isClosed(task.status);
-  if (
-    closedNow &&
-    task.createdById &&
-    task.createdById !== actor.id &&
-    // Админ-автор уже получил «на проверку», второе сообщение о том же ему не нужно.
-    !reviewers.includes(task.createdById)
-  ) {
-    await notifyAuthorClosed(task, actor.name, log);
+  if (closedNow && task.createdById && task.createdById !== actor.id) {
+    const reviewed =
+      task.status === "done" && (await sendReview(task.id, task.createdById, actor, log));
+    if (!reviewed) await notifyAuthorClosed(task, actor.name, log);
   }
 
   if (isClosed(existing.status) && !isClosed(task.status)) {
@@ -131,53 +125,50 @@ async function post(
 }
 
 /**
- * «Выполнено, проверьте» — каждому админу лично. Только когда сделал сотрудник: админ,
- * закрывший задачу сам, уже решил, и проверять за ним некому. Сообщение запоминается в
- * `task_review_messages`, чтобы перерисовать его, когда задачу вернут или проверят.
- * Возвращает, кому из админов ушло.
+ * «Выполнено, проверьте» — автору задачи лично, если он админ, а сделал сотрудник: админ,
+ * закрывший задачу сам, уже решил, а о чужих задачах админа не будим. Сообщение
+ * запоминается в `task_review_messages`, чтобы перерисовать его, когда задачу вернут или
+ * проверят. `false` — проверка тут ни при чём, и автору пишут обычное «выполнено».
  */
-async function sendReviews(
+async function sendReview(
   taskId: string,
+  authorId: string,
   actor: { id: string; name: string },
   log: Log,
-): Promise<string[]> {
-  const admins = await prisma.user.findMany({
-    where: { role: "admin", disabledAt: null },
-    select: { id: true, telegramChatId: true },
+): Promise<boolean> {
+  const people = await prisma.user.findMany({
+    where: { id: { in: [authorId, actor.id] } },
+    select: { id: true, role: true, telegramChatId: true, disabledAt: true },
   });
-  if (admins.some((admin) => admin.id === actor.id)) return [];
+  const author = people.find((person) => person.id === authorId);
+  const doer = people.find((person) => person.id === actor.id);
+  if (!author || author.role !== "admin" || author.disabledAt) return false;
+  if (doer?.role === "admin") return false;
 
-  const chats = admins.filter(
-    (admin) => admin.telegramChatId && isPrivateChat(admin.telegramChatId),
-  );
-  if (chats.length === 0) {
-    log.warn({}, "ни один админ не подключил бота, задача на проверку не отправлена");
-    return [];
+  const chatId = author.telegramChatId;
+  if (!chatId || !isPrivateChat(chatId)) {
+    log.warn({ authorId }, "автор не подключил бота, задача на проверку не отправлена");
+    return true;
   }
 
   const view = await renderView(taskId, "n", REVIEW_HINT);
-  if (!view) return [];
+  if (!view) return true;
   // Заголовок первым: в уведомлении на телефоне видно начало, и по нему ясно, что это
   // не новая задача, а сделанная.
   const text = `✅ <b>Выполнено — проверьте</b> · ${escapeHtml(actor.name)}\n\n${view.text}`;
 
-  const sent: string[] = [];
-  for (const admin of chats) {
-    const chatId = admin.telegramChatId!;
-    const messageId = await post(chatId, text, view.keyboard, log);
-    if (messageId === null) continue;
-    sent.push(admin.id);
-    await prisma.taskReviewMessage
-      .create({ data: { taskId, chatId, messageId } })
-      .catch((cause: unknown) =>
-        log.warn({ err: cause }, "сообщение «на проверку» не запомнилось"),
-      );
-  }
-  return sent;
+  const messageId = await post(chatId, text, view.keyboard, log);
+  if (messageId === null) return true;
+  await prisma.taskReviewMessage
+    .create({ data: { taskId, chatId, messageId } })
+    .catch((cause: unknown) =>
+      log.warn({ err: cause }, "сообщение «на проверку» не запомнилось"),
+    );
+  return true;
 }
 
 /**
- * Перерисовать у админов сообщения «на проверку» этой задачи: её вернули в работу,
+ * Перерисовать у автора сообщения «на проверку» этой задачи: её вернули в работу,
  * проверили или отменили. Без этого под задачей, которая снова в работе, висела бы
  * кнопка «Проверено». Удалённое человеком сообщение забывается.
  */
