@@ -21,7 +21,7 @@ export function isPrivateChat(chatId: string): boolean {
 }
 
 /** Один заблокировавший бота админ не должен оставить без сообщения остальных. */
-async function sendPrivate(
+export async function sendPrivate(
   chatId: string,
   text: string,
   log: Log,
@@ -64,7 +64,7 @@ export async function notifyAdmins(
  * Люди из списка с действующей учёткой: админ ли он и его личный чат, если бот подключён.
  * Человек без учётки сюда не попадает: писать ему лично некуда, остаётся тэг в чате.
  */
-async function accountChatsOf(
+export async function accountChatsOf(
   people: string[],
 ): Promise<Map<string, { admin: boolean; chatId: string | null }>> {
   const rows = await prisma.teamMember.findMany({
@@ -383,64 +383,6 @@ export function actorName(user: {
   email?: string;
 }): string {
   return user.memberName ?? user.name ?? user.email ?? "кто-то из команды";
-}
-
-/**
- * Автору — что его задачу закрыли. Без этого автор узнаёт о выполнении, только открыв
- * CRM, и переспрашивает «ну как там?» о сделанном. Лично, кто бы автор ни был: это его
- * собственная задача, а не новость для команды. Только верхний уровень: подзадача — строка
- * чек-листа, и каждая галочка в нём будила бы автора. Себе не пишем.
- */
-async function notifyAuthorClosed(
-  task: TaskNotice & { createdById: string | null },
-  actor: string,
-  log: Log,
-): Promise<void> {
-  if (!canNotify || !task.createdById) return;
-  const author = await prisma.user.findUnique({
-    where: { id: task.createdById },
-    select: { telegramChatId: true, disabledAt: true },
-  });
-  const chatId = author?.telegramChatId;
-  if (!chatId || author.disabledAt || !isPrivateChat(chatId)) return;
-
-  const done = task.status === "done";
-  const text = [
-    `${done ? "✅" : "✖️"} <b>${escapeHtml(task.title)}</b>`,
-    `${done ? "Выполнено" : "Отменено"} · ${escapeHtml(actor)}`,
-  ].join("\n");
-  await sendPrivate(chatId, text, log, taskKeyboard(task));
-}
-
-/**
- * Что сказать после правки задачи — одно правило для формы CRM, кнопок и ответов в
- * телеграме. Новых исполнителей будим, прежних нет: форма присылает весь список при
- * каждом сохранении. Закрытие верхней задачи чужими руками — повод написать автору.
- */
-export function afterTaskUpdate(
-  change: {
-    existing: { status: string; developers: string[] };
-    task: TaskNotice & { parentId: string | null; createdById: string | null };
-    actor: { id: string; name: string };
-    teamChat?: boolean;
-  },
-  log: Log,
-): void {
-  const { existing, task, actor } = change;
-  const added = task.developers.filter((name) => !existing.developers.includes(name));
-  if (added.length > 0 && !isClosed(task.status)) {
-    notifyTaskInBackground(task, added, log, {
-      teamChat: change.teamChat !== false,
-      skip: actor.name,
-    });
-  }
-
-  const closedNow = !isClosed(existing.status) && isClosed(task.status);
-  if (closedNow && task.parentId === null && task.createdById !== actor.id) {
-    void notifyAuthorClosed(task, actor.name, log).catch((cause: unknown) => {
-      log.warn({ err: cause }, "автору не сообщили о закрытии задачи");
-    });
-  }
 }
 
 export interface ProjectNotice {

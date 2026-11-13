@@ -1,3 +1,5 @@
+import http from "node:http";
+import https from "node:https";
 import { env } from "../env.js";
 
 /**
@@ -36,11 +38,102 @@ export class TelegramError extends Error {
 }
 
 /**
- * Свой таймаут обязателен: у fetch в Node его нет вовсе, и одно зависшее
- * соединение остановило бы опрос обновлений навсегда. Для длинного опроса
- * значение передаётся отдельно — он держит соединение по 30 секунд намеренно.
+ * Свой таймаут обязателен: одно зависшее соединение остановило бы опрос обновлений
+ * навсегда. Для длинного опроса значение передаётся отдельно — он держит соединение по 30
+ * секунд намеренно.
  */
 const DEFAULT_TIMEOUT_MS = 20_000;
+
+/**
+ * Соединения с телеграмом живут долго и переиспользуются. С VPS телеграм доступен только
+ * через туннель (`tg-tunnel`), и новое соединение там дорогое: канал SSH, TCP до
+ * телеграма и TLS поверх всего этого, а именно новые соединения когда-то и зависали. У
+ * `fetch` в Node простаивающее соединение закрывается через 4 секунды, и почти каждое
+ * нажатие кнопки открывало новое. Здесь простой держится до `IDLE_MS`, а `keepWarm` не
+ * даёт последнему свободному соединению остыть.
+ *
+ * Опрос обновлений ходит своим агентом: иначе он забирал бы себе только что
+ * освободившееся тёплое соединение, а обработчик пришедшего нажатия открывал бы новое.
+ */
+const IDLE_MS = 60_000;
+const target = new URL(API);
+const transport = target.protocol === "http:" ? http : https;
+const agent = new transport.Agent({
+  keepAlive: true,
+  timeout: IDLE_MS,
+  scheduling: "lifo",
+});
+const pollAgent = new transport.Agent({ keepAlive: true, timeout: IDLE_MS });
+
+interface SlowLog {
+  warn: (obj: unknown, msg: string) => void;
+}
+
+/** Куда писать о медленных вызовах: по ним видно, тормозит ли туннель. */
+let slowLog: SlowLog | null = null;
+export function setTelegramLog(log: SlowLog): void {
+  slowLog = log;
+}
+
+/** Дольше этого вызов телеграма считается медленным и попадает в журнал. */
+const SLOW_MS = 2_000;
+let lastCallAt = 0;
+
+/** Ответ и то, шёл ли запрос по уже открытому соединению. */
+function post(
+  path: string,
+  body: string,
+  signal: AbortSignal,
+  poll: boolean,
+): Promise<{ status: number; text: string; reused: boolean }> {
+  return new Promise((resolve, reject) => {
+    const request = transport.request(
+      {
+        protocol: target.protocol,
+        hostname: target.hostname,
+        port: target.port || undefined,
+        path,
+        method: "POST",
+        agent: poll ? pollAgent : agent,
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(body),
+        },
+        signal,
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("error", reject);
+        response.on("end", () =>
+          resolve({
+            status: response.statusCode ?? 0,
+            text: Buffer.concat(chunks).toString("utf8"),
+            reused: request.reusedSocket,
+          }),
+        );
+      },
+    );
+    request.on("error", (cause) =>
+      reject(Object.assign(cause, { reusedSocket: request.reusedSocket })),
+    );
+    request.end(body);
+  });
+}
+
+/**
+ * Телеграм мог закрыть простаивавшее соединение ровно в тот момент, когда по нему ушёл
+ * запрос. Такой обрыв повторяется один раз уже по новому соединению: запрос до сервера не
+ * дошёл, двойной отправки не будет.
+ */
+function staleSocket(cause: unknown): boolean {
+  const error = cause as { reusedSocket?: boolean; code?: string; name?: string };
+  return (
+    error.reusedSocket === true &&
+    error.name !== "AbortError" &&
+    ["ECONNRESET", "EPIPE", "ECONNABORTED"].includes(error.code ?? "")
+  );
+}
 
 export async function callBotApi<T>(
   method: string,
@@ -52,22 +145,57 @@ export async function callBotApi<T>(
     throw new Error("TELEGRAM_BOT_TOKEN не задан");
   }
 
+  const poll = method === "getUpdates";
+  if (!poll) lastCallAt = Date.now();
+  const path = `${target.pathname.replace(/\/$/, "")}/bot${env.TELEGRAM_BOT_TOKEN}/${method}`;
+  const body = JSON.stringify(payload);
   const timeout = AbortSignal.timeout(timeoutMs);
-  const response = await fetch(`${API}/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-  });
+  const abort = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  const started = Date.now();
 
-  const body = (await response.json()) as TelegramResponse<T>;
-  if (!body.ok || body.result === undefined) {
-    throw new TelegramError(
-      body.error_code ?? response.status,
-      body.description ?? `Telegram вернул ${response.status}`,
+  let response: Awaited<ReturnType<typeof post>>;
+  try {
+    response = await post(path, body, abort, poll);
+  } catch (cause) {
+    if (!staleSocket(cause)) throw cause;
+    response = await post(path, body, abort, poll);
+  }
+
+  const took = Date.now() - started;
+  if (!poll && took > SLOW_MS) {
+    slowLog?.warn(
+      { method, ms: took, reused: response.reused },
+      "телеграм ответил медленно",
     );
   }
-  return body.result;
+
+  let parsed: TelegramResponse<T> | null = null;
+  try {
+    parsed = JSON.parse(response.text) as TelegramResponse<T>;
+  } catch {
+    // Не JSON — значит, ответил не Bot API, а что-то по дороге: ошибка ниже скажет код.
+  }
+  if (!parsed?.ok || parsed.result === undefined) {
+    throw new TelegramError(
+      parsed?.error_code ?? response.status,
+      parsed?.description ?? `Telegram вернул ${response.status}`,
+    );
+  }
+  return parsed.result;
+}
+
+/**
+ * Держит одно соединение тёплым: если бот какое-то время молчал, лёгкий `getMe`. Тогда
+ * нажатие кнопки после паузы идёт по открытому соединению, а не ждёт нового через туннель.
+ */
+const WARM_EVERY_MS = 20_000;
+export function keepWarm(): () => void {
+  const timer = setInterval(() => {
+    if (Date.now() - lastCallAt < WARM_EVERY_MS) return;
+    void callBotApi("getMe").catch(() => {});
+  }, WARM_EVERY_MS);
+  timer.unref();
+  return () => clearInterval(timer);
 }
 
 /**
@@ -238,12 +366,16 @@ export async function sendTyping(chatId: string): Promise<void> {
   await callBotApi("sendChatAction", { chat_id: chatId, action: "typing" });
 }
 
-/** Без ответа на нажатие кнопка крутит часики ещё полминуты. */
+/**
+ * Без ответа на нажатие кнопка крутит часики ещё полминуты. Ответ не бросает: он только
+ * гасит часики, и его сбой («нажатие устарело») не должен отменять правку сообщения,
+ * которая идёт рядом с ним.
+ */
 export async function answerCallback(id: string, text?: string): Promise<void> {
   await callBotApi("answerCallbackQuery", {
     callback_query_id: id,
     ...(text && { text }),
-  });
+  }).catch(() => {});
 }
 
 /**

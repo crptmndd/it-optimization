@@ -5,6 +5,7 @@ import { purgeExpiredSessions, purgeExpiredTickets } from "./auth/session.js";
 import { canVault, checkVaultKey } from "./crypto/sealed.js";
 import { prisma } from "./db.js";
 import { canNotify, canPublish, env, isProduction } from "./env.js";
+import { purgeOldReviews } from "./notify/after-update.js";
 import { startBot } from "./notify/bot.js";
 import { startScheduler } from "./notify/scheduler.js";
 
@@ -51,6 +52,9 @@ const cleanup = setInterval(
       .catch((cause: unknown) =>
         app.log.error({ err: cause }, "уборка вложений не удалась"),
       );
+    purgeOldReviews().catch((cause: unknown) =>
+      app.log.error({ err: cause }, "уборка сообщений «на проверку» не удалась"),
+    );
   },
   24 * 60 * 60 * 1000,
 );

@@ -21,7 +21,9 @@ import {
   callBotApi,
   escapeHtml,
   getMe,
+  keepWarm,
   setMyCommands,
+  setTelegramLog,
   trySendMessage,
   type TgCallbackQuery,
   type TgMessage,
@@ -394,12 +396,58 @@ async function handleUpdate(update: TelegramUpdate, log: Log): Promise<void> {
   await handleCommand(chatId, text, message.from?.username, log);
 }
 
+/** Чей это апдейт: человек в конкретном чате. */
+function senderOf(update: TelegramUpdate): string {
+  const query = update.callback_query;
+  if (query) return `${query.message?.chat.id ?? query.from.id}:${query.from.id}`;
+  const message = update.message;
+  return `${message?.chat.id ?? 0}:${message?.from?.id ?? 0}`;
+}
+
+/** Что за апдейт — для журнала о медленной обработке, без текста сообщения. */
+function kindOf(update: TelegramUpdate): string {
+  const data = update.callback_query?.data;
+  if (data) return `кнопка ${data.split(":").slice(0, 2).join(":")}`;
+  return update.message?.text?.startsWith("/") ? "команда" : "сообщение";
+}
+
+/** Дольше этого обработка апдейта попадает в журнал: так видно, где бот тормозит. */
+const SLOW_UPDATE_MS = 3_000;
+
 export function startBot(log: Log): () => Promise<void> {
   const controller = new AbortController();
   let offset = 0;
   let knowsSelf = !canIntake;
   let menuAttempts = 0;
   let menuReady = false;
+  setTelegramLog(log);
+  const stopWarm = keepWarm();
+
+  /**
+   * Апдейты обрабатываются параллельно, а не по одному: раньше опрос ждал каждый, и одно
+   * долгое действие (разбор срока моделью, повтор отправки) держало кнопки всех остальных.
+   * Порядок сохраняется внутри одного человека в одном чате: ответ на «Когда срок?» должен
+   * прийти после самого вопроса, а второе нажатие — после первого.
+   */
+  const queues = new Map<string, Promise<void>>();
+  function dispatch(update: TelegramUpdate): void {
+    const key = senderOf(update);
+    const run = async () => {
+      const started = Date.now();
+      await handleUpdate(update, log).catch((cause: unknown) => {
+        log.error({ err: cause }, "ошибка обработки сообщения бота");
+      });
+      const took = Date.now() - started;
+      if (took > SLOW_UPDATE_MS) {
+        log.warn({ kind: kindOf(update), ms: took }, "бот долго обрабатывал апдейт");
+      }
+    };
+    const next = (queues.get(key) ?? Promise.resolve()).then(run);
+    queues.set(key, next);
+    void next.then(() => {
+      if (queues.get(key) === next) queues.delete(key);
+    });
+  }
 
   async function poll(): Promise<void> {
     while (!controller.signal.aborted) {
@@ -428,9 +476,7 @@ export function startBot(log: Log): () => Promise<void> {
 
         for (const update of updates) {
           offset = update.update_id + 1;
-          await handleUpdate(update, log).catch((cause: unknown) => {
-            log.error({ err: cause }, "ошибка обработки сообщения бота");
-          });
+          dispatch(update);
         }
       } catch (cause) {
         if (controller.signal.aborted) return;
@@ -448,6 +494,12 @@ export function startBot(log: Log): () => Promise<void> {
 
   return async () => {
     controller.abort();
+    stopWarm();
+    // Начатые нажатия доделываем, но не дольше 10 секунд: остановку они не держат.
+    await Promise.race([
+      Promise.allSettled([...queues.values()]),
+      new Promise((resolve) => setTimeout(resolve, 10_000)),
+    ]);
     await stopIntake();
   };
 }

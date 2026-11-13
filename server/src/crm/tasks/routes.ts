@@ -5,11 +5,9 @@ import { audit } from "../../audit.js";
 import { attachmentRoutes } from "./attachments.js";
 import { requireAdmin, requireTeam } from "../../auth/guard.js";
 import { prisma } from "../../db.js";
-import {
-  actorName,
-  afterTaskUpdate,
-  notifyTaskInBackground,
-} from "../../notify/notifications.js";
+import { afterTaskUpdate, refreshReviews } from "../../notify/after-update.js";
+import { actorName, notifyTaskInBackground } from "../../notify/notifications.js";
+import { escapeHtml } from "../../notify/telegram.js";
 import { taskScope } from "../access.js";
 import { invalidInput } from "../http.js";
 import { briefNotes, listNotes, noteRoutesFor } from "../notes.js";
@@ -273,6 +271,15 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
         entityId: task.id,
         action: archived ? "archive" : "unarchive",
       });
+      // У админов в телеграме сообщение «на проверку» показывает, что задачу уже приняли.
+      const who = escapeHtml(actorName(request.user!));
+      void refreshReviews(
+        task.id,
+        archived ? `☑️ Проверено, в архиве · ${who}` : `📤 Возвращена из архива · ${who}`,
+        request.log,
+      ).catch((cause: unknown) =>
+        request.log.warn({ err: cause }, "сообщения «на проверку» не перерисовались"),
+      );
       return reply.send({ task: toTaskDto(task) });
     };
 

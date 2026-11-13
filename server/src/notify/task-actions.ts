@@ -8,7 +8,7 @@ import {
 import { prisma } from "../db.js";
 import { env } from "../env.js";
 import { myTasksMessage, renderTaskList, type ListKind } from "./my-tasks.js";
-import { afterTaskUpdate } from "./notifications.js";
+import { afterTaskUpdate, refreshReviews } from "./after-update.js";
 import { askForInput } from "./pending.js";
 import { answerQuestion, recallQuestion } from "./questions.js";
 import { deadlinesList } from "./reminders.js";
@@ -139,8 +139,10 @@ export async function handleTaskAction(query: TgCallbackQuery, log: Log): Promis
       chatId,
       message.message_id,
     );
-    await answerCallback(query.id);
-    await editMessage(chatId, message.message_id, list.text, list.keyboard ?? []);
+    await Promise.all([
+      answerCallback(query.id),
+      editMessage(chatId, message.message_id, list.text, list.keyboard ?? []),
+    ]);
     return;
   }
 
@@ -151,11 +153,16 @@ export async function handleTaskAction(query: TgCallbackQuery, log: Log): Promis
       where: reachableTask(taskId, presser.viewer),
       include: TASK_VIEW,
     });
-    await answerCallback(query.id, task ? undefined : "Эта задача вам недоступна.");
-    if (!task) return;
+    if (!task) {
+      await answerCallback(query.id, "Эта задача вам недоступна.");
+      return;
+    }
     const kind = listKindOf(parts.length === 3 ? parts[1] : "m");
     const view = await renderTask(task, { project: true, back: kind });
-    await editMessage(chatId, message.message_id, view.text, view.keyboard);
+    await Promise.all([
+      answerCallback(query.id),
+      editMessage(chatId, message.message_id, view.text, view.keyboard),
+    ]);
     return;
   }
 
@@ -170,24 +177,40 @@ export async function handleTaskAction(query: TgCallbackQuery, log: Log): Promis
       await answerCallback(query.id, "Эта задача вам недоступна.");
       return;
     }
-    await answerCallback(query.id);
-    await askForInput({
-      kind: code,
-      taskId,
-      chatId,
-      telegramId: query.from.id,
-      name: presser.name,
-      source: {
-        messageId: message.message_id,
-        view: viewOf(message.reply_markup, message.text),
-      },
-    });
+    await Promise.all([
+      answerCallback(query.id),
+      askForInput({
+        kind: code,
+        taskId,
+        chatId,
+        telegramId: query.from.id,
+        name: presser.name,
+        source: {
+          messageId: message.message_id,
+          view: viewOf(message.reply_markup, message.text),
+        },
+      }),
+    ]);
     return;
   }
 
   // «☑️ Проверено»: сделанная задача принята и уходит с доски в архив. Это ручной архив
   // CRM, и решает его админ; «↩️ Вернуть в работу» вернёт её на доску.
   if (code === "chk") {
+    const view = viewOf(message.reply_markup, message.text);
+    // Кнопка могла остаться под сообщением, пока задачу вернули в работу: принимать
+    // несделанное нельзя. Сообщение перерисовывается, и видно, что с задачей сейчас.
+    const current = await prisma.task.findFirst({
+      where: reachableTask(taskId, presser.viewer),
+      select: { status: true },
+    });
+    if (current && current.status !== "done") {
+      await Promise.all([
+        answerCallback(query.id, "Задача уже не в «Готово» — проверять нечего"),
+        refreshTaskMessage({ chatId, messageId: message.message_id, view, taskId }),
+      ]);
+      return;
+    }
     const archived = await setTaskArchived(presser.viewer, taskId, true);
     if (!archived.ok) {
       await answerCallback(
@@ -201,14 +224,13 @@ export async function handleTaskAction(query: TgCallbackQuery, log: Log): Promis
       { entity: "tasks", entityId: taskId, action: "archive", diff: { via: "telegram" } },
       log,
     );
-    await answerCallback(query.id, "Проверено — задача в архиве");
-    await refreshTaskMessage({
-      chatId,
-      messageId: message.message_id,
-      view: viewOf(message.reply_markup, message.text),
-      taskId,
-      footer: `☑️ Проверено, в архиве · ${escapeHtml(presser.name)}`,
-    });
+    const footer = `☑️ Проверено, в архиве · ${escapeHtml(presser.name)}`;
+    await Promise.all([
+      answerCallback(query.id, "Проверено — задача в архиве"),
+      refreshTaskMessage({ chatId, messageId: message.message_id, view, taskId, footer }),
+      // У других админов то же сообщение «на проверку»: видно, что задачу уже приняли.
+      refreshReviews(taskId, footer, log, { chatId, messageId: message.message_id }),
+    ]);
     return;
   }
 
@@ -230,7 +252,7 @@ export async function handleTaskAction(query: TgCallbackQuery, log: Log): Promis
   }
 
   const { task, existing } = result;
-  await auditAs(
+  const audited = auditAs(
     presser.viewer.id,
     {
       entity: "tasks",
@@ -245,16 +267,26 @@ export async function handleTaskAction(query: TgCallbackQuery, log: Log): Promis
     log,
   );
   afterTaskUpdate(
-    { existing, task, actor: { id: presser.viewer.id, name: presser.name } },
+    {
+      existing,
+      task,
+      actor: { id: presser.viewer.id, name: presser.name },
+      source: { chatId, messageId: message.message_id },
+    },
     log,
   );
 
-  await answerCallback(query.id, action.toast);
-  await refreshTaskMessage({
-    chatId,
-    messageId: message.message_id,
-    view: viewOf(message.reply_markup, message.text),
-    taskId: task.id,
-    footer: footerOf(code, task, presser.name),
-  });
+  // Ответ на нажатие и перерисовка — одновременно: каждый из них ходит в телеграм через
+  // туннель, и по очереди нажатие ждало бы два пути туда и обратно.
+  await Promise.all([
+    audited,
+    answerCallback(query.id, action.toast),
+    refreshTaskMessage({
+      chatId,
+      messageId: message.message_id,
+      view: viewOf(message.reply_markup, message.text),
+      taskId: task.id,
+      footer: footerOf(code, task, presser.name),
+    }),
+  ]);
 }

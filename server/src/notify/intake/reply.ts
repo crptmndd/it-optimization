@@ -11,7 +11,8 @@ import {
 } from "../../crm/tasks/service.js";
 import { prisma } from "../../db.js";
 import { env } from "../../env.js";
-import { afterTaskUpdate, isPrivateChat, taskKeyboard } from "../notifications.js";
+import { afterTaskUpdate } from "../after-update.js";
+import { isPrivateChat, taskKeyboard } from "../notifications.js";
 import type { TeamUser } from "../team-user.js";
 import { escapeHtml, postMessage } from "../telegram.js";
 import { formatDate } from "../zone.js";

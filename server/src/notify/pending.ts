@@ -7,7 +7,8 @@ import { prisma } from "../db.js";
 import { canIntake, env } from "../env.js";
 import { attachFiles, filesOf } from "./intake/files.js";
 import { askModel, dateBlock, dueFrom } from "./intake/parse.js";
-import { afterTaskUpdate, isPrivateChat } from "./notifications.js";
+import { afterTaskUpdate } from "./after-update.js";
+import { isPrivateChat } from "./notifications.js";
 import { refreshTaskMessage, type ViewKind } from "./task-view.js";
 import { teamUserOf, type TeamUser } from "./team-user.js";
 import { escapeHtml, postMessage, type TgMessage } from "./telegram.js";
@@ -197,6 +198,8 @@ async function consumeText(
   waiting.delete(key);
 
   let footer: string;
+  // Ответ «готово» уходит вместе с перерисовкой, а не перед ней: каждый — путь до телеграма.
+  let said: Promise<unknown>;
   if (pending.kind === "title") {
     const title = text.slice(0, 300);
     const result = await updateTask(user.viewer, pending.taskId, { title });
@@ -214,7 +217,7 @@ async function consumeText(
       },
       log,
     );
-    await say(`✏️ Название: ${escapeHtml(title)}`);
+    said = say(`✏️ Название: ${escapeHtml(title)}`);
     footer = `✏️ Название изменено · ${escapeHtml(user.name)}`;
   } else {
     const task = await prisma.task.findFirst({
@@ -233,18 +236,21 @@ async function consumeText(
       user.viewer.id,
       body.slice(0, NOTE_MAX_LENGTH),
     );
-    await say("💬 Описание добавлено");
+    said = say("💬 Описание добавлено");
     footer = `💬 Описание обновлено · ${escapeHtml(user.name)}`;
   }
 
-  await refreshTaskMessage({
-    chatId: pending.chatId,
-    ...pending.source,
-    taskId: pending.taskId,
-    footer,
-  }).catch((cause: unknown) =>
-    log.warn({ err: cause }, "сообщение о задаче не обновилось"),
-  );
+  await Promise.all([
+    said,
+    refreshTaskMessage({
+      chatId: pending.chatId,
+      ...pending.source,
+      taskId: pending.taskId,
+      footer,
+    }).catch((cause: unknown) =>
+      log.warn({ err: cause }, "сообщение о задаче не обновилось"),
+    ),
+  ]);
   return true;
 }
 
@@ -313,19 +319,21 @@ async function finishFiles(
       ? [`📎 Прикреплено к «${escapeHtml(title)}»: ${pending.saved}`]
       : [];
   lines.push(...pending.problems.map((problem) => `⚠️ ${escapeHtml(problem)}`));
-  if (lines.length > 0) {
-    await postMessage(pending.chatId, lines.join("\n"), { replyTo });
-  }
-  if (pending.saved > 0) {
-    await refreshTaskMessage({
-      chatId: pending.chatId,
-      ...pending.source,
-      taskId: pending.taskId,
-      footer: `📎 Прикреплён файл · ${escapeHtml(user.name)}`,
-    }).catch((cause: unknown) =>
-      log.warn({ err: cause }, "сообщение о задаче не обновилось"),
-    );
-  }
+  await Promise.all([
+    lines.length > 0
+      ? postMessage(pending.chatId, lines.join("\n"), { replyTo })
+      : undefined,
+    pending.saved > 0
+      ? refreshTaskMessage({
+          chatId: pending.chatId,
+          ...pending.source,
+          taskId: pending.taskId,
+          footer: `📎 Прикреплён файл · ${escapeHtml(user.name)}`,
+        }).catch((cause: unknown) =>
+          log.warn({ err: cause }, "сообщение о задаче не обновилось"),
+        )
+      : undefined,
+  ]);
 }
 
 async function consumeDue(
@@ -399,20 +407,23 @@ async function consumeDue(
       existing: result.existing,
       task: result.task,
       actor: { id: user.viewer.id, name: user.name },
+      source: { chatId: pending.chatId, messageId: pending.source.messageId },
     },
     log,
   );
 
   const line = due ? `📅 Срок: ${formatDate(due, env.TIMEZONE)}` : "📅 Срок снят";
-  await say(line);
-  await refreshTaskMessage({
-    chatId: pending.chatId,
-    ...pending.source,
-    taskId: pending.taskId,
-    footer: `${line} · ${escapeHtml(user.name)}`,
-  }).catch((cause: unknown) =>
-    log.warn({ err: cause }, "сообщение о задаче не обновилось"),
-  );
+  await Promise.all([
+    say(line),
+    refreshTaskMessage({
+      chatId: pending.chatId,
+      ...pending.source,
+      taskId: pending.taskId,
+      footer: `${line} · ${escapeHtml(user.name)}`,
+    }).catch((cause: unknown) =>
+      log.warn({ err: cause }, "сообщение о задаче не обновилось"),
+    ),
+  ]);
   return true;
 }
 

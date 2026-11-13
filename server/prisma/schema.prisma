@@ -346,6 +346,23 @@ model TaskAttachment {
   @@map("task_attachments")
 }
 
+/// Сообщение бота админу «выполнено, проверьте». Хранится, чтобы перерисовать его, когда
+/// задачу вернут в работу, проверят или отменят: иначе у админа висела бы кнопка
+/// «Проверено» под задачей, которая уже снова в работе. В базе, а не в памяти: проверка
+/// ждёт часами, а перезапуск API при выкате стёр бы всё, что ждёт.
+model TaskReviewMessage {
+  id        String   @id @default(uuid()) @db.Uuid
+  taskId    String   @map("task_id") @db.Uuid
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  chatId    String   @map("chat_id")
+  messageId Int      @map("message_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([chatId, messageId])
+  @@index([taskId])
+  @@map("task_review_messages")
+}
+
 /// Кто, что и когда изменил.
 model AuditLog {
   id       String  @id @default(uuid()) @db.Uuid
@@ -710,7 +727,9 @@ model Task {
   createdById String?  @map("created_by_id") @db.Uuid
   createdBy   User?    @relation("TaskAuthor", fields: [createdById], references: [id], onDelete: SetNull)
 
-  attachments TaskAttachment[]
+  attachments    TaskAttachment[]
+  /// Сообщения админам «на проверку», см. `TaskReviewMessage`.
+  reviewMessages TaskReviewMessage[]
 
   dueAt       DateTime? @map("due_at")
   completedAt DateTime? @map("completed_at")

@@ -48,8 +48,11 @@ import {
  * поэтому пачка из одних пересланных ждёт её дольше.
  */
 
-/** Тишина, после которой пачка уходит в разбор. */
-const QUIET_MS = 2_000;
+/**
+ * Тишина, после которой пачка уходит в разбор. Подпись с пересылкой и альбом телеграм
+ * присылает почти разом, доли секунды, а каждая лишняя секунда здесь — секунда до карточки.
+ */
+const QUIET_MS = 1_200;
 /** Пачка без своих слов автора — одни пересланные: ждём, вдруг подпишет. */
 const QUIET_FORWARD_MS = 12_000;
 /** Дольше пачку не держим, сколько бы ни приходило. */
@@ -368,14 +371,17 @@ async function focusOf(messages: TgMessage[]): Promise<string | null> {
   return null;
 }
 
-/** Ответ в чат: первый заменяет «Разбираю…», остальные идут новыми сообщениями. */
-function replier(chatId: string, replyTo: number, placeholder: number | null) {
-  let slot = placeholder;
+/**
+ * Ответ в чат: первый заменяет «Разбираю…», остальные идут новыми сообщениями. Заглушка
+ * приходит обещанием: разбор не ждёт, пока она дойдёт до телеграма, а начинается сразу.
+ */
+function replier(chatId: string, replyTo: number, placeholder: Promise<number | null>) {
+  let slot: Promise<number | null> | null = placeholder;
   /** Номер сообщения, где оказался ответ: по нему «Назад» найдёт заданный вопрос. */
   return async (text: string, keyboard?: Keyboard): Promise<number> => {
-    if (slot !== null) {
-      const id = slot;
-      slot = null;
+    const id = slot ? await slot : null;
+    slot = null;
+    if (id !== null) {
       try {
         await editMessage(chatId, id, text, keyboard);
         return id;
@@ -419,13 +425,9 @@ async function processBundle(bundle: Bundle, log: Log): Promise<void> {
   }
 
   const voice = messages.some((message) => message.voice || message.audio);
-  const placeholder = await postMessage(
-    bundle.chatId,
-    voice ? "⏳ Слушаю…" : "⏳ Разбираю…",
-    {
-      replyTo: anchor.message_id,
-    },
-  ).catch(() => null);
+  const placeholder = postMessage(bundle.chatId, voice ? "⏳ Слушаю…" : "⏳ Разбираю…", {
+    replyTo: anchor.message_id,
+  }).catch(() => null);
   const say = replier(bundle.chatId, anchor.message_id, placeholder);
 
   try {

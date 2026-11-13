@@ -350,15 +350,16 @@ export async function handleCardAction(query: TgCallbackQuery, log: Log): Promis
   }
 
   const fresh = await loadCardTask(task.id);
-  await answerCallback(query.id, toast);
-  if (!fresh) return;
+  if (!fresh) {
+    await answerCallback(query.id, toast);
+    return;
+  }
   const card = await renderCard(fresh, fresh.deletedAt ? "main" : view);
-  await editMessage(
-    String(message.chat.id),
-    message.message_id,
-    card.text,
-    card.keyboard,
-  );
+  // Одновременно, а не по очереди: каждый вызов — путь до телеграма через туннель.
+  await Promise.all([
+    answerCallback(query.id, toast),
+    editMessage(String(message.chat.id), message.message_id, card.text, card.keyboard),
+  ]);
 }
 
 async function togglePerson(

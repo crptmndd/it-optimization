@@ -7,7 +7,7 @@ import { reachableTask, updateTask, type UpdateTaskInput } from "../crm/tasks/se
 import { prisma } from "../db.js";
 import { hasPendingNotice } from "./intake/cards.js";
 import { loadPeople } from "./intake/parse.js";
-import { afterTaskUpdate } from "./notifications.js";
+import { afterTaskUpdate } from "./after-update.js";
 import { askForInput } from "./pending.js";
 import {
   refreshTaskMessage,
@@ -236,9 +236,13 @@ export async function handleEdit(
     return;
   }
 
+  // Ответ на нажатие и правка сообщения — одновременно: по очереди нажатие ждало бы два
+  // пути до телеграма и обратно.
   const show = async (menu: Menu) => {
-    await answerCallback(query.id);
-    await editMessage(chatId, message.message_id, menu.text, menu.keyboard);
+    await Promise.all([
+      answerCallback(query.id),
+      editMessage(chatId, message.message_id, menu.text, menu.keyboard),
+    ]);
   };
 
   /** Правка задачи, журнал, уведомления и сообщение в прежнем виде со строкой внизу. */
@@ -251,7 +255,7 @@ export async function handleEdit(
       );
       return false;
     }
-    await auditAs(
+    const audited = auditAs(
       presser.viewer.id,
       {
         entity: "tasks",
@@ -267,19 +271,25 @@ export async function handleEdit(
           existing: result.existing,
           task: result.task,
           actor: { id: presser.viewer.id, name: presser.name },
+          source: { chatId, messageId: message.message_id },
         },
         log,
       );
     }
     if (footer) {
-      await answerCallback(query.id);
-      await refreshTaskMessage({
-        chatId,
-        messageId: message.message_id,
-        view,
-        taskId: task.id,
-        footer: `${footer} · ${escapeHtml(presser.name)}`,
-      });
+      await Promise.all([
+        audited,
+        answerCallback(query.id),
+        refreshTaskMessage({
+          chatId,
+          messageId: message.message_id,
+          view,
+          taskId: task.id,
+          footer: `${footer} · ${escapeHtml(presser.name)}`,
+        }),
+      ]);
+    } else {
+      await audited;
     }
     return true;
   };
@@ -288,25 +298,31 @@ export async function handleEdit(
     case "menu":
       return show(await mainMenu(task, view));
     case "back":
-      await answerCallback(query.id);
-      return refreshTaskMessage({
-        chatId,
-        messageId: message.message_id,
-        view,
-        taskId: task.id,
-      });
+      await Promise.all([
+        answerCallback(query.id),
+        refreshTaskMessage({
+          chatId,
+          messageId: message.message_id,
+          view,
+          taskId: task.id,
+        }),
+      ]);
+      return;
     case "title":
     case "note":
     case "due":
-      await answerCallback(query.id);
-      return askForInput({
-        kind: action,
-        taskId: task.id,
-        chatId,
-        telegramId: query.from.id,
-        name: presser.name,
-        source: { messageId: message.message_id, view },
-      });
+      await Promise.all([
+        answerCallback(query.id),
+        askForInput({
+          kind: action,
+          taskId: task.id,
+          chatId,
+          telegramId: query.from.id,
+          name: presser.name,
+          source: { messageId: message.message_id, view },
+        }),
+      ]);
+      return;
     case "prio":
       return show(await priorityMenu(task, view));
     case "ps": {
