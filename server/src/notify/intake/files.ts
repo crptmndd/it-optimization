@@ -118,9 +118,3 @@ export async function attachFiles(
   }
   return { saved, problems };
 }
-
-/** «📎 Файлов: 3» под задачей — чтобы было видно, что скриншот доехал. */
-export async function attachmentsLine(taskId: string): Promise<string | null> {
-  const count = await prisma.taskAttachment.count({ where: { taskId } });
-  return count > 0 ? `📎 Файлов: ${count}` : null;
-}

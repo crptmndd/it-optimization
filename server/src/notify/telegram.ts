@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import http from "node:http";
 import https from "node:https";
 import { env } from "../env.js";
@@ -82,7 +83,8 @@ let lastCallAt = 0;
 /** Ответ и то, шёл ли запрос по уже открытому соединению. */
 function post(
   path: string,
-  body: string,
+  body: string | Buffer,
+  contentType: string,
   signal: AbortSignal,
   poll: boolean,
 ): Promise<{ status: number; text: string; reused: boolean }> {
@@ -96,7 +98,7 @@ function post(
         method: "POST",
         agent: poll ? pollAgent : agent,
         headers: {
-          "Content-Type": "application/json",
+          "Content-Type": contentType,
           "Content-Length": Buffer.byteLength(body),
         },
         signal,
@@ -141,6 +143,16 @@ export async function callBotApi<T>(
   signal?: AbortSignal,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<T> {
+  return send<T>(method, JSON.stringify(payload), "application/json", signal, timeoutMs);
+}
+
+async function send<T>(
+  method: string,
+  body: string | Buffer,
+  contentType: string,
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
+): Promise<T> {
   if (!env.TELEGRAM_BOT_TOKEN) {
     throw new Error("TELEGRAM_BOT_TOKEN не задан");
   }
@@ -148,17 +160,16 @@ export async function callBotApi<T>(
   const poll = method === "getUpdates";
   if (!poll) lastCallAt = Date.now();
   const path = `${target.pathname.replace(/\/$/, "")}/bot${env.TELEGRAM_BOT_TOKEN}/${method}`;
-  const body = JSON.stringify(payload);
   const timeout = AbortSignal.timeout(timeoutMs);
   const abort = signal ? AbortSignal.any([signal, timeout]) : timeout;
   const started = Date.now();
 
   let response: Awaited<ReturnType<typeof post>>;
   try {
-    response = await post(path, body, abort, poll);
+    response = await post(path, body, contentType, abort, poll);
   } catch (cause) {
     if (!staleSocket(cause)) throw cause;
-    response = await post(path, body, abort, poll);
+    response = await post(path, body, contentType, abort, poll);
   }
 
   const took = Date.now() - started;
@@ -182,6 +193,106 @@ export async function callBotApi<T>(
     );
   }
   return parsed.result;
+}
+
+/** Файл для отправки в чат: фото и видео показываются в чате, документ — файлом. */
+export interface OutgoingMedia {
+  kind: "photo" | "video" | "document";
+  name: string;
+  mime: string;
+  bytes: Buffer;
+}
+
+/** Загрузка идёт через туннель и бывает в десятки мегабайт: обычных 20 секунд мало. */
+const UPLOAD_TIMEOUT_MS = 120_000;
+
+/** Имя файла в заголовке части: кавычки и переводы строк сломали бы саму форму. */
+function partName(name: string): string {
+  return name.replace(/["\\\r\n]/g, "_");
+}
+
+function multipart(
+  fields: Record<string, string>,
+  files: { field: string; file: OutgoingMedia }[],
+): { body: Buffer; contentType: string } {
+  const boundary = `itopt-${randomUUID()}`;
+  const parts: Buffer[] = [];
+  for (const [name, value] of Object.entries(fields)) {
+    parts.push(
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`,
+      ),
+    );
+  }
+  for (const { field, file } of files) {
+    parts.push(
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="${field}"; filename="${partName(file.name)}"\r\nContent-Type: ${file.mime}\r\n\r\n`,
+      ),
+      file.bytes,
+      Buffer.from("\r\n"),
+    );
+  }
+  parts.push(Buffer.from(`--${boundary}--\r\n`));
+  return {
+    body: Buffer.concat(parts),
+    contentType: `multipart/form-data; boundary=${boundary}`,
+  };
+}
+
+const SINGLE: Record<OutgoingMedia["kind"], string> = {
+  photo: "sendPhoto",
+  video: "sendVideo",
+  document: "sendDocument",
+};
+
+/**
+ * Файлы в чат одним сообщением: один файл — обычной отправкой, несколько — альбомом (до
+ * десяти). Фото и видео в альбоме смешивать можно, документы — только с документами, за
+ * этим следит вызывающий. Подпись встаёт к первому файлу: у альбома она одна на всех.
+ */
+export async function sendMedia(
+  chatId: string,
+  items: OutgoingMedia[],
+  options: { caption?: string; replyTo?: number } = {},
+): Promise<void> {
+  const fields: Record<string, string> = { chat_id: chatId };
+  if (options.replyTo) {
+    fields.reply_parameters = JSON.stringify({
+      message_id: options.replyTo,
+      allow_sending_without_reply: true,
+    });
+  }
+  const caption = options.caption
+    ? { caption: options.caption, parse_mode: "HTML" }
+    : undefined;
+
+  const [item] = items;
+  if (!item) return;
+  if (items.length === 1) {
+    const form = multipart({ ...fields, ...caption }, [{ field: item.kind, file: item }]);
+    await send(
+      SINGLE[item.kind],
+      form.body,
+      form.contentType,
+      undefined,
+      UPLOAD_TIMEOUT_MS,
+    );
+    return;
+  }
+
+  fields.media = JSON.stringify(
+    items.map((item, index) => ({
+      type: item.kind,
+      media: `attach://f${index}`,
+      ...(index === 0 && caption),
+    })),
+  );
+  const form = multipart(
+    fields,
+    items.map((file, index) => ({ field: `f${index}`, file })),
+  );
+  await send("sendMediaGroup", form.body, form.contentType, undefined, UPLOAD_TIMEOUT_MS);
 }
 
 /**

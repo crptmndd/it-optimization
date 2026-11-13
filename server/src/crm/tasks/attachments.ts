@@ -31,6 +31,11 @@ function directory(): string {
   return join(env.UPLOAD_DIR, "attachments");
 }
 
+/** Где на диске лежит файл вложения — для бота, который присылает файлы в чат. */
+export function attachmentPath(storageKey: string): string {
+  return join(directory(), storageKey);
+}
+
 const EXTENSIONS: Record<string, string> = {
   "image/png": ".png",
   "image/jpeg": ".jpg",

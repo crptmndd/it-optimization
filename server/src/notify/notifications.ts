@@ -225,11 +225,13 @@ interface KeyboardTask {
   parent?: { id: string } | null;
   /** Убрана в архив руками: «Проверено» уже нажали, второй раз кнопка не нужна. */
   archivedAt?: Date | null;
+  /** Сколько файлов у задачи (у подзадачи — у родителя): есть — есть и «🗂 Файлы». */
+  files?: number;
 }
 
 /**
  * Действия с задачей без открытия CRM: закрыть, взять в работу, сменить срок, прикрепить
- * файл. Нажимает кто угодно из чата, а право проверяется при нажатии тем же правилом, что
+ * файл, посмотреть приложенные. Нажимает кто угодно из чата, а право проверяется при нажатии тем же правилом, что
  * и правка в CRM (`notify/task-actions.ts`). Закрытой задаче вместо «Готово» —
  * «Вернуть в работу»: случайное нажатие должно отменяться там же, где сделано.
  *
@@ -241,9 +243,14 @@ export function taskActionRows(task: KeyboardTask): Keyboard {
   const status = closed
     ? { text: "↩️ Вернуть в работу", callback_data: `s:back:${task.id}` }
     : { text: "✅ Готово", callback_data: `s:done:${task.id}` };
+  // Смотреть файлы — не правка, поэтому кнопка есть и у подзадачи: её файлы лежат у
+  // родителя, и строка «📎 Файлов» под ней о них.
+  const show = task.files
+    ? { text: `🗂 Файлы (${task.files})`, callback_data: `s:show:${task.id}` }
+    : null;
   // У подзадачи в CRM только «сделано» и «не сделано», срока и файлов у неё не видно:
   // ей одна кнопка, иначе нажатие меняло бы то, чего в карточке нет.
-  if (task.parent) return [[status]];
+  if (task.parent) return [show ? [status, show] : [status]];
 
   const first = [status];
   if (!closed && task.status !== "in_progress") {
@@ -256,13 +263,24 @@ export function taskActionRows(task: KeyboardTask): Keyboard {
   }
   const file = { text: "📎 Прикрепить файл", callback_data: `s:file:${task.id}` };
   const edit = { text: "✏️ Редактировать", callback_data: `e:menu:${task.id}` };
-  return closed
-    ? [first, [file, edit]]
-    : [
-        first,
-        [{ text: "📅 Изменить срок", callback_data: `s:due:${task.id}` }, file],
-        [edit],
-      ];
+  // «Файлы» встают рядом с одной из кнопок, а не третьей в ряд: на телефоне три кнопки
+  // в ряду обрезают подписи.
+  if (closed) return show ? [first, [file, show], [edit]] : [first, [file, edit]];
+  return [
+    first,
+    [{ text: "📅 Изменить срок", callback_data: `s:due:${task.id}` }, file],
+    show ? [edit, show] : [edit],
+  ];
+}
+
+/** Сколько файлов у задачи. Файлы подзадачи лежат у родителя, поэтому `taskId` — его. */
+export function countFiles(taskId: string): Promise<number> {
+  return prisma.taskAttachment.count({ where: { taskId } });
+}
+
+/** «📎 Файлов: 3» под задачей — чтобы было видно, что скриншот доехал. */
+export function filesLine(count: number): string | null {
+  return count > 0 ? `📎 Файлов: ${count}` : null;
 }
 
 /** Действия и ссылка в карточку CRM последним рядом. */
@@ -317,14 +335,24 @@ export async function notifyTask(
   const accounts = await accountChatsOf(people);
   const others = people.filter((name) => !accounts.get(name)?.admin);
   const note = await taskNote(task);
-  const button = taskKeyboard(task);
+  const files = await countFiles(task.parent?.id ?? task.id);
+  const button = taskKeyboard({ ...task, files });
+  // Скриншоты к задаче чаще всего и есть суть поручения: исполнитель должен видеть, что
+  // они есть, ещё до того, как откроет задачу.
+  const withFiles = (text: string) =>
+    files > 0
+      ? `${text}
+${filesLine(files)}`
+      : text;
 
-  const privateText = taskMessage({
-    task,
-    note,
-    people: task.developers.map(escapeHtml),
-    timeZone: env.TIMEZONE,
-  });
+  const privateText = withFiles(
+    taskMessage({
+      task,
+      note,
+      people: task.developers.map(escapeHtml),
+      timeZone: env.TIMEZONE,
+    }),
+  );
   for (const [name, account] of accounts) {
     if (name === options.skip) continue;
     if (!account.chatId || !isPrivateChat(account.chatId)) {
@@ -350,12 +378,14 @@ export async function notifyTask(
   // Исполнители названы все, а отмечены только те, кого надо разбудить: админу бот уже
   // написал лично, а прежних исполнителей правка задачи не касается.
   const tags = await taskTags(others);
-  const text = taskMessage({
-    task,
-    note,
-    people: task.developers.map((name) => tags.get(name) ?? escapeHtml(name)),
-    timeZone: env.TIMEZONE,
-  });
+  const text = withFiles(
+    taskMessage({
+      task,
+      note,
+      people: task.developers.map((name) => tags.get(name) ?? escapeHtml(name)),
+      timeZone: env.TIMEZONE,
+    }),
+  );
 
   await trySendMessage(chatId, text, log, 3, button);
 }

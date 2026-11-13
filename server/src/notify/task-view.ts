@@ -3,9 +3,8 @@ import type { CreatedTask } from "../crm/tasks/service.js";
 import { prisma } from "../db.js";
 import { env } from "../env.js";
 import { loadCardTask, renderCard } from "./intake/cards.js";
-import { attachmentsLine } from "./intake/files.js";
 import type { ListKind } from "./my-tasks.js";
-import { taskKeyboard, taskMessage } from "./notifications.js";
+import { countFiles, filesLine, taskKeyboard, taskMessage } from "./notifications.js";
 import { editMessage, escapeHtml, type Keyboard } from "./telegram.js";
 
 /**
@@ -49,10 +48,11 @@ export async function renderTask(
   if (options.project && task.project) {
     lines.push(`📁 Проект: ${escapeHtml(task.project.title)}`);
   }
-  const files = await attachmentsLine(task.parent?.id ?? task.id);
-  if (files) lines.push(files);
+  const files = await countFiles(task.parent?.id ?? task.id);
+  const line = filesLine(files);
+  if (line) lines.push(line);
   if (options.footer) lines.push("", options.footer);
-  const keyboard = taskKeyboard(task);
+  const keyboard = taskKeyboard({ ...task, files });
   if (options.back) withBack(keyboard, options.back);
   return { text: lines.join("\n"), keyboard };
 }

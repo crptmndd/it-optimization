@@ -12,7 +12,7 @@ import {
 import { prisma } from "../../db.js";
 import { env } from "../../env.js";
 import { afterTaskUpdate } from "../after-update.js";
-import { isPrivateChat, taskKeyboard } from "../notifications.js";
+import { countFiles, isPrivateChat, taskKeyboard } from "../notifications.js";
 import type { TeamUser } from "../team-user.js";
 import { escapeHtml, postMessage } from "../telegram.js";
 import { formatDate } from "../zone.js";
@@ -315,6 +315,6 @@ export async function handleTaskReply(
   if (lines.length === 0) return;
   await say(
     [`<b>${escapeHtml(current.title)}</b>`, ...lines].join("\n"),
-    taskKeyboard(current),
+    taskKeyboard({ ...current, files: await countFiles(current.parentId ?? current.id) }),
   );
 }

@@ -14,7 +14,14 @@ import { TASK_RELATIONS } from "../../crm/tasks/dto.js";
 import { isClosed, reachableTask } from "../../crm/tasks/service.js";
 import { prisma } from "../../db.js";
 import { env } from "../../env.js";
-import { notifyTask, taskActionRows, taskButton, taskMessage } from "../notifications.js";
+import {
+  countFiles,
+  filesLine,
+  notifyTask,
+  taskActionRows,
+  taskButton,
+  taskMessage,
+} from "../notifications.js";
 import {
   answerCallback,
   editMessage,
@@ -23,7 +30,6 @@ import {
   type Keyboard,
   type TgCallbackQuery,
 } from "../telegram.js";
-import { attachmentsLine } from "./files.js";
 import { loadPeople } from "./parse.js";
 
 /**
@@ -137,8 +143,9 @@ export async function renderCard(
       lines.push(`${sub.status === "done" ? "☑️" : "▫️"} ${escapeHtml(sub.title)}${who}`);
     }
   }
-  const files = await attachmentsLine(task.parentId ?? task.id);
-  if (files) lines.push(files);
+  const files = await countFiles(task.parentId ?? task.id);
+  const filesText = filesLine(files);
+  if (filesText) lines.push(filesText);
   if (extras.length > 0) lines.push("", ...extras);
 
   // Не «↩️»: эта стрелка теперь у «Вернуть в работу», а «Отменить» удаляет задачу.
@@ -170,7 +177,7 @@ export async function renderCard(
   // Сверху — те же действия, что под уведомлением: карточку видит автор, и задачу,
   // поставленную себе, закрывают отсюда же. Ниже свои кнопки карточки, ссылка в CRM — внизу.
   const keyboard: Keyboard = [
-    ...taskActionRows(task),
+    ...taskActionRows({ ...task, files }),
     [{ text: "👤 Исполнители", callback_data: `p:${task.id}` }, cancel],
   ];
   // У подзадачи своей карточки в CRM нет, открывается родитель.

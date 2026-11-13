@@ -9,10 +9,12 @@ import { prisma } from "../db.js";
 import { env } from "../env.js";
 import { myTasksMessage, renderTaskList, type ListKind } from "./my-tasks.js";
 import { afterTaskUpdate, refreshReviews } from "./after-update.js";
+import { countFiles, isPrivateChat } from "./notifications.js";
 import { askForInput } from "./pending.js";
 import { answerQuestion, recallQuestion } from "./questions.js";
 import { deadlinesList } from "./reminders.js";
 import { handleEdit } from "./task-edit.js";
+import { sendTaskFiles } from "./task-files.js";
 import {
   listKindOf,
   refreshTaskMessage,
@@ -234,6 +236,11 @@ export async function handleTaskAction(query: TgCallbackQuery, log: Log): Promis
     return;
   }
 
+  if (code === "show") {
+    await showFiles(query, presser, taskId, log);
+    return;
+  }
+
   const action = ACTIONS[code];
   if (!action) {
     await answerCallback(query.id);
@@ -289,4 +296,78 @@ export async function handleTaskAction(query: TgCallbackQuery, log: Log): Promis
       footer: footerOf(code, task, presser.name),
     }),
   ]);
+}
+
+/** Кому сейчас уходят файлы какой задачи: второе нажатие, пока идёт первое, не дублирует альбом. */
+const sendingFiles = new Set<string>();
+
+/**
+ * «🗂 Файлы»: скриншоты и документы задачи в чат. Только лично тому, кто нажал: в файлах
+ * бывают данные клиентов, и в общем чате их увидели бы те, кому задача в CRM не видна. В
+ * личке файлы приходят ответом на сообщение о задаче, из общего чата — отдельно.
+ *
+ * Загрузка идёт в фоне: несколько скриншотов через туннель — это секунды, и все это время
+ * остальные кнопки человека ждали бы своей очереди.
+ */
+async function showFiles(
+  query: TgCallbackQuery,
+  presser: TeamUser,
+  taskId: string,
+  log: Log,
+): Promise<void> {
+  const message = query.message!;
+  const chatId = String(message.chat.id);
+  const task = await prisma.task.findFirst({
+    where: reachableTask(taskId, presser.viewer),
+    select: { id: true, title: true, parent: { select: { id: true, title: true } } },
+  });
+  // Файлы подзадачи лежат у родителя: смотреть их можно, только если виден и он, как в CRM.
+  const owner = task?.parent ?? task;
+  const visible =
+    owner &&
+    (owner === task ||
+      (await prisma.task.count({ where: reachableTask(owner.id, presser.viewer) })) > 0);
+  if (!owner || !visible) {
+    await answerCallback(query.id, "Эта задача вам недоступна.");
+    return;
+  }
+
+  const count = await countFiles(owner.id);
+  if (count === 0) {
+    // Файлы удалили в CRM, а кнопка осталась: сообщение перерисуется уже без неё.
+    await Promise.all([
+      answerCallback(query.id, "Файлов у задачи уже нет"),
+      refreshTaskMessage({
+        chatId,
+        messageId: message.message_id,
+        view: viewOf(message.reply_markup, message.text),
+        taskId,
+      }),
+    ]);
+    return;
+  }
+
+  const inPrivate = isPrivateChat(chatId);
+  const target = inPrivate ? chatId : String(query.from.id);
+  const key = `${target}:${owner.id}`;
+  if (sendingFiles.has(key)) {
+    await answerCallback(query.id, "Уже отправляю");
+    return;
+  }
+  sendingFiles.add(key);
+  await answerCallback(
+    query.id,
+    inPrivate ? "Отправляю файлы…" : "Файлы придут вам в личные сообщения с ботом",
+  );
+  void sendTaskFiles(
+    {
+      taskId: owner.id,
+      title: owner.title,
+      chatId: target,
+      replyTo: inPrivate ? message.message_id : undefined,
+    },
+    log,
+  )
+    .catch((cause: unknown) => log.warn({ err: cause }, "файлы задачи не отправлены"))
+    .finally(() => sendingFiles.delete(key));
 }

@@ -3,6 +3,7 @@ import { prisma } from "../db.js";
 import { canNotify } from "../env.js";
 import {
   accountChatsOf,
+  countFiles,
   isPrivateChat,
   notifyTaskInBackground,
   sendPrivate,
@@ -258,5 +259,6 @@ async function notifyAuthorClosed(
     `${done ? "✅" : "✖️"} <b>${escapeHtml(task.title)}</b>`,
     `${done ? "Выполнено" : "Отменено"} · ${escapeHtml(actor)}`,
   ].join("\n");
-  await sendPrivate(chatId, text, log, taskKeyboard(task));
+  const files = await countFiles(task.parent?.id ?? task.id);
+  await sendPrivate(chatId, text, log, taskKeyboard({ ...task, files }));
 }
