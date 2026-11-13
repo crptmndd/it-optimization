@@ -32,6 +32,7 @@ import {
   createTask,
   isClosed,
   reachableTask,
+  setTaskArchived,
   type TaskStatusValue,
   updateTask,
 } from "./service.js";
@@ -264,21 +265,9 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
       const params = idParams.safeParse(request.params);
       if (!params.success) return invalidInput(reply, params.error);
 
-      const existing = await prisma.task.findFirst({
-        where: reachableTask(params.data.id, request.user!),
-      });
-      if (!existing) return reply.code(404).send({ error: "Задача не найдена" });
-      if (existing.parentId) {
-        return reply
-          .code(400)
-          .send({ error: "Подзадача уходит в архив вместе со своей задачей" });
-      }
-
-      const task = await prisma.task.update({
-        where: { id: existing.id },
-        data: { archivedAt: archived ? (existing.archivedAt ?? new Date()) : null },
-        include: TASK_RELATIONS,
-      });
+      const result = await setTaskArchived(request.user!, params.data.id, archived);
+      if (!result.ok) return reply.code(result.code).send({ error: result.error });
+      const { task } = result;
       await audit(request, {
         entity: "tasks",
         entityId: task.id,

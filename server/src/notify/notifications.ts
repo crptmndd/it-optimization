@@ -223,6 +223,8 @@ interface KeyboardTask {
   id: string;
   status: string;
   parent?: { id: string } | null;
+  /** Убрана в архив руками: «Проверено» уже нажали, второй раз кнопка не нужна. */
+  archivedAt?: Date | null;
 }
 
 /**
@@ -247,13 +249,20 @@ export function taskActionRows(task: KeyboardTask): Keyboard {
   if (!closed && task.status !== "in_progress") {
     first.push({ text: "▶️ В работу", callback_data: `s:work:${task.id}` });
   }
+  // Сделанную задачу проверяют и убирают с доски одним нажатием. Отменённую проверять
+  // нечего, а уже убранную — незачем.
+  if (task.status === "done" && !task.archivedAt) {
+    first.push({ text: "☑️ Проверено", callback_data: `s:chk:${task.id}` });
+  }
   const file = { text: "📎 Прикрепить файл", callback_data: `s:file:${task.id}` };
-  return [
-    first,
-    closed
-      ? [file]
-      : [{ text: "📅 Изменить срок", callback_data: `s:due:${task.id}` }, file],
-  ];
+  const edit = { text: "✏️ Редактировать", callback_data: `e:menu:${task.id}` };
+  return closed
+    ? [first, [file, edit]]
+    : [
+        first,
+        [{ text: "📅 Изменить срок", callback_data: `s:due:${task.id}` }, file],
+        [edit],
+      ];
 }
 
 /** Действия и ссылка в карточку CRM последним рядом. */

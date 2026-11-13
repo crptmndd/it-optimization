@@ -1,7 +1,7 @@
 import type { Prisma, Task } from "@prisma/client";
 import type { z } from "zod";
 import { prisma } from "../../db.js";
-import { liveTask, projectScope, taskScope, type Viewer } from "../access.js";
+import { isAdmin, liveTask, projectScope, taskScope, type Viewer } from "../access.js";
 import { normalizeTaskStatus, placeCard } from "../columns/columns.js";
 import { createNote } from "../notes.js";
 import { assertDevelopers } from "../people.js";
@@ -252,4 +252,37 @@ export async function updateTask(
     return updated;
   });
   return { ok: true, task, existing };
+}
+
+export type ArchiveTaskResult =
+  { ok: true; task: CreatedTask } | { ok: false; code: 400 | 403 | 404; error: string };
+
+/**
+ * Ручной архив — тот же, что «В архив» в CRM и «☑️ Проверено» в телеграме. Только админ:
+ * архив убирает задачу с доски, из «Сегодня» и сводки. Подзадача уходит и возвращается
+ * только со своей задачей. Возврат снимает лишь ручную отметку.
+ */
+export async function setTaskArchived(
+  viewer: Viewer,
+  id: string,
+  archived: boolean,
+): Promise<ArchiveTaskResult> {
+  if (!isAdmin(viewer)) {
+    return { ok: false, code: 403, error: "Убрать задачу в архив может админ" };
+  }
+  const existing = await prisma.task.findFirst({ where: reachableTask(id, viewer) });
+  if (!existing) return { ok: false, code: 404, error: "Задача не найдена" };
+  if (existing.parentId) {
+    return {
+      ok: false,
+      code: 400,
+      error: "Подзадача уходит в архив вместе со своей задачей",
+    };
+  }
+  const task = await prisma.task.update({
+    where: { id: existing.id },
+    data: { archivedAt: archived ? (existing.archivedAt ?? new Date()) : null },
+    include: TASK_RELATIONS,
+  });
+  return { ok: true, task };
 }

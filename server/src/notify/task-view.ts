@@ -79,49 +79,65 @@ export interface SentMarkup {
   inline_keyboard?: { callback_data?: string }[][];
 }
 
-/** Из какого списка открыта задача — по её кнопке «Назад». Нет кнопки — ни из какого. */
-export function backOf(markup: SentMarkup | undefined): ListKind | undefined {
-  const data = markup?.inline_keyboard
-    ?.flat()
-    .find((button) => button.callback_data?.startsWith("b:"))?.callback_data;
-  return data ? listKindOf(data.slice(2)) : undefined;
+/**
+ * Вид сообщения о задаче: `c` — карточка поставленной задачи, `n` — уведомление,
+ * `m`/`r`/`q` — задача, открытая из списка (своего, сроков или ответа на вопрос). Меню
+ * правки временно заменяет кнопки и несёт вид в своих данных (`e:<действие>:<вид>:<id>`),
+ * чтобы вернуть сообщение в прежний вид, а не в чужой.
+ */
+export type ViewKind = "c" | "n" | ListKind;
+
+const VIEWS: readonly string[] = ["c", "n", "m", "r", "q"];
+
+export function viewKindOf(value: string | undefined): ViewKind {
+  return VIEWS.includes(value ?? "") ? (value as ViewKind) : "n";
+}
+
+/** Вид по кнопкам уже отправленного сообщения. */
+export function viewOf(markup: SentMarkup | undefined, text?: string): ViewKind {
+  const buttons = markup?.inline_keyboard?.flat() ?? [];
+  const data = (prefix: string) =>
+    buttons.find((button) => button.callback_data?.startsWith(prefix))?.callback_data;
+  if (data("c:")) return "c";
+  const back = data("b:");
+  if (back) return listKindOf(back.slice(2));
+  const edit = data("e:")?.split(":");
+  if (edit && edit.length >= 4) return viewKindOf(edit[2]);
+  // Задача из списка, открытая до кнопки «Назад», узнаётся по строке проекта.
+  if (text?.includes("📁 Проект:")) return "m";
+  return "n";
+}
+
+/** Задача в своём виде. `null` — задачи больше нет. */
+export async function renderView(
+  taskId: string,
+  view: ViewKind,
+  footer?: string,
+): Promise<{ text: string; keyboard: Keyboard } | null> {
+  if (view === "c") {
+    const card = await loadCardTask(taskId);
+    return card ? renderCard(card, "main", footer ? [footer] : []) : null;
+  }
+  const fresh = await prisma.task.findUnique({
+    where: { id: taskId },
+    include: TASK_VIEW,
+  });
+  if (!fresh) return null;
+  const list = view === "n" ? undefined : view;
+  return renderTask(fresh, { footer, project: Boolean(list), back: list });
 }
 
 /**
- * Перерисовать сообщение о задаче после правки, сохранив его вид: карточка остаётся
- * карточкой (её узнаём по кнопке «Отменить», `c:`), задача из списка — с проектом и
- * «Назад», уведомление — по шаблону. Строка о действии встаёт вниз.
+ * Перерисовать сообщение о задаче после правки, сохранив его вид. Строка о действии
+ * встаёт вниз.
  */
 export async function refreshTaskMessage(input: {
   chatId: string;
   messageId: number;
-  markup?: SentMarkup;
-  text?: string;
+  view: ViewKind;
   taskId: string;
   footer?: string;
 }): Promise<void> {
-  const isCard = input.markup?.inline_keyboard
-    ?.flat()
-    .some((button) => button.callback_data?.startsWith("c:"));
-  if (isCard) {
-    const card = await loadCardTask(input.taskId);
-    if (!card) return;
-    const view = await renderCard(card, "main", input.footer ? [input.footer] : []);
-    await editMessage(input.chatId, input.messageId, view.text, view.keyboard);
-    return;
-  }
-
-  const fresh = await prisma.task.findUnique({
-    where: { id: input.taskId },
-    include: TASK_VIEW,
-  });
-  if (!fresh) return;
-  // У старых задач из списка «Назад» ещё нет — их выдаёт строка проекта.
-  const back = backOf(input.markup);
-  const view = await renderTask(fresh, {
-    footer: input.footer,
-    project: Boolean(back) || Boolean(input.text?.includes("📁 Проект:")),
-    back,
-  });
-  await editMessage(input.chatId, input.messageId, view.text, view.keyboard);
+  const view = await renderView(input.taskId, input.view, input.footer);
+  if (view) await editMessage(input.chatId, input.messageId, view.text, view.keyboard);
 }

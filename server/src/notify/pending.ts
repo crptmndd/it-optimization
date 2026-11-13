@@ -1,13 +1,14 @@
 import { z } from "zod";
 import { ReplicateError } from "../ai/replicate.js";
 import { auditAs } from "../audit.js";
+import { createNote, NOTE_MAX_LENGTH } from "../crm/notes.js";
 import { reachableTask, updateTask } from "../crm/tasks/service.js";
 import { prisma } from "../db.js";
 import { canIntake, env } from "../env.js";
 import { attachFiles, filesOf } from "./intake/files.js";
 import { askModel, dateBlock, dueFrom } from "./intake/parse.js";
 import { afterTaskUpdate, isPrivateChat } from "./notifications.js";
-import { refreshTaskMessage, type SentMarkup } from "./task-view.js";
+import { refreshTaskMessage, type ViewKind } from "./task-view.js";
 import { teamUserOf, type TeamUser } from "./team-user.js";
 import { escapeHtml, postMessage, type TgMessage } from "./telegram.js";
 import { formatDate, zonedNow } from "./zone.js";
@@ -29,15 +30,16 @@ interface Log {
   error: (obj: unknown, msg: string) => void;
 }
 
-type Kind = "due" | "file";
+/** Срок, файл, а из меню «✏️ Редактировать» — новое название и описание. */
+type Kind = "due" | "file" | "title" | "note";
 
 interface Pending {
   kind: Kind;
   taskId: string;
   chatId: string;
   telegramId: number;
-  /** Сообщение о задаче, которое обновится, когда ответ придёт. */
-  source: { messageId: number; markup?: SentMarkup; text?: string };
+  /** Сообщение о задаче, которое обновится в прежнем виде, когда ответ придёт. */
+  source: { messageId: number; view: ViewKind };
   /** Вопрос бота: в общем чате ответом считается только ответ на него. */
   promptId: number;
   expiresAt: number;
@@ -76,14 +78,31 @@ export async function askForInput(input: {
     ? `<a href="tg://user?id=${input.telegramId}">${escapeHtml(input.name)}</a>, `
     : "";
   const how = group ? "ответьте на это сообщение" : "напишите";
-  const text =
-    kind === "due"
-      ? `📅 ${who}${group ? "к" : "К"}огда срок? Просто ${how}: «к пятнице», «до 1 декабря», «через неделю» или «без срока».`
-      : `📎 ${who}${group ? "п" : "П"}ришлите скриншот или файл${group ? " ответом на это сообщение" : ""} — прикреплю к задаче.`;
+  const reply = group ? " ответом на это сообщение" : "";
+  // В общем чате фраза начинается с имени, поэтому первая буква вопроса строчная.
+  const cap = (word: string) => (group ? word : word[0]!.toUpperCase() + word.slice(1));
+  const prompts: Record<Kind, { text: string; placeholder: string }> = {
+    due: {
+      text: `📅 ${who}${cap("когда")} срок? Просто ${how}: «к пятнице», «до 1 декабря», «через неделю» или «без срока».`,
+      placeholder: "к пятнице, до 1 декабря…",
+    },
+    file: {
+      text: `📎 ${who}${cap("пришлите")} скриншот или файл${reply} — прикреплю к задаче.`,
+      placeholder: "Скриншот или файл",
+    },
+    title: {
+      text: `✏️ ${who}${cap("как")} назвать задачу? Напишите новое название${reply}.`,
+      placeholder: "Новое название",
+    },
+    note: {
+      text: `💬 ${who}${cap("напишите")} описание${reply} — оно встанет в задачу и в уведомление о ней.`,
+      placeholder: "Что сделать, ссылки, детали",
+    },
+  };
 
-  const promptId = await postMessage(chatId, text, {
+  const promptId = await postMessage(chatId, prompts[kind].text, {
     replyTo: input.source.messageId,
-    forceReply: kind === "due" ? "к пятнице, до 1 декабря…" : "Скриншот или файл",
+    forceReply: prompts[kind].placeholder,
   });
 
   const key = keyOf(chatId, input.telegramId);
@@ -147,7 +166,86 @@ export async function consumePending(message: TgMessage, log: Log): Promise<bool
   }
 
   if (pending.kind === "file") return consumeFile(pending, message, files, user, log);
+  if (pending.kind === "title" || pending.kind === "note") {
+    return consumeText(pending, message, text, user, log);
+  }
   return consumeDue(pending, message, text, user, log);
+}
+
+/**
+ * Новое название — правкой задачи, как в CRM. Описание — заметкой: «Подробностей» в
+ * задаче больше нет, а последняя заметка и есть то, что видно в карточке и уведомлении.
+ */
+async function consumeText(
+  pending: Pending,
+  message: TgMessage,
+  text: string,
+  user: TeamUser,
+  log: Log,
+): Promise<boolean> {
+  const key = keyOf(pending.chatId, pending.telegramId);
+  const say = (reply: string) =>
+    postMessage(pending.chatId, reply, { replyTo: message.message_id });
+  if (!text) {
+    await say(
+      pending.kind === "title"
+        ? "Напишите название текстом."
+        : "Напишите описание текстом.",
+    );
+    return true;
+  }
+  waiting.delete(key);
+
+  let footer: string;
+  if (pending.kind === "title") {
+    const title = text.slice(0, 300);
+    const result = await updateTask(user.viewer, pending.taskId, { title });
+    if (!result.ok) {
+      await say(result.code === 404 ? "Эта задача вам недоступна." : result.error);
+      return true;
+    }
+    await auditAs(
+      user.viewer.id,
+      {
+        entity: "tasks",
+        entityId: pending.taskId,
+        action: "update",
+        diff: { via: "telegram", fields: ["title"] },
+      },
+      log,
+    );
+    await say(`✏️ Название: ${escapeHtml(title)}`);
+    footer = `✏️ Название изменено · ${escapeHtml(user.name)}`;
+  } else {
+    const task = await prisma.task.findFirst({
+      where: reachableTask(pending.taskId, user.viewer),
+      select: { id: true, parentId: true, title: true },
+    });
+    if (!task) {
+      await say("Эта задача вам недоступна.");
+      return true;
+    }
+    // У подзадачи своего окна нет: её описание встаёт заметкой к родителю.
+    const body = task.parentId ? `К подзадаче «${task.title}»: ${text}` : text;
+    await createNote(
+      "task",
+      task.parentId ?? task.id,
+      user.viewer.id,
+      body.slice(0, NOTE_MAX_LENGTH),
+    );
+    await say("💬 Описание добавлено");
+    footer = `💬 Описание обновлено · ${escapeHtml(user.name)}`;
+  }
+
+  await refreshTaskMessage({
+    chatId: pending.chatId,
+    ...pending.source,
+    taskId: pending.taskId,
+    footer,
+  }).catch((cause: unknown) =>
+    log.warn({ err: cause }, "сообщение о задаче не обновилось"),
+  );
+  return true;
 }
 
 async function consumeFile(

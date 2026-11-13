@@ -1,5 +1,10 @@
 import { auditAs } from "../audit.js";
-import { reachableTask, updateTask, type UpdateTaskInput } from "../crm/tasks/service.js";
+import {
+  reachableTask,
+  setTaskArchived,
+  updateTask,
+  type UpdateTaskInput,
+} from "../crm/tasks/service.js";
 import { prisma } from "../db.js";
 import { env } from "../env.js";
 import { myTasksMessage, renderTaskList, type ListKind } from "./my-tasks.js";
@@ -7,7 +12,14 @@ import { afterTaskUpdate } from "./notifications.js";
 import { askForInput } from "./pending.js";
 import { answerQuestion, recallQuestion } from "./questions.js";
 import { deadlinesList } from "./reminders.js";
-import { listKindOf, refreshTaskMessage, renderTask, TASK_VIEW } from "./task-view.js";
+import { handleEdit } from "./task-edit.js";
+import {
+  listKindOf,
+  refreshTaskMessage,
+  renderTask,
+  TASK_VIEW,
+  viewOf,
+} from "./task-view.js";
 import { teamUserOf, type TeamUser } from "./team-user.js";
 import {
   answerCallback,
@@ -95,7 +107,7 @@ function footerOf(code: string, task: { dueAt: Date | null }, who: string): stri
  * (у старых сообщений без списка: `o:<id>`), `b:<список>` — назад к списку.
  */
 export function isTaskAction(data: string | undefined): boolean {
-  return Boolean(data && /^[sob]:/.test(data));
+  return Boolean(data && /^[sobe]:/.test(data));
 }
 
 export async function handleTaskAction(query: TgCallbackQuery, log: Log): Promise<void> {
@@ -103,7 +115,9 @@ export async function handleTaskAction(query: TgCallbackQuery, log: Log): Promis
   const taskId = parts.at(-1) ?? "";
   const message = query.message;
   const back = parts[0] === "b";
-  if (!message || (!back && !UUID.test(taskId))) {
+  // У кнопок правки в конце код или ключ, а не id: их данные разбирает `handleEdit`.
+  const edit = parts[0] === "e";
+  if (!message || (!back && !edit && !UUID.test(taskId))) {
     await answerCallback(query.id);
     return;
   }
@@ -115,6 +129,8 @@ export async function handleTaskAction(query: TgCallbackQuery, log: Log): Promis
   }
 
   const chatId = String(message.chat.id);
+
+  if (parts[0] === "e") return handleEdit(query, presser, log);
 
   if (back) {
     const list = await listFor(
@@ -163,9 +179,35 @@ export async function handleTaskAction(query: TgCallbackQuery, log: Log): Promis
       name: presser.name,
       source: {
         messageId: message.message_id,
-        markup: message.reply_markup,
-        text: message.text,
+        view: viewOf(message.reply_markup, message.text),
       },
+    });
+    return;
+  }
+
+  // «☑️ Проверено»: сделанная задача принята и уходит с доски в архив. Это ручной архив
+  // CRM, и решает его админ; «↩️ Вернуть в работу» вернёт её на доску.
+  if (code === "chk") {
+    const archived = await setTaskArchived(presser.viewer, taskId, true);
+    if (!archived.ok) {
+      await answerCallback(
+        query.id,
+        archived.code === 404 ? "Эта задача вам недоступна." : archived.error,
+      );
+      return;
+    }
+    await auditAs(
+      presser.viewer.id,
+      { entity: "tasks", entityId: taskId, action: "archive", diff: { via: "telegram" } },
+      log,
+    );
+    await answerCallback(query.id, "Проверено — задача в архиве");
+    await refreshTaskMessage({
+      chatId,
+      messageId: message.message_id,
+      view: viewOf(message.reply_markup, message.text),
+      taskId,
+      footer: `☑️ Проверено, в архиве · ${escapeHtml(presser.name)}`,
     });
     return;
   }
@@ -211,8 +253,7 @@ export async function handleTaskAction(query: TgCallbackQuery, log: Log): Promis
   await refreshTaskMessage({
     chatId,
     messageId: message.message_id,
-    markup: message.reply_markup,
-    text: message.text,
+    view: viewOf(message.reply_markup, message.text),
     taskId: task.id,
     footer: footerOf(code, task, presser.name),
   });

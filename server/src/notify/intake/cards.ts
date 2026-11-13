@@ -238,6 +238,11 @@ export async function flushNotices(): Promise<void> {
   await Promise.race([all, new Promise((resolve) => setTimeout(resolve, 10_000))]);
 }
 
+/** Уведомление о задаче ещё ждёт своей минуты (или задачу отменили до него). */
+export function hasPendingNotice(taskId: string): boolean {
+  return pending.has(taskId) || held.has(taskId);
+}
+
 function hold(taskId: string): void {
   const entry = pending.get(taskId);
   if (!entry) return;
