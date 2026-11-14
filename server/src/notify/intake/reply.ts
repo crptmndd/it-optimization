@@ -23,6 +23,9 @@ import {
   clip,
   dateBlock,
   dueFrom,
+  looseList,
+  looseNames,
+  looseText,
   priorityFrom,
   resolvePeople,
   teamBlock,
@@ -73,18 +76,25 @@ const RULES = `Верни только JSON без пояснений и без 
 - title: новое название, только если прямо просят переименовать. Иначе null.
 - subtasks: новые пункты работы, если ответ их добавляет («ещё нужно…», «добавь подзадачу…»), каждый с исполнителями, если названы. Иначе пустой список.`;
 
+/** Тот же мягкий разбор, что у постановки задачи: мелкий промах модели не губит ответ. */
 const rawReply = z.object({
-  comment: z.boolean().nullish(),
-  status: z.string().nullish(),
-  due: z.string().nullish(),
-  priority: z.string().nullish(),
-  add: z.array(z.string()).nullish(),
-  remove: z.array(z.string()).nullish(),
-  title: z.string().nullish(),
-  subtasks: z
-    .array(z.object({ title: z.string(), assignees: z.array(z.string()).nullish() }))
-    .nullish(),
+  comment: z.preprocess((value) => value === true || value === "true", z.boolean()),
+  status: looseText,
+  due: looseText,
+  priority: looseText,
+  add: looseNames,
+  remove: looseNames,
+  title: looseText,
+  subtasks: looseList(z.object({ title: looseText, assignees: looseNames })),
 });
+
+/** «Ок», «спасибо», «+», эмодзи: без модели такое не сохраняем комментарием. */
+const REACTION =
+  /^[\s\p{P}\p{S}]*(ок|окей|ok|okay|спасибо|спс|понял|поняла|принял|приняла|да|ага|угу|\+)?[\s\p{P}\p{S}]*$/iu;
+
+function isReaction(text: string): boolean {
+  return REACTION.test(text.trim());
+}
 
 type ReplyTask = NonNullable<Awaited<ReturnType<typeof loadTask>>>;
 
@@ -163,13 +173,32 @@ export async function handleTaskReply(
     return;
   }
 
-  // Только файлы, без слов — разбирать нечего, модель не нужна.
-  const parsed = input.source
-    ? await askModel(buildPrompt(task, context, input.source), rawReply, 1000)
-    : rawReply.parse({});
   const subtask = Boolean(task.parentId);
   const lines: string[] = [];
   const problems: string[] = [];
+
+  // Только файлы, без слов — разбирать нечего, модель не нужна.
+  let parsed = rawReply.parse({});
+  if (input.source) {
+    try {
+      parsed = await askModel(buildPrompt(task, context, input.source), rawReply, 1000);
+    } catch (cause) {
+      // Модель не ответила — слова человека всё равно не теряются: они ложатся в задачу
+      // комментарием. Реакцию («ок») не сохраняем и о сбое на неё не пишем: с моделью
+      // бот на неё тоже молчит, а в общем чате «ок» под задачами звучит постоянно.
+      // Пустые слова тоже сюда: сохранять нечего, а файлы, если есть, лягут ниже.
+      if (isReaction(input.plain)) {
+        log.warn({ err: cause }, "разбор ответа сорвался, но это реакция: молчу");
+        if (input.files.length === 0) return;
+      } else {
+        log.error({ err: cause }, "разбор ответа сорвался, сохраняю его комментарием");
+        parsed = rawReply.parse({ comment: true });
+        problems.push(
+          "разобрать ответ моделью — он сохранён комментарием. Статус, срок и людей поменяйте кнопками.",
+        );
+      }
+    }
+  }
 
   // Своего окна у подзадачи нет: её файлы ложатся в задачу, где их увидят.
   const files = await attachFiles(

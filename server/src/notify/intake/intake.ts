@@ -31,10 +31,12 @@ import { answerQuestion, rememberQuestion } from "../questions.js";
 import { attachFiles, filesOf } from "./files.js";
 import { handleTaskReply } from "./reply.js";
 import {
+  fallbackTask,
   loadContext,
   planTasks,
   speechHint,
   type IntakeContext,
+  type Plan,
   type PlannedTask,
 } from "./parse.js";
 
@@ -282,9 +284,11 @@ async function sourceOf(
   messages: TgMessage[],
   context: IntakeContext,
   log: Log,
-): Promise<{ text: string; plain: string; problem: string | null }> {
+): Promise<{ text: string; plain: string; own: string; problem: string | null }> {
   const blocks: string[] = [];
   const plain: string[] = [];
+  /** Слова самого автора, без пересланного: из них задача, если модель не ответила. */
+  const own: string[] = [];
   const problems: string[] = [];
   let words = false;
 
@@ -300,15 +304,21 @@ async function sourceOf(
 
   for (const message of messages) {
     const parts: string[] = [];
+    const spoken: string[] = [];
     const text = textOf(message);
-    if (text) parts.push(text);
+    if (text) {
+      parts.push(text);
+      spoken.push(text);
+    }
 
     const audio = message.voice ?? message.audio;
     if (audio) {
       try {
         const transcript = await transcribeFile(audio, context);
-        if (transcript) parts.push(`(голосом) ${transcript}`);
-        else problems.push("В голосовом не разобрал слов.");
+        if (transcript) {
+          parts.push(`(голосом) ${transcript}`);
+          spoken.push(transcript);
+        } else problems.push("В голосовом не разобрал слов.");
       } catch (cause) {
         if (cause instanceof AudioTooLong) {
           problems.push("Голосовое длиннее шести минут: такое не расшифровываю.");
@@ -326,6 +336,7 @@ async function sourceOf(
     if (parts.length === 0) continue;
 
     const origin = originOf(message);
+    if (!origin) own.push(...spoken);
     const said = parts.join("\n");
     plain.push(origin ? `Переслано от ${origin}: ${said}` : said);
     blocks.push(
@@ -337,6 +348,7 @@ async function sourceOf(
   return {
     text: words ? text.slice(0, MAX_SOURCE) : "",
     plain: words ? plain.join("\n\n").slice(0, MAX_SOURCE) : "",
+    own: own.join("\n").slice(0, MAX_SOURCE),
     problem: problems[0] ?? null,
   };
 }
@@ -401,6 +413,10 @@ const FAILED =
   "Не получилось разобрать сообщение. Попробуйте ещё раз или поставьте задачу в CRM.";
 const NO_AI =
   "Разбор сообщений сейчас недоступен: у Replicate закончились деньги, отозван ключ или снята модель. Задачу можно поставить в CRM.";
+const FALLBACK =
+  "Модель не разобрала сообщение, поэтому задача поставлена из текста как есть: проверьте название, исполнителя и срок.";
+const NO_AI_FALLBACK =
+  "Разбор моделью недоступен (у Replicate закончились деньги, отозван ключ или снята модель), поэтому задача поставлена из текста как есть.";
 
 async function processBundle(bundle: Bundle, log: Log): Promise<void> {
   const messages = [...bundle.messages].sort((a, b) => a.message_id - b.message_id);
@@ -444,7 +460,28 @@ async function processBundle(bundle: Bundle, log: Log): Promise<void> {
       return;
     }
 
-    const plan = await planTasks(context, source.text);
+    let plan: Plan;
+    /** Пометка на карточке, если задача поставлена без модели. */
+    let degraded: string | null = null;
+    try {
+      plan = await planTasks(context, source.text);
+    } catch (cause) {
+      // Модель не ответила, ответила не то или Replicate недоступен: поручение не должно
+      // пропасть. Задача ставится из текста как есть, а вопрос («что у Вадима?»)
+      // задачей не становится — на него честно отвечаем, что не вышло.
+      const owner = cause instanceof ReplicateError && cause.needsOwner;
+      const asked = /\?\s*$/.test(source.own || source.plain);
+      const task = asked ? null : fallbackTask(source.own, source.plain, context);
+      if (!task) throw cause;
+      log.error(
+        { err: cause },
+        owner
+          ? "Replicate отказал в доступе, задача поставлена из текста"
+          : "разбор сообщения сорвался, задача поставлена из текста",
+      );
+      plan = { intent: "task", tasks: [task] };
+      degraded = owner ? NO_AI_FALLBACK : FALLBACK;
+    }
     if (plan.intent === "question") {
       // В общем чате ответ увидели бы все, а собран он по правам спросившего.
       if (!isPrivateChat(bundle.chatId)) {
@@ -473,6 +510,7 @@ async function processBundle(bundle: Bundle, log: Log): Promise<void> {
       }
       const extras = [...outcome.warnings];
       if (index === 0) {
+        if (degraded) extras.push(`⚠️ ${degraded}`);
         if (source.problem) extras.push(`⚠️ ${source.problem}`);
         // Файлы — к первой задаче: в пачке почти всегда одна. У подзадачи своего окна нет,
         // и её файлы видны в окне родителя.

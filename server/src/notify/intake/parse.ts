@@ -264,30 +264,65 @@ export function buildPrompt(context: IntakeContext, message: string): string {
   ].join("\n");
 }
 
-/** Ответ модели как есть: строже проверять здесь нельзя, иначе одна мелочь губит всё. */
+/**
+ * Ответ модели как есть: строже проверять здесь нельзя, иначе одна мелочь губит всё.
+ * Поэтому каждое поле прощает обычные промахи модели: число или объект на месте строки
+ * становятся пустым значением, одно имя строкой вместо списка — списком из одного, кривой
+ * пункт списка выпадает, а не роняет весь разбор. Что пустое — то код и так не ставит.
+ */
+export const looseText = z.preprocess(
+  (value) =>
+    typeof value === "string" ? value : typeof value === "number" ? String(value) : null,
+  z.string().nullable(),
+);
+
+export const looseNames = z.preprocess(
+  (value) =>
+    typeof value === "string"
+      ? [value]
+      : Array.isArray(value)
+        ? value.filter((item): item is string => typeof item === "string")
+        : null,
+  z.array(z.string()).nullable(),
+);
+
+/** Список объектов, где кривой элемент выпадает, а остальные остаются. */
+export function looseList<T extends z.ZodTypeAny>(item: T) {
+  return z.preprocess(
+    (value) =>
+      Array.isArray(value)
+        ? value.flatMap((entry) => {
+            const parsed = item.safeParse(entry);
+            return parsed.success ? [parsed.data] : [];
+          })
+        : null,
+    z.array(z.any()).nullable(),
+  ) as unknown as z.ZodType<z.infer<T>[] | null>;
+}
+
 const rawQuery = z.object({
-  people: z.array(z.string()).nullish(),
-  project: z.string().nullish(),
-  when: z.string().nullish(),
-  state: z.string().nullish(),
-  text: z.string().nullish(),
+  people: looseNames,
+  project: looseText,
+  when: looseText,
+  state: looseText,
+  text: looseText,
 });
 
+const rawSubtask = z.object({ title: looseText, assignees: looseNames });
+
 const rawPlan = z.object({
-  intent: z.string().nullish(),
-  query: rawQuery.nullish(),
-  tasks: z.array(
+  intent: looseText,
+  query: rawQuery.nullish().catch(null),
+  tasks: looseList(
     z.object({
-      title: z.string(),
-      note: z.string().nullish(),
-      assignees: z.array(z.string()).nullish(),
-      project: z.string().nullish(),
-      parent: z.string().nullish(),
-      due: z.string().nullish(),
-      priority: z.string().nullish(),
-      subtasks: z
-        .array(z.object({ title: z.string(), assignees: z.array(z.string()).nullish() }))
-        .nullish(),
+      title: looseText,
+      note: looseText,
+      assignees: looseNames,
+      project: looseText,
+      parent: looseText,
+      due: looseText,
+      priority: looseText,
+      subtasks: looseList(rawSubtask),
     }),
   ),
 });
@@ -434,7 +469,7 @@ function toPlan(
   context: IntakeContext,
   allowParent: boolean,
 ): PlannedTask[] {
-  return raw.tasks.slice(0, MAX_TASKS).flatMap((item): PlannedTask[] => {
+  return (raw.tasks ?? []).slice(0, MAX_TASKS).flatMap((item): PlannedTask[] => {
     const title = clip(item.title, 300);
     if (!title) return [];
 
@@ -488,25 +523,106 @@ export class PlanError extends Error {
   override name = "PlanError";
 }
 
+/** Что не так с ответом — коротко, для второй попытки и для журнала. */
+function describeProblem(cause: unknown): string {
+  if (cause instanceof z.ZodError) {
+    return cause.issues
+      .slice(0, 3)
+      .map((issue) => `${issue.path.join(".") || "ответ"}: ${issue.message}`)
+      .join("; ");
+  }
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
 /**
  * Запрос к модели с ответом в JSON по схеме. Вторая попытка — на случай оборванного или
- * кривого JSON: такое бывает редко и не повторяется подряд.
+ * кривого JSON. Не тем же запросом: при низкой температуре он почти всегда даёт тот же
+ * ответ, поэтому во второй раз модель узнаёт, что именно в первом не разобралось.
  */
 export async function askModel<T>(
   prompt: string,
-  schema: z.ZodType<T>,
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
   maxTokens = 2000,
 ): Promise<T> {
-  let lastError: unknown;
+  let problem = "";
+  let answer = "";
   for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const answer = await complete(prompt, maxTokens);
+    const request =
+      attempt === 1
+        ? prompt
+        : `${prompt}
+
+Твой прошлый ответ не удалось разобрать (${problem}). Ответь заново: только JSON указанного вида, без пояснений, рассуждений и markdown.`;
+    answer = await complete(request, maxTokens);
     try {
       return schema.parse(extractJson(answer));
     } catch (cause) {
-      lastError = cause;
+      problem = clip(describeProblem(cause), 200);
     }
   }
-  throw new PlanError(`модель вернула не то: ${String(lastError)}`);
+  // Начало ответа — в журнал: по нему видно, что модель вернула вместо JSON.
+  throw new PlanError(`модель вернула не то: ${problem}; ответ: ${clip(answer, 300)}`);
+}
+
+const URGENT = /срочн|горит|asap|немедленн/i;
+
+/**
+ * Задача из текста как есть — когда модель не ответила, ответила не то или Replicate
+ * недоступен. Лучше задача с неидеальным названием, чем потерянное поручение: название,
+ * исполнителя и срок поправят на карточке, а «Отменить» уберёт лишнюю.
+ *
+ * Без модели код угадывает только то, что видно наверняка: исполнитель — названный по
+ * имени (слово с большой буквы в любом падеже, и только если такой человек один), срок —
+ * «сегодня» или «завтра», важность — «срочно». Имя в начале («Тимуру заменить…») — это
+ * адресат, в название оно не идёт. Весь текст ложится в заметку: там детали и ссылки.
+ */
+export function fallbackTask(
+  own: string,
+  everything: string,
+  context: IntakeContext,
+): PlannedTask | null {
+  const base = (own.trim() || everything.trim()).replace(/^\(голосом\)\s*/, "");
+  const line = base.split("\n").find((item) => item.trim()) ?? "";
+  if (!line.trim()) return null;
+
+  const bare = (word: string) => word.replace(/[^\p{L}\p{N}@_]/gu, "");
+  const words = line.trim().split(/\s+/);
+  const named = words.map(bare).filter((word) => /^(\p{Lu}|@)/u.test(word));
+  const { developers } = resolvePeople(named, context);
+
+  const lead = bare(words[0] ?? "");
+  const addressed =
+    words.length > 1 && lead && resolvePerson(lead, context.people, context.author);
+  const rest = (addressed ? words.slice(1) : words)
+    .join(" ")
+    .replace(/^[,:—-]\s*/, "")
+    // Набранное на ходу «название , старые» — в названии без пробела перед запятой.
+    .replace(/\s+([,.;:!?])/g, "$1");
+  const title = clip(rest.charAt(0).toUpperCase() + rest.slice(1), 100);
+  if (!title) return null;
+
+  // `\b` в JS видит границы слов только у латиницы, поэтому граница — вручную.
+  const word = (value: string) => new RegExp(`(^|[^\\p{L}])${value}([^\\p{L}]|$)`, "iu");
+  const tomorrow = word("завтра").test(base);
+  const today = !tomorrow && word("сегодня").test(base);
+  const due = tomorrow
+    ? shiftDay(context.today, 1).toISOString().slice(0, 10)
+    : today
+      ? context.today
+      : null;
+
+  const note = clip(withoutMarks(everything), NOTE_MAX_LENGTH);
+  return {
+    title,
+    note: note && note !== title ? note : null,
+    developers,
+    unknown: [],
+    projectId: null,
+    parentId: null,
+    dueAt: dueFrom(due, context.today),
+    priority: URGENT.test(base) ? "high" : "normal",
+    subtasks: [],
+  };
 }
 
 /** Вопрос о задачах: о ком, по какому проекту, за какое время. Код превращает его в выборку. */
