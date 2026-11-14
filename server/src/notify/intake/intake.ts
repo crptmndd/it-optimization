@@ -284,11 +284,19 @@ async function sourceOf(
   messages: TgMessage[],
   context: IntakeContext,
   log: Log,
-): Promise<{ text: string; plain: string; own: string; problem: string | null }> {
+): Promise<{
+  text: string;
+  plain: string;
+  own: string;
+  /** Расшифровки голосовых дословно: они ложатся в заметку задачи. */
+  voice: string;
+  problem: string | null;
+}> {
   const blocks: string[] = [];
   const plain: string[] = [];
   /** Слова самого автора, без пересланного: из них задача, если модель не ответила. */
   const own: string[] = [];
+  const voices: string[] = [];
   const problems: string[] = [];
   let words = false;
 
@@ -318,6 +326,7 @@ async function sourceOf(
         if (transcript) {
           parts.push(`(голосом) ${transcript}`);
           spoken.push(transcript);
+          voices.push(transcript);
         } else problems.push("В голосовом не разобрал слов.");
       } catch (cause) {
         if (cause instanceof AudioTooLong) {
@@ -349,6 +358,7 @@ async function sourceOf(
     text: words ? text.slice(0, MAX_SOURCE) : "",
     plain: words ? plain.join("\n\n").slice(0, MAX_SOURCE) : "",
     own: own.join("\n").slice(0, MAX_SOURCE),
+    voice: voices.join("\n\n"),
     problem: problems[0] ?? null,
   };
 }
@@ -494,7 +504,13 @@ async function processBundle(bundle: Bundle, log: Log): Promise<void> {
       return;
     }
 
-    const plans = plan.tasks;
+    const plans = plan.tasks.map((task) =>
+      withTranscript(
+        task,
+        source.voice,
+        messages.some((message) => textOf(message)),
+      ),
+    );
     if (plans.length === 0) {
       await say(NO_TASK);
       return;
@@ -585,6 +601,25 @@ async function processReply(
       replyTo: anchor.message_id,
     }).catch(() => {});
   }
+}
+
+/**
+ * Расшифровка голосового — в заметку задачи дословно. Модель пересказывает, а пересказ
+ * теряет конкретику: из голосового про Threads вышла «социальная сеть», а «изучить
+ * возможность» стало «создать». Голосовое в CRM не переслушать, так что расшифровка —
+ * единственная запись того, что сказано. Если, кроме голоса, ничего не было, пересказ
+ * модели не нужен: всё есть в расшифровке. Если был и текст, остаются оба. Подзадаче
+ * заметка уходит к родителю, как и раньше.
+ */
+function withTranscript(task: PlannedTask, voice: string, hasText: boolean): PlannedTask {
+  if (!voice.trim()) return task;
+  const transcript = `🎙 Голосом, дословно: ${voice.trim()}`;
+  const note = hasText && task.note ? `${task.note}\n\n${transcript}` : transcript;
+  return {
+    ...task,
+    note:
+      note.length <= NOTE_MAX_LENGTH ? note : `${note.slice(0, NOTE_MAX_LENGTH - 1)}…`,
+  };
 }
 
 type Outcome =
