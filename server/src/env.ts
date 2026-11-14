@@ -102,6 +102,14 @@ const schema = z.object({
   REPLICATE_WHISPER_VERSION: z
     .string()
     .default("8099696689d249cf8b122d833c36ac3f75505c666a395ca40ef26f68e7d3d16e"),
+  /**
+   * Запасная расшифровка, если openai/whisper не ответил: версия
+   * vaibhavs10/incredibly-fast-whisper (Whisper large-v3 на другом железе). Пусто — без неё.
+   */
+  REPLICATE_WHISPER_FALLBACK_VERSION: z
+    .string()
+    .default("c6433aab18b7318bbae316495f1a097fc067deef7d59dc2f33e45077ae5956c7")
+    .transform((value) => value.trim()),
 
   /**
    * Ключ паролей и секретов 2FA: 32 байта в base64. Живёт только здесь: в базе и

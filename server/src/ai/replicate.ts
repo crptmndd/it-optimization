@@ -136,22 +136,36 @@ export type Target = { model: string } | { version: string };
  * снимает зависшее предсказание на стороне Replicate: иначе оно тикало бы за наш счёт и
  * после того, как мы перестали ждать.
  *
- * Сбой по дороге даёт ровно одну повторную попытку целиком. Если оборвался ответ на
- * запуск, первое предсказание доработает впустую: это доли цента, а человек иначе получил
- * бы «не получилось» на ровном месте.
+ * Сбой по дороге (обрыв, 429, 5xx) даёт повторные попытки целиком — `attempts` всего, с
+ * паузой перед каждой: две мгновенные попытки подряд обычно ловят одну и ту же заминку
+ * Replicate. Повтор идёт без `Prefer: wait`, обычным запуском с опросом: 502 на голосовое
+ * в ноябре 2026 пришёл именно на синхронное ожидание. Если оборвался ответ на запуск,
+ * первое предсказание доработает впустую: это доли цента, а человек иначе получил бы «не
+ * получилось» на ровном месте.
  */
 export async function runPrediction(
   target: Target,
   input: Record<string, unknown>,
   deadlineMs: number,
+  attempts = 2,
 ): Promise<unknown> {
   const started = Date.now();
   const timing: Timing = {};
   try {
-    return await runOnce(target, input, deadlineMs, timing);
-  } catch (cause) {
-    if (!(cause instanceof ReplicateError) || !cause.transient) throw cause;
-    return await runOnce(target, input, deadlineMs, timing);
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await runOnce(target, input, deadlineMs, timing, attempt === 1);
+      } catch (cause) {
+        if (
+          !(cause instanceof ReplicateError) ||
+          !cause.transient ||
+          attempt >= attempts
+        ) {
+          throw cause;
+        }
+        await sleep(RETRY_PAUSE_MS[attempt - 1] ?? 4000);
+      }
+    }
   } finally {
     const ms = Date.now() - started;
     if (ms > SLOW_MODEL_MS) {
@@ -176,11 +190,16 @@ function readTiming(prediction: Prediction, timing: Timing): void {
   if (typeof predict === "number") timing.predictMs = Math.round(predict * 1000);
 }
 
+/** Пауза перед второй и третьей попыткой. */
+const RETRY_PAUSE_MS = [1500, 4000];
+
 async function runOnce(
   target: Target,
   input: Record<string, unknown>,
   deadlineMs: number,
   timing: Timing,
+  /** Держать ли запрос открытым до ответа (`Prefer: wait`), или запустить и опрашивать. */
+  sync: boolean,
 ): Promise<unknown> {
   const token = env.REPLICATE_API_TOKEN;
   if (!token) throw new Error("REPLICATE_API_TOKEN не задан");
@@ -204,7 +223,7 @@ async function runOnce(
         method: "POST",
         headers: {
           ...headers,
-          Prefer: `wait=${Math.min(seconds, 30)}`,
+          ...(sync && { Prefer: `wait=${Math.min(seconds, 30)}` }),
           "Cancel-After": `${seconds}s`,
         },
         body: JSON.stringify(body),
@@ -315,21 +334,43 @@ export async function complete(prompt: string, maxTokens: number): Promise<strin
  *
  * Файл уходит в теле запроса (data URI). Replicate советует так передавать файлы до 1 МБ:
  * голосовое в телеграме — это около 6 минут речи.
+ *
+ * Сначала `openai/whisper` (три попытки с паузами), а если Replicate так и не ответила —
+ * запасная сборка Whisper large-v3 на другом железе (`REPLICATE_WHISPER_FALLBACK_VERSION`,
+ * `vaibhavs10/incredibly-fast-whisper`). В ноябре 2026 голосовое падало на 502 шлюза
+ * Replicate дважды подряд, и человек получал «Не смог расшифровать голосовое». Подсказок
+ * с именами запасная модель не принимает: имя она может написать с ошибкой, но модель
+ * разбора всё равно сводит его к человеку из команды по основе слова. Отказ по ключу или
+ * деньгам и истёкшее ожидание дальше не передаются: у запасной было бы то же самое.
  */
 export async function transcribe(
   audio: Buffer,
   mime: string,
   hint: string,
 ): Promise<string> {
-  const output = (await runPrediction(
-    { version: env.REPLICATE_WHISPER_VERSION },
-    {
-      audio: `data:${mime};base64,${audio.toString("base64")}`,
-      language: "ru",
-      transcription: "plain text",
-      initial_prompt: hint,
-    },
-    120_000,
-  )) as { transcription?: string } | null;
-  return output?.transcription?.trim() ?? "";
+  const data = `data:${mime};base64,${audio.toString("base64")}`;
+  try {
+    const output = (await runPrediction(
+      { version: env.REPLICATE_WHISPER_VERSION },
+      { audio: data, language: "ru", transcription: "plain text", initial_prompt: hint },
+      120_000,
+      3,
+    )) as { transcription?: string } | null;
+    return output?.transcription?.trim() ?? "";
+  } catch (cause) {
+    const fallback = env.REPLICATE_WHISPER_FALLBACK_VERSION;
+    const retryable =
+      cause instanceof ReplicateError && (cause.transient || cause.modelGone);
+    if (!fallback || !retryable) throw cause;
+    modelLog?.warn(
+      { reason: cause.message.slice(0, 200) },
+      "Whisper не ответил, расшифровываю запасной моделью",
+    );
+    const output = (await runPrediction(
+      { version: fallback },
+      { audio: data, task: "transcribe", language: "russian" },
+      120_000,
+    )) as { text?: string } | null;
+    return output?.text?.trim() ?? "";
+  }
 }
