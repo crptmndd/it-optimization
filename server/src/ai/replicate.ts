@@ -56,7 +56,21 @@ export class ReplicateError extends Error {
    * доступом к Replicate или к `server/.env`.
    */
   get needsOwner(): boolean {
-    return [401, 402, 403, 404].includes(this.code);
+    return [401, 402, 403].includes(this.code) || this.modelGone;
+  }
+
+  /**
+   * Модели больше нет на Replicate: 404, 410 или 422 «This deployment is currently
+   * disabled… has been deprecated». Так в ноябре 2026 сняли Qwen3 235B, и каждое сообщение
+   * падало, пока модель не заменили руками. Такую модель `complete` пропускает и берёт
+   * следующую.
+   */
+  get modelGone(): boolean {
+    return (
+      this.code === 404 ||
+      this.code === 410 ||
+      (this.code === 422 && /deprecat|disabled|no longer available/i.test(this.message))
+    );
   }
 
   /**
@@ -224,17 +238,74 @@ async function runOnce(
 }
 
 /**
+ * Модель на случай, если все из `REPLICATE_LLM_MODEL` сняли. Всегда стоит последней: тогда
+ * устаревшее значение в `.env` не роняет разбор, а только пишет в журнал, что его пора
+ * сменить.
+ */
+export const DEFAULT_LLM_MODEL = "moonshotai/kimi-k2.6";
+
+/** Модели по порядку: из окружения через запятую, и последней — модель из кода. */
+export function llmModels(setting = env.REPLICATE_LLM_MODEL): string[] {
+  const listed = setting
+    .split(",")
+    .map((model) => model.trim())
+    .filter(Boolean);
+  return [...new Set([...listed, DEFAULT_LLM_MODEL])];
+}
+
+/**
+ * Снятые модели — до перезапуска API. Их не пробуют первыми, чтобы не тратить на отказ
+ * каждый запрос, но и не выбрасывают: если снятыми окажутся все, честная ошибка лучше
+ * пустоты.
+ */
+const gone = new Set<string>();
+
+/**
  * Ответ языковой модели. Такие модели отдают поток кусков текста, а по HTTP он приходит
  * массивом строк. Температура низкая: нужен разбор, а не сочинение, и одинаковое сообщение
  * должно давать одинаковую задачу.
+ *
+ * Моделей может быть несколько. Снятая (`modelGone`) или упавшая на стороне Replicate
+ * (5xx, обрыв) уступает место следующей. Отказ по ключу или деньгам (401–403) общий для
+ * всех моделей, и пробовать дальше незачем. Истёкшее ожидание (408) тоже не передаётся
+ * дальше: ещё минута на другой модели — это человек, который две минуты смотрит на
+ * «Разбираю…».
  */
 export async function complete(prompt: string, maxTokens: number): Promise<string> {
-  const output = await runPrediction(
-    { model: env.REPLICATE_LLM_MODEL },
-    { prompt, max_tokens: maxTokens, temperature: 0.1 },
-    60_000,
-  );
-  return Array.isArray(output) ? output.join("") : String(output ?? "");
+  const models = llmModels();
+  const order = [
+    ...models.filter((model) => !gone.has(model)),
+    ...models.filter((model) => gone.has(model)),
+  ];
+  let failure: unknown;
+  for (const [index, model] of order.entries()) {
+    try {
+      const output = await runPrediction(
+        { model },
+        { prompt, max_tokens: maxTokens, temperature: 0.1 },
+        60_000,
+      );
+      return Array.isArray(output) ? output.join("") : String(output ?? "");
+    } catch (cause) {
+      failure = cause;
+      const last = index === order.length - 1;
+      if (!(cause instanceof ReplicateError) || last) break;
+      if (cause.modelGone) {
+        gone.add(model);
+        modelLog?.warn(
+          { model, reason: cause.message.slice(0, 200) },
+          "модель снята с Replicate, беру следующую — поправьте REPLICATE_LLM_MODEL",
+        );
+        continue;
+      }
+      if (!cause.transient) break;
+      modelLog?.warn(
+        { model, reason: cause.message.slice(0, 200) },
+        "модель не ответила, беру следующую",
+      );
+    }
+  }
+  throw failure;
 }
 
 /**

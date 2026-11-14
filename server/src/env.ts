@@ -92,10 +92,12 @@ const schema = z.object({
     .optional()
     .transform((value) => value?.trim() || undefined),
   /**
-   * Модель разбора: «владелец/имя» официальной модели Replicate. Открытая модель, а не
-   * закрытая: у тех свои ограничения по странам. Сменить, если Replicate её снимет.
+   * Модели разбора: «владелец/имя» официальных моделей Replicate, можно несколько через
+   * запятую — снятую бот пропустит и возьмёт следующую. Последней всегда идёт
+   * `DEFAULT_LLM_MODEL` из `ai/replicate.ts`. Открытые модели, а не закрытые: у тех свои
+   * ограничения по странам. Qwen3 235B, стоявшую здесь до ноября 2026, Replicate сняла.
    */
-  REPLICATE_LLM_MODEL: z.string().default("qwen/qwen3-235b-a22b-instruct-2507"),
+  REPLICATE_LLM_MODEL: z.string().default("moonshotai/kimi-k2.6"),
   /** Версия openai/whisper: модель не официальная, без версии её не вызвать. */
   REPLICATE_WHISPER_VERSION: z
     .string()
