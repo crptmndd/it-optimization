@@ -236,13 +236,8 @@ export async function attachmentRoutes(app: FastifyInstance): Promise<void> {
       if (!(await canSee(id, request.user!))) {
         return reply.code(404).send({ error: "Задача не найдена" });
       }
-      const row = await prisma.taskAttachment.findFirst({
-        where: { id: attachmentId, taskId: id },
-      });
+      const [row] = await deleteAttachments(id, [attachmentId]);
       if (!row) return reply.code(404).send({ error: "Файл не найден" });
-
-      await prisma.taskAttachment.delete({ where: { id: row.id } });
-      await unlink(join(directory(), row.storageKey)).catch(() => {});
       await audit(request, {
         entity: "tasks",
         entityId: id,
@@ -252,4 +247,61 @@ export async function attachmentRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(204).send();
     },
   );
+
+  /**
+   * Несколько файлов разом: выбранные или все. Список id присылает окно, а не «удали всё
+   * у задачи»: файл, который кто-то прикрепил, пока окно было открыто, человек не видел, и
+   * удалять его он не просил.
+   */
+  app.post(
+    "/tasks/:id/attachments/delete",
+    { preHandler: requireTeam },
+    async (request, reply) => {
+      const params = taskParams.safeParse(request.params);
+      if (!params.success) return invalidInput(reply, params.error);
+      const body = deleteBody.safeParse(request.body);
+      if (!body.success) return invalidInput(reply, body.error);
+      const { id } = params.data;
+
+      if (!(await canSee(id, request.user!))) {
+        return reply.code(404).send({ error: "Задача не найдена" });
+      }
+      const rows = await deleteAttachments(id, body.data.ids);
+      if (rows.length > 0) {
+        await audit(request, {
+          entity: "tasks",
+          entityId: id,
+          action: "detach",
+          diff: { fileNames: rows.map((row) => row.fileName) },
+        });
+      }
+      return reply.send({ deleted: rows.map((row) => row.id) });
+    },
+  );
+}
+
+const deleteBody = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(MAX_ATTACHMENTS),
+});
+
+/**
+ * Удалить файлы задачи: записи и сами файлы. Чужие id (другой задачи) молча пропускаются.
+ * Возвращает то, что удалено, — для журнала и ответа. Общая для CRM и бота.
+ */
+export async function deleteAttachments(
+  taskId: string,
+  ids: string[],
+): Promise<TaskAttachment[]> {
+  const rows = await prisma.taskAttachment.findMany({
+    where: { taskId, id: { in: ids } },
+  });
+  if (rows.length === 0) return [];
+  await prisma.taskAttachment.deleteMany({
+    where: { id: { in: rows.map((row) => row.id) } },
+  });
+  // Файл без записи потом подобрала бы и ночная уборка, но место лучше вернуть сразу.
+  await Promise.all(
+    rows.map((row) => unlink(join(directory(), row.storageKey)).catch(() => {})),
+  );
+  return rows;
 }

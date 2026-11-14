@@ -1,4 +1,5 @@
-import { ListChecks, Paperclip } from "lucide-react";
+import { CheckCheck, ListChecks, Paperclip } from "lucide-react";
+import { useState } from "react";
 import { columnOf, useColumns, type BoardColumnDef } from "@/api/columns";
 import {
   TASK_PRIORITIES,
@@ -90,6 +91,38 @@ export function FileCount({
 }
 
 /**
+ * «Проверено» у даты на сделанной задаче: админ принял работу, и задача уходит в архив
+ * одним нажатием, не открывая окна. Это тот же ручной архив, что кнопка «В архив» в окне
+ * и «☑️ Проверено» в телеграме.
+ */
+export function CheckedButton({ onChecked }: { onChecked: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      title="Работа принята — убрать задачу в архив"
+      onClick={(event) => {
+        // Нажатие не должно открыть саму задачу.
+        event.stopPropagation();
+        setBusy(true);
+        void onChecked().finally(() => setBusy(false));
+      }}
+      onKeyDown={(event) => event.stopPropagation()}
+      className="bg-accent-soft hover:bg-accent text-foreground inline-flex h-6 shrink-0 items-center gap-1 rounded-md px-2 text-[12px] font-semibold transition disabled:opacity-50"
+    >
+      <CheckCheck size={13} strokeWidth={2.5} />
+      Проверено
+    </button>
+  );
+}
+
+/** Показывать ли «Проверено»: сделана, ещё не в архиве, и проверять есть кому. */
+export function canCheck(task: Task, onChecked: unknown): boolean {
+  return Boolean(onChecked) && task.status === "done" && !task.archived && !task.parentId;
+}
+
+/**
  * Карточка задачи на доске: название, проект, срок и люди. Остальное — внутри.
  *
  * `showStatus` — для доски по проектам: проект там уже в заголовке колонки, и вместо его
@@ -98,10 +131,13 @@ export function FileCount({
 export function TaskCard({
   task,
   onOpen,
+  onChecked,
   showStatus = false,
 }: {
   task: Task;
   onOpen: () => void;
+  /** Есть только у админа: архив — его решение. */
+  onChecked?: () => Promise<void>;
   showStatus?: boolean;
 }) {
   const done = isClosed(task);
@@ -111,16 +147,31 @@ export function TaskCard({
   const badge = showStatus ? statusBadge(task, columns) : null;
   const files = task.files ?? 0;
   const top = Boolean(badge) || (!showStatus && Boolean(task.project)) || files > 0;
+  const checkable = canCheck(task, onChecked);
   const hasFooter =
-    deadline || closedOn || task.developers.length > 0 || task.subtasks.total > 0;
+    deadline ||
+    closedOn ||
+    checkable ||
+    task.developers.length > 0 ||
+    task.subtasks.total > 0;
 
   return (
-    <button
-      type="button"
+    // Не <button>: внутри бывает своя кнопка «Проверено», а кнопка в кнопке — ошибка
+    // разметки, и браузер разрывает такую карточку.
+    <div
+      role="button"
+      tabIndex={0}
       // Из «Сегодня» приходят посмотреть, где задача стоит, а открывается теперь доска.
       data-card-id={task.id}
       onClick={onOpen}
-      className="flex w-full flex-col gap-2 p-4 text-left"
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpen();
+        }
+      }}
+      className="flex w-full cursor-pointer flex-col gap-2 p-4 text-left"
     >
       {/* Сверху: слева статус или проект, справа число файлов. */}
       {top && (
@@ -173,11 +224,12 @@ export function TaskCard({
                 <span className="text-muted-foreground text-[13px]">{closedOn}</span>
               )
             )}
+            {checkable && <CheckedButton onChecked={onChecked!} />}
             <SubtaskCount subtasks={task.subtasks} />
           </span>
           <PersonChips names={task.developers} />
         </span>
       )}
-    </button>
+    </div>
   );
 }

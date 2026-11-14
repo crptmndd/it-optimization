@@ -3,17 +3,20 @@ import type { TaskPriority } from "@prisma/client";
 import { auditAs } from "../audit.js";
 import { projectScope } from "../crm/access.js";
 import { assertDevelopers } from "../crm/people.js";
+import { deleteAttachments } from "../crm/tasks/attachments.js";
 import { reachableTask, updateTask, type UpdateTaskInput } from "../crm/tasks/service.js";
 import { prisma } from "../db.js";
 import { hasPendingNotice } from "./intake/cards.js";
 import { loadPeople } from "./intake/parse.js";
 import { afterTaskUpdate } from "./after-update.js";
+import { countFiles } from "./notifications.js";
 import { askForInput } from "./pending.js";
 import {
   refreshTaskMessage,
   renderView,
   viewKindOf,
   viewOf,
+  type SentMarkup,
   type ViewKind,
 } from "./task-view.js";
 import type { TeamUser } from "./team-user.js";
@@ -28,7 +31,7 @@ import {
 
 /**
  * «✏️ Редактировать» под задачей: меню в том же сообщении — название, описание,
- * важность, срок, исполнители, проект. Важность, люди и проект выбираются кнопками,
+ * важность, срок, исполнители, проект и удаление файлов. Важность, люди и проект выбираются кнопками,
  * название, описание и срок бот спрашивает текстом (`pending.ts`). Правка идёт через
  * `updateTask`, как форма CRM: поменять можно только видимую тебе задачу, и уведомления
  * новым исполнителям те же.
@@ -96,6 +99,7 @@ async function framed(taskId: string, view: ViewKind, hint: string): Promise<str
 
 async function mainMenu(task: EditTask, view: ViewKind): Promise<Menu> {
   const id = task.id;
+  const files = await countFiles(id);
   return {
     text: await framed(id, view, "✏️ <b>Что изменить?</b>"),
     keyboard: [
@@ -111,6 +115,16 @@ async function mainMenu(task: EditTask, view: ViewKind): Promise<Menu> {
         { text: "👤 Исполнители", callback_data: data("ppl", view, id) },
         { text: "📁 Проект", callback_data: data("proj", view, id) },
       ],
+      ...(files > 0
+        ? [
+            [
+              {
+                text: `🗑 Удалить файлы (${files})`,
+                callback_data: data("files", view, id),
+              },
+            ],
+          ]
+        : []),
       [{ text: "⬅️ Назад", callback_data: data("back", view, id) }],
     ],
   };
@@ -209,6 +223,72 @@ async function projectMenu(
   };
 }
 
+/**
+ * Удаление файлов: список с отметками, «Удалить выбранные» и «Удалить все». Что отмечено,
+ * хранят кнопки самого сообщения (`e:fu:` — отмечен, `e:ft:` — нет): телеграм присылает
+ * их с каждым нажатием, и памяти на сервере не нужно, даже если между нажатиями API
+ * перезапустился. Файл в кнопке — по короткому ключу от его id, а не по номеру: номер
+ * съехал бы, удали кто-то файл в CRM, пока меню открыто.
+ */
+async function filesMenu(
+  taskId: string,
+  view: ViewKind,
+  selected: Set<string>,
+): Promise<Menu | null> {
+  const files = await prisma.taskAttachment.findMany({
+    where: { taskId },
+    orderBy: { createdAt: "asc" },
+    select: { id: true, fileName: true, mimeType: true },
+  });
+  if (files.length === 0) return null;
+  const options = files.map((file) => {
+    const key = shortKey(file.id);
+    const on = selected.has(key);
+    const icon = file.mimeType.startsWith("image/") ? "🖼" : "📄";
+    return [
+      {
+        text: `${on ? "☑️" : "▫️"} ${icon} ${shorten(file.fileName)}`,
+        callback_data: data(on ? "fu" : "ft", view, taskId, key),
+      },
+    ];
+  });
+  const chosen = files.filter((file) => selected.has(shortKey(file.id))).length;
+  return {
+    text: await framed(
+      taskId,
+      view,
+      "🗑 <b>Удалить файлы</b>: отметьте ненужные и нажмите «Удалить выбранные». Посмотреть их — «🗂 Файлы» под задачей.",
+    ),
+    keyboard: [
+      ...options,
+      [
+        {
+          text: chosen > 0 ? `🗑 Удалить выбранные (${chosen})` : "🗑 Удалить выбранные",
+          callback_data: data("fx", view, taskId),
+        },
+      ],
+      [
+        {
+          text: `🗑 Удалить все (${files.length})`,
+          callback_data: data("fa", view, taskId),
+        },
+      ],
+      [{ text: "⬅️ Назад", callback_data: data("menu", view, taskId) }],
+    ],
+  };
+}
+
+/** Отмеченные файлы — по кнопкам сообщения, на котором нажали. */
+function selectedKeys(markup: SentMarkup | undefined): Set<string> {
+  return new Set(
+    (markup?.inline_keyboard ?? [])
+      .flat()
+      .map((button) => button.callback_data ?? "")
+      .filter((value) => value.startsWith("e:fu:"))
+      .map((value) => value.split(":")[4] ?? ""),
+  );
+}
+
 export async function handleEdit(
   query: TgCallbackQuery,
   presser: TeamUser,
@@ -238,12 +318,15 @@ export async function handleEdit(
 
   // Ответ на нажатие и правка сообщения — одновременно: по очереди нажатие ждало бы два
   // пути до телеграма и обратно.
-  const show = async (menu: Menu) => {
+  const show = async (menu: Menu, toast?: string) => {
     await Promise.all([
-      answerCallback(query.id),
+      answerCallback(query.id, toast),
       editMessage(chatId, message.message_id, menu.text, menu.keyboard),
     ]);
   };
+
+  /** Файлов не осталось — например, их удалили в CRM, пока меню было открыто. */
+  const noFiles = async (toast: string) => show(await mainMenu(task, view), toast);
 
   /** Правка задачи, журнал, уведомления и сообщение в прежнем виде со строкой внизу. */
   const apply = async (input: UpdateTaskInput, footer: string, notify = true) => {
@@ -294,9 +377,87 @@ export async function handleEdit(
     return true;
   };
 
+  /** Удалить файлы, записать в журнал и вернуть сообщение в его вид со строкой внизу. */
+  const removeFiles = async (ids: string[]) => {
+    const removed = await deleteAttachments(task.id, ids);
+    if (removed.length === 0) {
+      const menu = await filesMenu(task.id, view, new Set());
+      return menu
+        ? show(menu, "Эти файлы уже удалены")
+        : noFiles("Файлов у задачи уже нет");
+    }
+    await Promise.all([
+      auditAs(
+        presser.viewer.id,
+        {
+          entity: "tasks",
+          entityId: task.id,
+          action: "detach",
+          diff: { via: "telegram", fileNames: removed.map((row) => row.fileName) },
+        },
+        log,
+      ),
+      answerCallback(query.id, `Удалено файлов: ${removed.length}`),
+      refreshTaskMessage({
+        chatId,
+        messageId: message.message_id,
+        view,
+        taskId: task.id,
+        footer: `🗑 Удалено файлов: ${removed.length} · ${escapeHtml(presser.name)}`,
+      }),
+    ]);
+  };
+
   switch (action) {
     case "menu":
       return show(await mainMenu(task, view));
+    case "files":
+    case "ft":
+    case "fu": {
+      const selected =
+        action === "files" ? new Set<string>() : selectedKeys(message.reply_markup);
+      if (action === "ft" && extra) selected.add(extra);
+      if (action === "fu" && extra) selected.delete(extra);
+      const menu = await filesMenu(task.id, view, selected);
+      return menu ? show(menu) : noFiles("Файлов у задачи уже нет");
+    }
+    case "fx": {
+      const selected = selectedKeys(message.reply_markup);
+      const files = await prisma.taskAttachment.findMany({
+        where: { taskId: task.id },
+        select: { id: true },
+      });
+      const ids = files
+        .filter((file) => selected.has(shortKey(file.id)))
+        .map((file) => file.id);
+      if (ids.length === 0) {
+        return answerCallback(query.id, "Сначала отметьте файлы, которые удалить");
+      }
+      return removeFiles(ids);
+    }
+    case "fa": {
+      const count = await countFiles(task.id);
+      if (count === 0) return noFiles("Файлов у задачи уже нет");
+      return show({
+        text: await framed(
+          task.id,
+          view,
+          `🗑 <b>Удалить все файлы задачи (${count})?</b> Вернуть их будет нельзя.`,
+        ),
+        keyboard: [
+          [{ text: "🗑 Да, удалить все", callback_data: data("fy", view, task.id) }],
+          [{ text: "⬅️ Назад", callback_data: data("files", view, task.id) }],
+        ],
+      });
+    }
+    case "fy": {
+      const files = await prisma.taskAttachment.findMany({
+        where: { taskId: task.id },
+        select: { id: true },
+      });
+      if (files.length === 0) return noFiles("Файлов у задачи уже нет");
+      return removeFiles(files.map((file) => file.id));
+    }
     case "back":
       await Promise.all([
         answerCallback(query.id),

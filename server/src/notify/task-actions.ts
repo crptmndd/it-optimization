@@ -7,7 +7,12 @@ import {
 } from "../crm/tasks/service.js";
 import { prisma } from "../db.js";
 import { env } from "../env.js";
-import { myTasksMessage, renderTaskList, type ListKind } from "./my-tasks.js";
+import {
+  archiveMessage,
+  myTasksMessage,
+  renderTaskList,
+  type ListKind,
+} from "./my-tasks.js";
 import { afterTaskUpdate, refreshReviews } from "./after-update.js";
 import { countFiles, isPrivateChat } from "./notifications.js";
 import { askForInput } from "./pending.js";
@@ -72,6 +77,7 @@ async function listFor(
       renderTaskList("⏰ Сроков на сегодня и завтра больше нет.", [], "r")
     );
   }
+  if (kind === "a") return archiveMessage(viewer);
   if (kind === "q") {
     const asked = recallQuestion(chatId, messageId);
     if (asked) return answerQuestion(viewer, asked);

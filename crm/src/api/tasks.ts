@@ -180,6 +180,14 @@ export async function deleteTaskAttachment(taskId: string, id: string): Promise<
   await api.delete(`/tasks/${taskId}/attachments/${id}`);
 }
 
+/** Несколько файлов разом — выбранные или все, что видны в окне. */
+export async function deleteTaskAttachments(
+  taskId: string,
+  ids: string[],
+): Promise<void> {
+  await api.post(`/tasks/${taskId}/attachments/delete`, { ids });
+}
+
 export async function createTask(input: NewTaskInput): Promise<Task> {
   const { task } = await api.post<{ task: Task }>("/tasks", input);
   return task;

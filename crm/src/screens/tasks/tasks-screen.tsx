@@ -47,6 +47,8 @@ import { ProjectBoard } from "./project-board";
 import { saveDraftSubtasks, type DraftSubtask } from "./subtasks";
 import {
   byUrgency,
+  CheckedButton,
+  canCheck,
   FileCount,
   isClosed,
   statusBadge,
@@ -333,6 +335,21 @@ export function TasksScreen() {
     }
   }
 
+  /**
+   * «Проверено» у даты: работа принята, задача уходит в архив. С доски и из списка она
+   * пропадает сразу, не дожидаясь ответа; при сбое возвращается со следующей загрузкой.
+   */
+  async function markChecked(task: Task) {
+    setTasks((current) => current?.filter((item) => item.id !== task.id) ?? current);
+    try {
+      await archiveTask(task.id);
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Не удалось убрать в архив");
+    } finally {
+      latestLoad.current();
+    }
+  }
+
   /** Постоянная: окно подзадач зовёт её из эффекта, а новая функция звала бы его снова. */
   const showProgress = useCallback((taskId: string, subtasks: SubtaskProgress) => {
     setTasks(
@@ -574,7 +591,11 @@ export function TasksScreen() {
                 },
               })}
             renderCard={(task) => (
-              <TaskCard task={task} onOpen={() => setEditing(task)} />
+              <TaskCard
+                task={task}
+                onOpen={() => setEditing(task)}
+                onChecked={admin ? () => markChecked(task) : undefined}
+              />
             )}
           />
         ) : tab === "done" || tab === "archive" ? (
@@ -586,6 +607,7 @@ export function TasksScreen() {
                   task={task}
                   onToggle={() => void toggleDone(task)}
                   onOpen={() => setEditing(task)}
+                  onChecked={admin ? () => markChecked(task) : undefined}
                 />
               ))}
             </List>
@@ -611,6 +633,7 @@ export function TasksScreen() {
                       task={task}
                       onToggle={() => void toggleDone(task)}
                       onOpen={() => setEditing(task)}
+                      onChecked={admin ? () => markChecked(task) : undefined}
                     />
                   ))}
                 </List>
@@ -717,10 +740,12 @@ function TaskRow({
   task,
   onToggle,
   onOpen,
+  onChecked,
 }: {
   task: Task;
   onToggle: () => void;
   onOpen: () => void;
+  onChecked?: () => Promise<void>;
 }) {
   const done = isClosed(task);
   const deadline = task.dueAt && !done ? describeDeadline(task.dueAt) : null;
@@ -809,6 +834,13 @@ function TaskRow({
           )}
         </span>
       </button>
+
+      {/* Рядом с датой закрытия, но вне кнопки строки: кнопка в кнопке — ошибка разметки. */}
+      {canCheck(task, onChecked) && (
+        <span className="flex shrink-0 items-center pr-4">
+          <CheckedButton onChecked={onChecked!} />
+        </span>
+      )}
     </li>
   );
 }

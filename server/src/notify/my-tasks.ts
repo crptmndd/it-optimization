@@ -1,6 +1,10 @@
 import type { Prisma, TaskPriority } from "@prisma/client";
 import { liveTask, taskScope, type Viewer } from "../crm/access.js";
-import { OPEN_TASK_STATUSES } from "../crm/tasks/dto.js";
+import {
+  archiveCutoff,
+  archivedTaskWhere,
+  OPEN_TASK_STATUSES,
+} from "../crm/tasks/dto.js";
 import { prisma } from "../db.js";
 import { env } from "../env.js";
 import { escapeHtml, type InlineButton, type Keyboard } from "./telegram.js";
@@ -92,6 +96,8 @@ export interface LineOptions {
   due?: boolean;
   /** Показывать исполнителей: в чужом списке важно, на ком задача. */
   people?: boolean;
+  /** Показывать дату закрытия: в архиве она важнее срока. */
+  closed?: boolean;
 }
 
 function lineOf(task: TaskRow, number: number, options: LineOptions): string {
@@ -106,6 +112,10 @@ function lineOf(task: TaskRow, number: number, options: LineOptions): string {
   }
   if (task.status === "in_progress") meta.push("в работе");
   if (task.status === "done") meta.push("✅ готово");
+  if (task.status === "cancelled") meta.push("✖️ отменена");
+  if (options.closed && task.completedAt) {
+    meta.push(`закрыта ${formatDay(task.completedAt, env.TIMEZONE)}`);
+  }
   const tail = meta.length > 0 ? ` — ${meta.join(" · ")}` : "";
   const mark = PRIORITY_MARK[task.priority];
   return `${number}. ${mark ? `${mark} ` : ""}${titleOf(task)}${tail}`;
@@ -126,11 +136,12 @@ const LIST_LIMIT = 30;
 const BUTTONS_PER_ROW = 6;
 
 /**
- * Откуда список: «мои задачи» (`/tasks`), вечерние сроки или ответ на вопрос. Едет в
+ * Откуда список: «мои задачи» (`/tasks`), архив (`/archive`), вечерние сроки или ответ
+ * на вопрос. Едет в
  * кнопке-номере, чтобы «Назад» из открытой задачи собрал тот же список заново, а не
  * какой-то другой.
  */
-export type ListKind = "m" | "r" | "q";
+export type ListKind = "m" | "r" | "q" | "a";
 
 export function renderTaskList(
   header: string,
@@ -202,7 +213,7 @@ export async function myTasksMessage(
   const person = viewer.memberName;
   if (!person) {
     return {
-      text: "Ваша учётка не связана с человеком из команды, поэтому задач на ней нет. Связь ставит админ: CRM → Настройки → Команда.",
+      text: NOT_LINKED,
     };
   }
 
@@ -211,4 +222,45 @@ export async function myTasksMessage(
     return renderTaskList("На вас нет открытых задач.", []);
   }
   return renderTaskList(`📋 <b>Ваши задачи: ${tasks.length}</b>`, splitByDeadline(tasks));
+}
+
+const NOT_LINKED =
+  "Ваша учётка не связана с человеком из команды, поэтому задач на ней нет. Связь ставит админ: CRM → Настройки → Команда.";
+
+/**
+ * `/archive` — задачи человека в архиве: закрытые больше трёх дней назад и убранные
+ * руками («Проверено»). То же правило, что у вкладки «Архив» в CRM, и та же видимость.
+ * Архив растёт без конца, поэтому показаны последние закрытые; номер открывает задачу, и
+ * «↩️ Вернуть в работу» возвращает её на доску.
+ */
+export async function archiveMessage(
+  viewer: Viewer,
+): Promise<{ text: string; keyboard?: Keyboard }> {
+  const person = viewer.memberName;
+  if (!person) return { text: NOT_LINKED };
+
+  const where: Prisma.TaskWhereInput = {
+    parentId: null,
+    developers: { has: person },
+    AND: [liveTask, taskScope(viewer), archivedTaskWhere(archiveCutoff())],
+  };
+  const [total, tasks] = await Promise.all([
+    prisma.task.count({ where }),
+    prisma.task.findMany({
+      where,
+      select: SELECT,
+      orderBy: [{ completedAt: { sort: "desc", nulls: "last" } }, { updatedAt: "desc" }],
+      take: LIST_LIMIT,
+    }),
+  ]);
+  if (total === 0) return renderTaskList("🗄 В архиве ваших задач пока нет.", [], "a");
+  const header =
+    total > tasks.length
+      ? `🗄 <b>Архив: ${total}</b> · последние ${tasks.length}, остальные — в CRM`
+      : `🗄 <b>Архив: ${total}</b>`;
+  return renderTaskList(
+    header,
+    [{ title: null, tasks, options: { due: false, closed: true } }],
+    "a",
+  );
 }

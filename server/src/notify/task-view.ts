@@ -68,7 +68,7 @@ function withBack(keyboard: Keyboard, kind: ListKind): void {
   else keyboard.push([back]);
 }
 
-const LIST_KINDS: readonly string[] = ["m", "r", "q"];
+const LIST_KINDS: readonly string[] = ["m", "r", "q", "a"];
 
 export function listKindOf(value: string | undefined): ListKind {
   return LIST_KINDS.includes(value ?? "") ? (value as ListKind) : "m";
@@ -87,7 +87,7 @@ export interface SentMarkup {
  */
 export type ViewKind = "c" | "n" | ListKind;
 
-const VIEWS: readonly string[] = ["c", "n", "m", "r", "q"];
+const VIEWS: readonly string[] = ["c", "n", "m", "r", "q", "a"];
 
 export function viewKindOf(value: string | undefined): ViewKind {
   return VIEWS.includes(value ?? "") ? (value as ViewKind) : "n";

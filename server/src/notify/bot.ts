@@ -6,7 +6,7 @@ import { collectToday, personalSnapshot, unassignedSnapshot } from "../crm/today
 import { prisma } from "../db.js";
 import { canIntake, env } from "../env.js";
 import { buildDigest } from "./digest.js";
-import { myTasksMessage } from "./my-tasks.js";
+import { archiveMessage, myTasksMessage } from "./my-tasks.js";
 import { consumePending } from "./pending.js";
 import { handleTaskAction, isTaskAction } from "./task-actions.js";
 import { handleCardAction } from "./intake/cards.js";
@@ -69,6 +69,7 @@ const HELP = [
   "",
   ...INTAKE_HELP,
   "<b>/tasks</b> — все ваши открытые задачи",
+  "<b>/archive</b> — ваши задачи в архиве",
   ...(canIntake ? ["<b>/task</b> текст — поставить задачу"] : []),
   "<b>/today</b> — что горит прямо сейчас",
   "<b>/chatid</b> — идентификатор этого чата",
@@ -242,7 +243,7 @@ async function handleCommand(
     return;
   }
 
-  if (command === "/tasks") {
+  if (command === "/tasks" || command === "/archive") {
     // Список личный: в группе его увидели бы все, а там сидят и те, кому он не нужен.
     if (!isPrivateChat(chatId)) {
       await trySendMessage(chatId, "Свои задачи я показываю в личном чате.", log);
@@ -258,11 +259,11 @@ async function handleCommand(
       );
       return;
     }
-    const list = await myTasksMessage({
-      id: user!.id,
-      role,
-      memberName: memberNameOf(user!),
-    });
+    const viewer = { id: user!.id, role, memberName: memberNameOf(user!) };
+    const list =
+      command === "/archive"
+        ? await archiveMessage(viewer)
+        : await myTasksMessage(viewer);
     await trySendMessage(chatId, list.text, log, 3, list.keyboard);
     return;
   }
@@ -308,6 +309,7 @@ async function handleCommand(
  */
 const PRIVATE_COMMANDS = [
   { command: "tasks", description: "Мои задачи" },
+  { command: "archive", description: "Мои задачи в архиве" },
   { command: "today", description: "Что горит сегодня" },
   ...(canIntake ? [{ command: "task", description: "Поставить задачу" }] : []),
   { command: "help", description: "Что умеет бот" },
