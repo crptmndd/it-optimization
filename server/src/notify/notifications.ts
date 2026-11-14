@@ -162,10 +162,22 @@ export interface TaskNotice {
 /** Длиннее в чате не читают: подробности лежат в карточке, до неё одна кнопка. */
 const NOTE_LIMIT = 280;
 
+/** Метка дословной расшифровки голосового в заметке задачи (`withTranscript` в intake). */
+export const VOICE_NOTE_MARK = "🎙 Голосом, дословно:";
+
+/**
+ * Расшифровку голосового показываем почти целиком: это запись сказанного, а не пересказ, и
+ * обрезанная на 280 символах она теряла вторую половину поручения — исполнителя, сроки,
+ * «изучить, а не делать». Минута речи — около 700 знаков, полторы тысячи — пара минут, и
+ * сообщение остаётся далеко от предела телеграма в 4096. Дальше — в задаче CRM.
+ */
+const VOICE_NOTE_LIMIT = 1500;
+
 function shorten(text: string): string {
   const clean = text.trim();
-  if (clean.length <= NOTE_LIMIT) return clean;
-  return `${clean.slice(0, NOTE_LIMIT).trimEnd()}…`;
+  const limit = clean.includes(VOICE_NOTE_MARK) ? VOICE_NOTE_LIMIT : NOTE_LIMIT;
+  if (clean.length <= limit) return clean;
+  return `${clean.slice(0, limit).trimEnd()}…`;
 }
 
 /** Подпись в мужском роде, а не как в форме: здесь она стоит после слова «Приоритет». */

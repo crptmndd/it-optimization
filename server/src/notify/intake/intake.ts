@@ -6,7 +6,7 @@ import { OPEN_TASK_STATUSES } from "../../crm/tasks/dto.js";
 import { createTask } from "../../crm/tasks/service.js";
 import { prisma } from "../../db.js";
 import { env } from "../../env.js";
-import { isPrivateChat } from "../notifications.js";
+import { isPrivateChat, VOICE_NOTE_MARK } from "../notifications.js";
 import { teamUserOf, type TeamUser } from "../team-user.js";
 import {
   downloadFile,
@@ -613,7 +613,7 @@ async function processReply(
  */
 function withTranscript(task: PlannedTask, voice: string, hasText: boolean): PlannedTask {
   if (!voice.trim()) return task;
-  const transcript = `🎙 Голосом, дословно: ${voice.trim()}`;
+  const transcript = `${VOICE_NOTE_MARK} ${voice.trim()}`;
   const note = hasText && task.note ? `${task.note}\n\n${transcript}` : transcript;
   return {
     ...task,
